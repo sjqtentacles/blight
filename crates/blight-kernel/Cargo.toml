@@ -1,0 +1,10 @@
+[package]
+name = "blight-kernel"
+description = "The Blight trusted kernel (the spore): terms, NbE, typing rules, and the cubical Kan table."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

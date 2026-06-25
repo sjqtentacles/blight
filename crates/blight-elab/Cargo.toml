@@ -1,0 +1,10 @@
+[package]
+name = "blight-elab"
+description = "The Blight surface reader and bidirectional elaborator (untrusted): s-expressions to core terms."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+blight-kernel = { path = "../blight-kernel" }

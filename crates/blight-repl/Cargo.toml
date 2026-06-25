@@ -1,0 +1,15 @@
+[package]
+name = "blight-repl"
+description = "The `blight` REPL binary (untrusted): read, elaborate, check, report."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "blight"
+path = "src/main.rs"
+
+[dependencies]
+blight-kernel = { path = "../blight-kernel" }
+blight-elab = { path = "../blight-elab" }

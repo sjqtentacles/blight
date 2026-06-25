@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/blight-kernel",
+    "crates/blight-elab",
+    "crates/blight-repl",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.0.0"
+license = "MIT OR Apache-2.0"
+rust-version = "1.96"
