@@ -16,12 +16,13 @@
 //! ## Coverage
 //! Supported: the sound *core fragment* — the dependent layer (`Var`, `Univ`, `Pi`, `Lam`,
 //! `App`, `Sigma`, `Pair`, `Fst`, `Snd`, `Ann`), inductive data (`Data`, `Con`, `Elim`) —
-//! including **indexed and parameterized** families up to the kernel's own cap (at most one
-//! parameter and one index): the eliminator's motive threads the index (`λ i. λ (_:D ps i). T`)
-//! and the per-constructor method types reconstruct the indexed conclusion and indexed induction
-//! hypotheses, a direct independent port of the kernel's `infer_elim`/`method_type`. Also the
-//! grade discipline on binders, and the *constant* path layer (`PathP`/`PLam`/`PApp` with the De
-//! Morgan interval and β/η). Everything the prelude + M0–M5 acceptance corpus need lives here.
+//! including **indexed and parameterized** families up to full N-parameter / M-index telescopes
+//! (the earlier ≤1/≤1 cap is lifted): the eliminator's motive threads all indices
+//! (`λ i… . λ (_:D ps i…). T`) and the per-constructor method types reconstruct the indexed
+//! conclusion and indexed induction hypotheses, a direct independent port of the kernel's
+//! `infer_elim`/`method_type`. Also the grade discipline on binders, and the *constant* path layer
+//! (`PathP`/`PLam`/`PApp` with the De Morgan interval and β/η). Everything the prelude + M0–M5
+//! acceptance corpus need lives here.
 //!
 //! Declined (never silently accepted): the cubical `Glue` operations (`Glue`/`GlueTerm`/`Unglue`)
 //! and cubical partial elements/systems (`Partial`/`System`). The re-checker's own normalizer does

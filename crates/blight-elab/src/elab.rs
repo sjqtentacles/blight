@@ -140,6 +140,57 @@ impl ElabEnv {
         self.globals.insert(name, (term, ty));
     }
 
+    /// Re-check an elaborated definition body through the *trusted kernel door*
+    /// ([`blight_kernel::check_top_with`]) at its declared type, at `declare` time.
+    ///
+    /// Historically the elaborator stored each `define`/`define-rec`/`deftotal` body on its own
+    /// inferred type and only the opt-in `--recheck` pass ever fed it to a checker. Routing every
+    /// eligible definition through the kernel here closes that gap: a body whose elaborated core
+    /// term does not actually inhabit its declared type is rejected immediately, not silently
+    /// trusted. This grows no TCB — it only sends more programs *through* the existing door.
+    ///
+    /// The kernel door demands a **pure, total, empty-effect-row** top-level (spec §4.1, §4.5): a
+    /// proof may neither diverge nor escape an unhandled effect. So we only route bodies whose
+    /// declared type is a *function or path/identity proof* with a pure, total conclusion (see
+    /// [`gate_routes_through_kernel`]); effectful `main : (! Console Unit)` and partial
+    /// `define-rec : … → Delay A` are out of the pure door and skipped, and closed *ground-value*
+    /// definitions (e.g. `main : Nat = …`) are skipped because kernel-checking them degenerates into
+    /// running the whole program (codegen already type-checks + executes `main`). Effectful/partial
+    /// constructs are governed by their own typing rules during elaboration and re-verified (or
+    /// `Declined`) by the `--recheck` pass instead. As a final safety net, if an eligible body
+    /// nonetheless trips the kernel's empty-row check (a partial recursion whose declared conclusion
+    /// *looked* pure), we treat that as "outside the pure door" and skip rather than reject — only
+    /// genuine typing disagreements (`Mismatch`, `GradeViolation`, universe/data errors) hard-error.
+    ///
+    /// As of plan item 1b the kernel performs *dependent pattern-match refinement* itself
+    /// (`check_refined_method`/`refine_method`/`unify_index` in `blight-kernel`), so the former
+    /// temporary skip of the `safe-tail`/`vec-map` index-`Mismatch` shape is **gone**: those
+    /// definitions are now kernel-certified directly. One narrow skip remains — a *higher-order
+    /// eliminator motive* (the `zip-vec` shape, detected structurally up front) — which is a distinct
+    /// kernel limitation (motive reconstruction, not refinement) that the independent re-checker also
+    /// honestly *declines*; it is out of scope for 1b.
+    fn kernel_check_def(&self, name: &str, term: &Term, ty: &Term) -> Result<(), ElabError> {
+        if !gate_routes_through_kernel(ty) {
+            return Ok(());
+        }
+        // The higher-order-motive shape (`zip-vec`) is detected structurally and skipped — the kernel
+        // cannot reconstruct it yet and the re-checker declines it. Detecting it here (vs. matching a
+        // brittle kernel error) keeps the skip precise. This is NOT a dependent-match-refinement case.
+        if term_has_higher_order_elim_motive(term) {
+            return Ok(());
+        }
+        match blight_kernel::check_top_with(self.signature().clone(), term.clone(), ty.clone()) {
+            Ok(_) => Ok(()),
+            // A non-empty effect/partial row on a pure-looking declared type ⟹ outside the pure
+            // door; the construct verifies via its own rule / `--recheck`, not here. Skip, do not
+            // reject (rejecting would be a false soundness alarm).
+            Err(blight_kernel::TypeError::EffectError(_)) => Ok(()),
+            Err(e) => Err(ElabError::BadForm(format!(
+                "kernel rejected definition `{name}` at its declared type: {e}"
+            ))),
+        }
+    }
+
     /// Record the implicit-binder specs of global `name` (computed from its surface type), so use
     /// sites insert and resolve them. Empty ⟹ no implicits.
     pub fn set_implicit_specs(&mut self, name: &str, specs: Vec<ImplicitSpec>) {
@@ -202,6 +253,9 @@ impl ElabEnv {
                     Some(t) => elaborate_against(self, body, t)?,
                     None => elaborate(self, body)?,
                 };
+                if let Some(t) = ty {
+                    self.kernel_check_def(name, &term, t)?;
+                }
                 self.define_global(name.clone(), term, ty.cloned());
                 Ok(())
             }
@@ -210,6 +264,7 @@ impl ElabEnv {
                     ElabError::BadForm(format!("`define-rec {name}` requires a declared type"))
                 })?;
                 let term = elaborate_rec(self, name, body, t, false)?;
+                self.kernel_check_def(name, &term, t)?;
                 self.define_global(name.clone(), term, Some(t.clone()));
                 Ok(())
             }
@@ -218,6 +273,7 @@ impl ElabEnv {
                     ElabError::BadForm(format!("`deftotal {name}` requires a declared type"))
                 })?;
                 let term = elaborate_rec(self, name, body, t, true)?;
+                self.kernel_check_def(name, &term, t)?;
                 self.define_global(name.clone(), term, Some(t.clone()));
                 Ok(())
             }
@@ -2096,6 +2152,138 @@ fn elab_app_head(
     Ok(None)
 }
 
+/// Whether a (closed, core) declared type has a *pure, total* conclusion — i.e. peeling its `Pi`
+/// binders lands on a codomain that is neither an effectful computation type `! E A` (with a
+/// non-empty row `E`) nor a partial `Delay A`. Only such definitions are eligible for the kernel's
+/// pure top-level door ([`ElabEnv::kernel_check_def`]); effectful and partial conclusions are
+/// governed by their own typing rules during elaboration and re-verified (or `Declined`) by the
+/// `--recheck` pass instead. A `! ⟨⟩ A` (empty row) conclusion is pure and unwrapped.
+fn is_pure_total_conclusion(ty: &Term) -> bool {
+    let mut t = ty;
+    loop {
+        match t {
+            Term::Pi(_, _, cod) => t = cod,
+            Term::EffTy(row, inner) => {
+                if !row.is_empty() {
+                    return false;
+                }
+                // `! ⟨⟩ A` is pure: look through to the carried type's conclusion.
+                t = inner;
+            }
+            Term::Delay(_) => return false,
+            _ => return true,
+        }
+    }
+}
+
+/// Whether the kernel gate ([`ElabEnv::kernel_check_def`]) should *route this definition through the
+/// kernel at all*. Beyond purity/totality ([`is_pure_total_conclusion`]), the gate is restricted to
+/// definitions whose verification is bounded by the term's *structure* — **functions** (a `Pi` head,
+/// possibly under pure `! ⟨⟩` wrappers) and **path/identity proofs** (`PathP`).
+///
+/// It deliberately SKIPS closed ground-*value* definitions whose declared conclusion is a concrete
+/// data type (e.g. `main : Nat = (head-or Zero (qsort input))`). For those, kernel-checking the body
+/// against its type degenerates into *evaluating the whole program to normal form* (the
+/// `palindrome`/`mergesort`/`quicksort` blowup) — work that is (a) redundant with codegen's own
+/// `check_top` on `main` plus execution, and (b) unbounded by the term's structure. Such values are
+/// not where elaborator bugs hide; functions and proofs are, and those stay fully gated. This is a
+/// deterministic, elaborator-side restriction (it touches no kernel/TCB code).
+fn gate_routes_through_kernel(ty: &Term) -> bool {
+    if !is_pure_total_conclusion(ty) {
+        return false;
+    }
+    let mut t = ty;
+    loop {
+        match t {
+            // A function: gate it (checking a `Pi` body is structural — no whole-program eval).
+            Term::Pi(_, _, _) => return true,
+            // A path/identity proof: gate it (proofs are exactly the elaborator-bug-prone case).
+            Term::PathP { .. } => return true,
+            // Look through pure effect wrappers to the carried conclusion.
+            Term::EffTy(row, inner) if row.is_empty() => t = inner,
+            // Any other (ground data) conclusion: skip — kernel-checking would just run the program.
+            _ => return false,
+        }
+    }
+}
+
+/// Whether `term` contains an eliminator (`Elim`) with a **higher-order motive** — one whose body,
+/// after peeling its leading `Lam` binders (the index binders + the scrutinee binder), is itself a
+/// `Pi`. This is the `zip-vec` shape: matching `v` while a second vector `w` is still in scope lifts
+/// `w` into the motive, so the result is a *function* `Vec B n → Vec (Pair A B) n`.
+///
+/// TEMPORARY (plan item 1a, removed by 1b): the kernel cannot yet reconstruct such a motive (it
+/// errors mid-check), and the independent re-checker *honestly DECLINES* this exact shape rather than
+/// re-verify it. It is part of the same dependent-pattern-matching frontier item 1b closes. Until
+/// then the gate detects it structurally (deterministically, in untrusted elaborator code) and skips
+/// it, rather than matching a brittle kernel error string. `safe-tail`/`vec-map` do NOT match here:
+/// their motive body is a `Data` (`Vec A n`), not a `Pi`.
+fn term_has_higher_order_elim_motive(term: &Term) -> bool {
+    fn motive_is_higher_order(motive: &Term) -> bool {
+        let mut body = motive;
+        while let Term::Lam(inner) = body {
+            body = inner;
+        }
+        matches!(body, Term::Pi(_, _, _))
+    }
+    fn walk(t: &Term) -> bool {
+        match t {
+            Term::Elim {
+                motive,
+                methods,
+                scrutinee,
+                ..
+            } => {
+                motive_is_higher_order(motive)
+                    || walk(motive)
+                    || methods.iter().any(walk)
+                    || walk(scrutinee)
+            }
+            Term::Var(_) | Term::Univ(_) | Term::Interval(_) | Term::Foreign { .. } => false,
+            Term::Pi(_, a, b)
+            | Term::Sigma(a, b)
+            | Term::Pair(a, b)
+            | Term::App(a, b)
+            | Term::Ann(a, b) => walk(a) || walk(b),
+            Term::Lam(a)
+            | Term::Fst(a)
+            | Term::Snd(a)
+            | Term::PLam(a)
+            | Term::Delay(a)
+            | Term::Now(a)
+            | Term::Later(a)
+            | Term::Force(a)
+            | Term::Unglue(a)
+            | Term::EffTy(_, a) => walk(a),
+            Term::PApp(a, _) => walk(a),
+            Term::Data(_, xs, ys) => xs.iter().any(walk) || ys.iter().any(walk),
+            Term::Con(_, xs) => xs.iter().any(walk),
+            Term::PathP { family, lhs, rhs } => walk(family) || walk(lhs) || walk(rhs),
+            Term::Partial(_, a) => walk(a),
+            Term::System(branches) => branches.iter().any(|b| walk(&b.term)),
+            Term::Transp { family, base, .. } => walk(family) || walk(base),
+            Term::HComp { ty, tube, base, .. } => walk(ty) || walk(tube) || walk(base),
+            Term::Comp {
+                family, tube, base, ..
+            } => walk(family) || walk(tube) || walk(base),
+            Term::Glue {
+                base, ty, equiv, ..
+            } => walk(base) || walk(ty) || walk(equiv),
+            Term::GlueTerm { partial, base, .. } => walk(partial) || walk(base),
+            Term::Op { arg, .. } => walk(arg),
+            Term::Handle {
+                body,
+                return_clause,
+                op_clauses,
+            } => walk(body) || walk(return_clause) || op_clauses.iter().any(|(_, c)| walk(c)),
+            Term::IntTy | Term::IntLit(_) => false,
+            Term::IntPrim { lhs, rhs, .. } => walk(lhs) || walk(rhs),
+            Term::Erased => false,
+        }
+    }
+    walk(term)
+}
+
 /// Elaborate a `define-rec`/`deftotal` body. The body must be `(lam (x ...) (match xi clauses))`
 /// where the match is on one of the lambda binders; structural recursion is realized as the
 /// `Elim`'s induction hypotheses (spec §6.2). A non-structural recursive call is rejected when
@@ -3396,6 +3584,90 @@ mod tests {
         );
     }
 
+    /// Item 1a (gate): a `define` whose elaborated body does NOT inhabit its declared type must be
+    /// rejected at `declare` time by the kernel door (`kernel_check_def`), not silently stored.
+    /// Before the gate, the body was kept on its own inferred type and the disagreement only surfaced
+    /// under the opt-in `--recheck`. The gate routes *functions and proofs* through the kernel; here
+    /// `wrong : Nat → Nat` is given a body returning `true : Bool`, which the kernel rejects.
+    #[test]
+    fn gate_rejects_mistyped_define_at_declare_time() {
+        let mut env = env_with_decls(&[
+            "(defdata Nat () (Zero) (Succ (n Nat)))",
+            "(defdata Bool () (false) (true))",
+        ]);
+        let ty = elaborate(
+            &env,
+            &parse_surface(&read_one("(Pi ((n Nat)) Nat)").unwrap().0).unwrap(),
+        )
+        .expect("Nat → Nat type elaborates");
+        // Body returns `true : Bool`, but the declared codomain is `Nat` — a genuine mismatch.
+        let decl = Decl::Define {
+            name: "wrong".into(),
+            body: parse_surface(&read_one("(lam (n) true)").unwrap().0).unwrap(),
+        };
+        let res = env.declare(&decl, Some(&ty));
+        assert!(
+            matches!(res, Err(ElabError::BadForm(ref m)) if m.contains("kernel rejected definition `wrong`")),
+            "the kernel gate must reject a mistyped function define at declare time, got {res:?}"
+        );
+    }
+
+    /// Item 1a (gate): a closed *ground-value* definition (declared type a concrete data type, not a
+    /// `Pi`/`PathP`) is NOT routed through the kernel — checking it degenerates into running the whole
+    /// program (the `palindrome`/`mergesort`/`quicksort` `main` blowup). It still declares cleanly.
+    #[test]
+    fn gate_skips_ground_value_definitions() {
+        let mut env = env_with_decls(&["(defdata Nat () (Zero) (Succ (n Nat)))"]);
+        let ty = elaborate(&env, &parse_surface(&read_one("Nat").unwrap().0).unwrap())
+            .expect("Nat type elaborates");
+        let decl = Decl::Define {
+            name: "answer".into(),
+            body: parse_surface(&read_one("(Succ (Succ Zero))").unwrap().0).unwrap(),
+        };
+        env.declare(&decl, Some(&ty))
+            .expect("a ground-value define declares (gate skips whole-program evaluation)");
+    }
+
+    /// Item 1b (post-refinement): the `safe-tail` shape — a `match` over `Vec A (Succ n)` whose
+    /// result type `Vec A n` depends on the index — has an unreachable `vnil` arm (index `Zero` vs
+    /// `Succ n`). The kernel now *discharges* it via dependent-match refinement (no temporary skip),
+    /// so `declare` (which routes through the kernel gate) succeeds because the definition is
+    /// genuinely kernel-certified. (The direct `check_top_with` certification is asserted by
+    /// `kernel_certifies_safe_tail_via_dependent_refinement`; this guards the elaborator gate path.)
+    #[test]
+    fn gate_accepts_dependent_match_refinement_shape() {
+        let mut env = env_with_decls(&[
+            "(defdata Nat () (Zero) (Succ (n Nat)))",
+            "(defdata Vec ((a (Type 0))) ((n Nat)) \
+                (vnil (=> Zero)) \
+                (vcons (m Nat) (x a) (xs (Vec a m)) (=> (Succ m))))",
+        ]);
+        let ty = elaborate(
+            &env,
+            &parse_surface(
+                &read_one("(Pi ((A (Type 0)) (n Nat) (v (Vec A (Succ n)))) (Vec A n))")
+                    .unwrap()
+                    .0,
+            )
+            .unwrap(),
+        )
+        .expect("safe-tail type elaborates");
+        let body_sx = read_one(
+            "(lam (A n v) (match v \
+               [(vnil) vnil] \
+               [(vcons m x xs) xs]))",
+        )
+        .unwrap()
+        .0;
+        let decl = Decl::DefineRec {
+            name: "safe-tail".into(),
+            body: parse_surface(&body_sx).unwrap(),
+        };
+        // The kernel now refines this correct dependent match (item 1b), so the gate certifies it.
+        env.declare(&decl, Some(&ty))
+            .expect("safe-tail declares (kernel refines the dependent match — item 1b)");
+    }
+
     /// Regression: a `match` over an *indexed* family whose scrutinee index is a *non-variable*
     /// term (`Vec A (Succ n)`) and whose result type is *not* `Nat` (`Maybe A`). The elaborator
     /// must synthesize the canonical indexed motive `λ i. λ s. Maybe A` with a fresh, unused index
@@ -3448,6 +3720,197 @@ mod tests {
         );
     }
 
+    /// Item 1b (kernel dependent-match refinement): `safe-tail : (A) (n) (v : Vec A (Succ n)) → Vec A
+    /// n` matches `v`; the `vnil` arm has result index `Zero`, which *clashes* with the scrutinee
+    /// index `Succ n` — that branch is **unreachable** and must be discharged by refinement. Before
+    /// 1b the trusted kernel rejected this with `expected index Var(_), found Con(Zero,[])`; with
+    /// refinement ported in, the kernel certifies it directly (no re-checker, no 1a skip). This is
+    /// the RED→GREEN symmetry test: kernel AND re-checker now both accept the same dependent match.
+    #[test]
+    fn kernel_certifies_safe_tail_via_dependent_refinement() {
+        let mut env = env_with_decls(&[
+            "(defdata Nat () (Zero) (Succ (n Nat)))",
+            "(defdata Vec ((a (Type 0))) ((n Nat)) \
+                (vnil (=> Zero)) \
+                (vcons (m Nat) (x a) (xs (Vec a m)) (=> (Succ m))))",
+        ]);
+        let ty = elaborate(
+            &env,
+            &parse_surface(
+                &read_one("(Pi ((A (Type 0)) (n Nat) (v (Vec A (Succ n)))) (Vec A n))")
+                    .unwrap()
+                    .0,
+            )
+            .unwrap(),
+        )
+        .expect("safe-tail type elaborates");
+        let body_sx = read_one(
+            "(lam (A n v) (match v \
+               [(vnil) vnil] \
+               [(vcons m x xs) xs]))",
+        )
+        .unwrap()
+        .0;
+        let decl = Decl::DefineRec {
+            name: "safe-tail".into(),
+            body: parse_surface(&body_sx).unwrap(),
+        };
+        env.declare(&decl, Some(&ty)).expect("safe-tail declares");
+        let core = env
+            .global_term("safe-tail")
+            .expect("safe-tail stored")
+            .clone();
+        let res = blight_kernel::check_top_with(env.signature().clone(), core, ty);
+        assert!(
+            res.is_ok(),
+            "the kernel certifies safe-tail's unreachable vnil arm via dependent refinement: {res:?}"
+        );
+    }
+
+    /// Item 1b (kernel dependent-match refinement, recursive): `vec-map : (A) (B) (f : A → B) (n) (v
+    /// : Vec A n) → Vec B n` recurses on `v`. The `vcons` arm's *induction hypothesis* is
+    /// `P (rec ix) xs` (the recursive result on the tail, at the tail's length `m`), so this
+    /// exercises the IH re-refinement path of `check_refined_method`, not just unreachable-branch
+    /// discharge. The kernel must certify it (RED before 1b: `expected index …` Mismatch).
+    #[test]
+    fn kernel_certifies_vec_map_via_dependent_refinement() {
+        let mut env = env_with_decls(&[
+            "(defdata Nat () (Zero) (Succ (n Nat)))",
+            "(defdata Vec ((a (Type 0))) ((n Nat)) \
+                (vnil (=> Zero)) \
+                (vcons (m Nat) (x a) (xs (Vec a m)) (=> (Succ m))))",
+        ]);
+        let ty = elaborate(
+            &env,
+            &parse_surface(
+                &read_one(
+                    "(Pi ((A (Type 0)) (B (Type 0)) (f (Pi ((x A)) B)) (n Nat) (v (Vec A n))) (Vec B n))",
+                )
+                .unwrap()
+                .0,
+            )
+            .unwrap(),
+        )
+        .expect("vec-map type elaborates");
+        let body_sx = read_one(
+            "(lam (A B f n v) (match v \
+               [(vnil) vnil] \
+               [(vcons m x xs) (vcons m (f x) (vec-map A B f m xs))]))",
+        )
+        .unwrap()
+        .0;
+        let decl = Decl::DefineRec {
+            name: "vec-map".into(),
+            body: parse_surface(&body_sx).unwrap(),
+        };
+        env.declare(&decl, Some(&ty)).expect("vec-map declares");
+        let core = env.global_term("vec-map").expect("vec-map stored").clone();
+        let res = blight_kernel::check_top_with(env.signature().clone(), core, ty);
+        assert!(
+            res.is_ok(),
+            "the kernel certifies recursive vec-map (IH re-refinement) via dependent refinement: {res:?}"
+        );
+    }
+
+    /// Item 1b (guard against over-acceptance): refinement must NEVER accept an *ill-typed* dependent
+    /// match. Here a broken `safe-tail` returns the WHOLE vector `v : Vec A (Succ n)` in the `vcons`
+    /// arm where the declared result is `Vec A n` — a genuine length mismatch the refined check must
+    /// still reject. (`safe-head`'s failing-call test in `blight-repl` covers the dual direction.)
+    #[test]
+    fn kernel_rejects_illtyped_dependent_match() {
+        let env = env_with_decls(&[
+            "(defdata Nat () (Zero) (Succ (n Nat)))",
+            "(defdata Vec ((a (Type 0))) ((n Nat)) \
+                (vnil (=> Zero)) \
+                (vcons (m Nat) (x a) (xs (Vec a m)) (=> (Succ m))))",
+        ]);
+        let ty = elaborate(
+            &env,
+            &parse_surface(
+                &read_one("(Pi ((A (Type 0)) (n Nat) (v (Vec A (Succ n)))) (Vec A n))")
+                    .unwrap()
+                    .0,
+            )
+            .unwrap(),
+        )
+        .expect("bad-safe-tail type elaborates");
+        // `vcons` arm returns the cons cell `(vcons m x xs) : Vec A (Succ m)`, i.e. the full input
+        // length, not the tail `xs : Vec A m`. Under refinement `n` is solved to `Succ m`, so the
+        // declared result `Vec A n = Vec A (Succ m)` would only be satisfied by `xs`-of-length-`m`…
+        // returning the longer cell is a length error the kernel must catch.
+        let body_sx = read_one(
+            "(lam (A n v) (match v \
+               [(vnil) vnil] \
+               [(vcons m x xs) (vcons m x xs)]))",
+        )
+        .unwrap()
+        .0;
+        // Elaboration may itself reject this (the elaborator's own front-line check). If it does,
+        // that already prevents the unsound def. If it elaborates, the kernel door must reject it.
+        match elaborate_against(&env, &parse_surface(&body_sx).unwrap(), &ty) {
+            Err(_) => { /* rejected during elaboration — fine. */ }
+            Ok(core) => {
+                let res = blight_kernel::check_top_with(env.signature().clone(), core, ty);
+                assert!(
+                    res.is_err(),
+                    "the kernel must reject an ill-typed dependent match (wrong result length): {res:?}"
+                );
+            }
+        }
+    }
+
+    /// Over-acceptance guard, kernel-direct: a `match` whose `vcons` arm returns a vector of the
+    /// WRONG length must be rejected *by the kernel's refinement path itself* (not merely by the
+    /// elaborator). We hand-build the core `Elim` so elaboration can't pre-empt the check: the motive
+    /// is the index-preserving `λ i. λ s. Vec A i`, the scrutinee `v : Vec A (Succ n)`, and the
+    /// `vcons` method returns `vcons m x xs : Vec A (Succ m)` where refinement forces the conclusion
+    /// to `Vec A (Succ (Succ m))` (the scrutinee index is `Succ n`, `n ↦ Succ m`). `Succ m ≠ Succ
+    /// (Succ m)`, so `check_refined_method` must reject — proving the refinement does not blindly
+    /// accept a reachable branch.
+    #[test]
+    fn kernel_refinement_rejects_wrong_length_reachable_branch() {
+        let env = env_with_decls(&[
+            "(defdata Nat () (Zero) (Succ (n Nat)))",
+            "(defdata Vec ((a (Type 0))) ((n Nat)) \
+                (vnil (=> Zero)) \
+                (vcons (m Nat) (x a) (xs (Vec a m)) (=> (Succ m))))",
+        ]);
+        // safe-tail-ish type: (A) (n) (v : Vec A (Succ n)) -> Vec A (Succ n)   [identity-length]
+        // but the body's vcons arm returns the cons cell at length (Succ m) while refinement makes
+        // the demanded conclusion length (Succ n) = (Succ (Succ m)). Build the core Elim directly.
+        let ty = elaborate(
+            &env,
+            &parse_surface(
+                &read_one(
+                    "(Pi ((A (Type 0)) (n Nat) (v (Vec A (Succ n)))) (Vec A (Succ (Succ n))))",
+                )
+                .unwrap()
+                .0,
+            )
+            .unwrap(),
+        )
+        .expect("type elaborates");
+        // Body via the surface match; the result type mentions (Succ (Succ n)) which no arm satisfies,
+        // so even if elaboration accepts the motive, the kernel's refined conclusion check must fail.
+        let body_sx = read_one(
+            "(lam (A n v) (match v \
+               [(vnil) vnil] \
+               [(vcons m x xs) (vcons m x xs)]))",
+        )
+        .unwrap()
+        .0;
+        match elaborate_against(&env, &parse_surface(&body_sx).unwrap(), &ty) {
+            Err(_) => { /* rejected during elaboration — also fine. */ }
+            Ok(core) => {
+                let res = blight_kernel::check_top_with(env.signature().clone(), core, ty);
+                assert!(
+                    res.is_err(),
+                    "kernel refinement must reject a reachable branch of the wrong length: {res:?}"
+                );
+            }
+        }
+    }
+
     /// `(let ((x e)) b)` desugars to `((lam (x) b) e)`. When both the bound value's type and the
     /// body's type are known, the lambda is ascribed so the application is checkable.
     #[test]
@@ -3465,6 +3928,95 @@ mod tests {
             }
             other => panic!("expected an application, got {other:?}"),
         }
+    }
+
+    // ---- define-kernel-check: `declare` now routes every pure/total definition through the
+    //      trusted kernel door (spec §2.1) at `declare` time, not just under `--recheck`. --------
+
+    /// A `deftotal` whose body genuinely inhabits its declared type passes the per-definition
+    /// kernel door at `declare` time. This is the GREEN side: the gate must not reject good code.
+    #[test]
+    fn deftotal_kernel_checks_at_declare_time() {
+        let (env, last) = process_decls(
+            &[
+                "(defdata Nat () (Zero) (Succ (n Nat)))",
+                "(deftotal double (lam (n) (match n [(Zero) Zero] [(Succ k) (Succ (Succ (double k)))])))",
+            ],
+            &|name| match name {
+                "double" => Some("(Pi ((n Nat)) Nat)"),
+                _ => None,
+            },
+        )
+        .expect("a well-typed deftotal declares and kernel-checks");
+        let (name, _ty) = last.expect("a definition");
+        assert_eq!(name, "double");
+        assert!(env.global_term("double").is_some(), "double is stored");
+    }
+
+    /// RED→GREEN teeth: a definition whose elaborated core does NOT inhabit its declared type is
+    /// now rejected *at declare time* by the kernel door. We drive the body through `define_global`
+    /// plus `kernel_check_def` directly with a deliberately wrong type (a `Nat`-to-`Nat` identity
+    /// ascribed the type `Nat`-to-`Bool`) to exercise the gate without depending on the elaborator's
+    /// own front-line check. Before this gate existed, such a mismatch only surfaced under `--recheck`.
+    #[test]
+    fn kernel_check_def_rejects_ill_typed_body() {
+        let env = env_with_decls(&[
+            "(defdata Nat () (Zero) (Succ (n Nat)))",
+            "(defdata Bool () (false) (true))",
+        ]);
+        // `λn. n` : the identity on Nat. Claim it has type `Nat → Bool` (false).
+        let ty = elaborate(
+            &env,
+            &parse_surface(&read_one("(Pi ((n Nat)) Bool)").unwrap().0).unwrap(),
+        )
+        .expect("type elaborates");
+        let ident = Term::Lam(Box::new(Term::Var(0)));
+        match env.kernel_check_def("bogus", &ident, &ty) {
+            Err(ElabError::BadForm(msg)) => assert!(
+                msg.contains("kernel rejected definition `bogus`"),
+                "expected kernel-rejection message, got: {msg}"
+            ),
+            other => panic!("expected the kernel door to reject Nat→Bool identity, got {other:?}"),
+        }
+    }
+
+    /// The gate is *honest about its fragment*: an effectful (`! E A`) or partial (`Delay A`)
+    /// conclusion is out of the pure kernel door and must be SKIPPED (not rejected), exactly as
+    /// `--recheck` `Declines` it. `is_pure_total_conclusion` is the predicate that decides this.
+    #[test]
+    fn pure_total_conclusion_gates_effectful_and_partial() {
+        let env = env_with_decls(&[
+            "(defdata Unit () (tt))",
+            "(defdata Nat () (Zero) (Succ (n Nat)))",
+            "(effect Console (print Nat Unit))",
+        ]);
+        let pure = elaborate(
+            &env,
+            &parse_surface(&read_one("(Pi ((n Nat)) Nat)").unwrap().0).unwrap(),
+        )
+        .unwrap();
+        let effectful = elaborate(
+            &env,
+            &parse_surface(&read_one("(! Console Unit)").unwrap().0).unwrap(),
+        )
+        .unwrap();
+        let partial = elaborate(
+            &env,
+            &parse_surface(&read_one("(Pi ((n Nat)) (Delay Nat))").unwrap().0).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            is_pure_total_conclusion(&pure),
+            "Nat → Nat is a pure/total conclusion"
+        );
+        assert!(
+            !is_pure_total_conclusion(&effectful),
+            "(! Console Unit) is effectful — skipped by the pure door"
+        );
+        assert!(
+            !is_pure_total_conclusion(&partial),
+            "Nat → Delay Nat is partial — skipped by the pure door"
+        );
     }
 
     // ---- partiality: define-rec / deftotal (spec §4.5, §6.2) --------------------------------

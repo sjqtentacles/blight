@@ -618,9 +618,9 @@ impl<'a> Recheck<'a> {
     }
 
     /// Re-check a dependent eliminator (spec §2.7): an independent port of the kernel's
-    /// `infer_elim` over the fragment the kernel itself supports — at most one parameter and at most
-    /// one index. The indexed case threads the index through the motive (`λ i. λ (_:D ps i). T`) and
-    /// concludes `P idx scrut`; the non-indexed case is `λ (_:D ps). T` concluding `P scrut`.
+    /// `infer_elim` over full N-parameter / M-index families (the earlier ≤1/≤1 cap is lifted). The
+    /// indexed case threads all indices through the motive (`λ i… . λ (_:D ps i…). T`) and concludes
+    /// `P idx… scrut`; the non-indexed case is `λ (_:D ps). T` concluding `P scrut`.
     #[allow(clippy::too_many_arguments)]
     fn infer_elim(
         &self,

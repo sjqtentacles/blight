@@ -8,22 +8,23 @@
 ; kernel certifies the description type-checks. The companion file spore_meta.bl proves a couple of
 ; metatheorems about this model by tactics.
 ;
-; Scope & honesty (spec §10): the kernel caps inductives at ≤1 parameter / ≤1 index
-; (crates/blight-elab/src/elab.rs declare_data), so the model is *extrinsic* — a `BTerm` datatype
-; plus relations and functions over it, not an intrinsically-typed syntax. We model the nine core
+; Scope & honesty (spec §10): this file keeps the model *extrinsic* — a `BTerm` datatype plus
+; relations and functions over it — because that is the form the metatheorems in `spore_meta.bl`
+; reason over. (The kernel's earlier ≤1-index cap is now lifted; the intrinsically-typed encoding it
+; used to block is realized in `spore_intrinsic.bl`, see the note below.) We model the nine core
 ; formers the re-checker's fragment covers (Var/Univ/Pi/Lam/App and Sigma/Pair/Fst/Snd); the cubical
 ; Kan table, effects/handlers, and partiality are out of this fragment by design (documented in
 ; §Phase E of docs/implementation.md).
 ;
-; KERNEL INDEX CAP — the first construct that hits it: an *intrinsically-typed* term model
-; `BTm : BCtx → BTerm → Type` (a well-typed-syntax representation indexed by its context and its
-; type) is the natural next step, but it requires an inductive family with **two indices** (the
-; context and the type). The kernel rejects this at declaration time (`declare_data`: "supports at
-; most one inductive index"), so it cannot be expressed directly. The extrinsic encoding here
-; (`BTerm` + `bwellscoped`/`bctx-*` as *relations and functions*, with the context/type carried as
-; ordinary value arguments rather than indices) is the standard work-around and stays strictly
-; within the ≤1/≤1 cap. Likewise a typed substitution lemma indexed by both source and target
-; contexts would need two indices; we instead state the untyped `bsubst`/`bshift` laws.
+; INTRINSIC COMPANION — the index cap is now lifted: an *intrinsically-typed* term model
+; `BTm : (g BTyCtx) (a BTy) → Type` (a well-typed-syntax representation indexed by its context and
+; its type) is the natural next step. It needs an inductive family with **two indices** (the context
+; and the type). That cap is now lifted end-to-end (multi-index telescopes in `declare_data` plus the
+; kernel `Data`/`Elim` rules), so the intrinsic encoding is realized directly in the sibling file
+; `spore_intrinsic.bl` (loaded after this one). This file keeps the *extrinsic* encoding (`BTerm` +
+; `bwellscoped`/`bctx-*` as relations and functions, with the context/type carried as ordinary value
+; arguments) because the extrinsic model is what the metatheorems in `spore_meta.bl` reason over; the
+; two encodings are complementary, and both type-check through the trusted kernel.
 
 ; ---- de Bruijn naturals (indices and universe levels) ----------------------------------------
 (defdata Nat () (Zero) (Succ (n Nat)))

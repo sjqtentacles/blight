@@ -79,6 +79,19 @@ impl Usage {
         (head, Usage(self.0[1..].to_vec()))
     }
 
+    /// Keep only the demand on the outermost `n` ambient variables, dropping the leading entries
+    /// that correspond to locally-introduced binders (e.g. a dependent-match branch's constructor
+    /// arguments and induction hypotheses). The vector is innermost-first, so the ambient variables
+    /// are the trailing `n` slots.
+    pub fn truncate(&self, n: usize) -> Usage {
+        let len = self.0.len();
+        if n >= len {
+            Usage(self.0.clone())
+        } else {
+            Usage(self.0[len - n..].to_vec())
+        }
+    }
+
     /// The number of variables this vector ranges over.
     pub fn len(&self) -> usize {
         self.0.len()

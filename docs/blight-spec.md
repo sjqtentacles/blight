@@ -1424,6 +1424,16 @@ cubical `plus-zero` proof at a REPL and the kernel accepts it.
 - Stdlib, package manager ("spores"/"strains"), docs, error-message quality, WASM backend.
 - **Done when:** the bootstrap Rust host is needed only as a seed/re-checker.
 
+### M7–M14 — post-M6 hardening
+
+Capability and soundness hardening after self-hosting — console/foreign/heap/int codegen, re-checker
+completeness (effects at the type level, full N-parameter / M-index families, partiality), the
+dependent-match **refinement port into the trusted kernel** (closing the kernel↔re-checker
+asymmetry), evidence-backed metatheory notes (§10.3/§10.4), and the intrinsically-typed self-host
+sketch — is tracked with per-milestone acceptance tests in
+[docs/roadmap-post-m6.md](roadmap-post-m6.md). The only deliberate TCB growth in this band is
+primitive ints (M10) and dependent-match refinement (M12), both reviewed and isolated.
+
 ### Dependency view
 
 ```mermaid
@@ -1585,6 +1595,12 @@ For **partiality** specifically (§4.5): the delay monad's "too-intensional" equ
 resolved by the **QIIT** construction (Altenkirch–Danielsson–Kraus), which we can express
 because we already pay for HITs (§2.7) — so partiality-as-effect has a known-good realization
 even in the conservative configuration.
+
+> **Measured status.** Both corners now have evidence-backed notes in
+> [docs/metatheory.md](metatheory.md): §1 reports the *actual* kernel behavior at grade 0/1 across
+> `transp`/`hcomp`/interval binders (erasure survives `transp`, additive face usage, ungraded
+> dimensions), and §2 records the strong-normalization sketch for the tail-resumptive fragment and
+> the shipped pure-kernel-plus-tower locus separation.
 
 ### 10.5 Honest status summary
 

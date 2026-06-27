@@ -232,6 +232,13 @@ Restating spec §9 with engineering emphasis and risk callouts.
 
 The dependency structure (spec §9): M0→M1→M2; M0→M3; M2→M3→M4; M1→M4; M4→M5; M4/M5→M6.
 
+**Post-M6 (M7–M14).** Capability and soundness hardening that landed after self-hosting —
+console/foreign/heap/int codegen, re-checker completeness (effects type-level + N-param/M-index +
+partiality), the dependent-match refinement port into the trusted kernel, evidence-backed metatheory
+notes, and the intrinsically-typed self-host sketch — is tracked in
+[docs/roadmap-post-m6.md](roadmap-post-m6.md), with the only deliberate TCB growth (primitive ints;
+dependent-match refinement) flagged there.
+
 ---
 
 ## 8. Testing and auditing strategy
@@ -313,8 +320,8 @@ current honest coverage:
 | `Elim` over multi-parameter / multi-index families | ✅ checked | `infer_elim`/`method_type` build the indexed motive (`λ i… s. M`), apply the motive to all indices + the scrutinee, and reconstruct indexed recursive-argument IHs — mirroring the kernel for N parameters and M indices (the ≤1 cap is lifted) |
 | Cubical Kan (`Transp`/`HComp`/`Comp`) | ✅ checked | the re-checker now models the Kan table in its own value layer (`crates/blight-recheck/src/kan.rs`), independently of the kernel |
 | `Glue` / `ua` | ⛔ `Declined` (counted) | the univalence machinery is not modeled in the re-checker value layer |
-| Effects/handlers (`Op`/`Handle`/`EffTy`) | ⛔ `Declined` (counted) | effect rows not modeled in the re-checker value layer |
-| Partiality (`Delay`/`Now`/`Later`) | ⛔ `Declined` (counted) | later modality not modeled |
+| Effects/handlers (`Op`/`Handle`/`EffTy`) | ✅ checked (type-level) | the re-checker re-derives the types of `perform`/`handle`/`! E A` from the signature; it does not track effect rows or continuation grades (the kernel's job) — so it offers a genuine second opinion at the type level rather than declining |
+| Partiality (`Delay`/`Now`/`Later`/`Force`) | ✅ checked | a second, independent NbE over the delay layer with `force (now a) ⇝ a` and guarded `later`; the proof-boundary `Partial` discipline stays the kernel's job |
 
 `recheck_agrees_with_kernel_on_M0_M5` drives the M0-M6 corpus (Nat arithmetic, linear grades,
 traits, modules, tactics, cubical paths, regions) plus indexed/multi-parameter eliminators
@@ -334,15 +341,39 @@ by tactics (re-checked through the kernel door): `bconv-refl` (conv reflexivity)
 two-quantifier induction, with the second context `h` introduced *before* the induction variable so
 the `Elim` motive abstracts only `g`).
 
-**Multi-index families (cap now lifted).** An *intrinsically-typed* term model `BTm : BCtx → BTerm
-→ Type` (well-typed syntax indexed by its context *and* its type) needs an inductive family with
-**two indices**. This was previously blocked by a kernel cap of ≤1 parameter / ≤1 index; that cap is
-now **lifted** end-to-end — the surface `declare_data`, the kernel's `infer_elim`/`method_type`, and
-the independent re-checker all handle full N-parameter / M-index telescopes (see
-`std/either.bl` for a two-parameter inductive and `std/vec.bl` for an indexed family, both re-checked
-by the independent checker). The extrinsic encoding here (a `BTerm` datatype with
-`bwellscoped`/`bctx-*` as relations and functions) remains a perfectly good model; the intrinsically
-indexed version is now also expressible should `spore.bl` adopt it.
+**Stage 5 — the intrinsic core and a self-host sketch (cap lifted, intrinsic `BTm` realized).** The
+≤1 parameter / ≤1 index cap that previously blocked an intrinsically-typed term model is now
+**lifted** end-to-end — the surface `declare_data`, the kernel's `Data` formation and
+`infer_elim`/`method_type`, and the independent re-checker all handle full N-parameter / M-index
+telescopes (see `std/either.bl` for a two-parameter inductive and `std/vec.bl` for an indexed family,
+both re-checked by the independent checker). The intrinsic encoding the spore used to only *describe*
+is now **realized** in `crates/blight-prelude/spore_intrinsic.bl` and kernel-certified by the
+`spore_intrinsic_loads` test (`crates/blight-repl/tests/spore.rs`):
+
+- `BTy` — object types (`Base`, `Arr`), with a structural `bty-size`.
+- `BTyCtx` — typing contexts as snoc-lists of `BTy`.
+- `BVarIn : (g BTyCtx) (a BTy) → Type` — intrinsic de Bruijn membership (a **two-index** family);
+  `VZ`/`VS` make only in-scope variables expressible.
+- `BTm : (g BTyCtx) (a BTy) → Type` — **well-typed-syntax-by-construction** (the headline two-index
+  family); `TVar`/`TLam`/`TApp` admit only well-typed, well-scoped terms, with a dependent `btm-size`
+  fold (a `match` over a two-index family) that the kernel certifies.
+
+This is the seed of a Blight-in-Blight pipeline. A concrete Stage-5 plan from here:
+
+1. **Surface→core elaborator-in-Blight.** Extend `spore_intrinsic.bl` with an object-language
+   surface AST (`BSurf`) and a total `belaborate : BTyCtx → BSurf → Maybe (Σ a. BTm g a)` that
+   either rejects or produces an intrinsically-typed core term — the Blight analogue of `blight-elab`
+   restricted to the modeled fragment. Because the result is a `BTm`, *acceptance is a typing
+   proof*.
+2. **Core→ANF backend-in-Blight.** Define an ANF/CPS target datatype `BAnf` and a total
+   `bcompile : BTm g a → BAnf` that lowers the intrinsic core, plus a `banf-size` measure; this is
+   the Blight analogue of `blight-codegen`'s lowering on the modeled fragment.
+3. **Metatheorems.** State and prove (in `spore_meta.bl`, by tactics, re-checked by the kernel) a
+   handful of laws: `belaborate` is type-sound by construction (immediate from the `BTm` index),
+   `bcompile` preserves `btm-size`-bounded structure, and a weakening lemma for `BVarIn`.
+
+The extrinsic `BTerm`/`bwellscoped` model in `spore.bl` is retained alongside — it is the form the
+existing `spore_meta.bl` metatheorems reason over, and the two encodings are complementary.
 
 ## Performance
 

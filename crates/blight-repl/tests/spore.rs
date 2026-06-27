@@ -47,6 +47,57 @@ fn spore_model_typechecks() {
     }
 }
 
+/// RED: `spore_intrinsic.bl` — an *intrinsically-typed* core fragment (`BTy : BCtx -> Type` and a
+/// term family `BTm : (g BCtx) -> (a (BTy g)) -> Type`, indexed by **both** its context and its
+/// type) — loads and kernel-checks. This exercises the now-lifted multi-index telescope cap: every
+/// `defdata`/`deftotal`/`define` form must come back a non-error declaration/checked judgment, with
+/// the host kernel certifying that well-typed-syntax-by-construction type-checks.
+#[test]
+fn spore_intrinsic_loads() {
+    let mut env = ElabEnv::new();
+    let outcomes = {
+        let mut prog = Program::with_resolver(&mut env, prelude_resolver);
+        prog.run("(load \"spore.bl\")\n(load \"spore_intrinsic.bl\")")
+            .expect(
+                "spore_intrinsic.bl models the intrinsic core and type-checks through the kernel",
+            )
+    };
+    // Every top-level form is accepted by the kernel (a declaration or a checked judgment); none is
+    // a form error.
+    assert!(
+        outcomes
+            .iter()
+            .all(|o| matches!(o, Outcome::Declared | Outcome::Checked(_))),
+        "every intrinsic-spore form is kernel-accepted: {outcomes:?}"
+    );
+    // The intrinsic families and their elimination/well-typing helpers are recorded.
+    for datasym in ["BTy", "BTm"] {
+        assert!(
+            env.data_constructors(datasym).is_some(),
+            "intrinsic spore declares datatype `{datasym}`"
+        );
+    }
+    for fnsym in ["bty-size", "btm-size"] {
+        assert!(
+            env.global_term(fnsym).is_some(),
+            "intrinsic spore defines fn `{fnsym}`"
+        );
+    }
+    // Soundness cross-check: the independent re-checker agrees with the kernel on every typed global
+    // of the intrinsic model (the two-index `BVarIn`/`BTm` families included). It may only either
+    // re-verify (`Ok`) or honestly decline an out-of-fragment global — never `Rejected`.
+    let sig = env.signature();
+    for (name, term, ty) in env.typed_globals() {
+        let j = blight_kernel::Judgement::HasType { term, ty };
+        match blight_recheck::recheck_judgement(sig, &j) {
+            Ok(()) | Err(blight_recheck::RecheckError::Declined(_)) => {}
+            Err(blight_recheck::RecheckError::Rejected(m)) => {
+                panic!("independent re-checker REJECTED intrinsic-spore global `{name}`: {m}")
+            }
+        }
+    }
+}
+
 /// RED: conv reflexivity (`Π t. t ≡ t`) over the model is proved by tactics and re-checked by the
 /// kernel — the base structural property `conv` relies on, established *in Blight*.
 #[test]

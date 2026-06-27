@@ -64,6 +64,50 @@ impl std::fmt::Display for TypeError {
 
 impl std::error::Error for TypeError {}
 
+// =======================================================================================
+// Dependent pattern-match refinement support types (plan item 1b).
+// =======================================================================================
+
+/// The result of refining one constructor branch against the scrutinee's index values.
+#[derive(Debug, Clone)]
+enum Refinement {
+    /// A head-constructor clash: the branch can never apply to this scrutinee, so its method is
+    /// *not* required (the branch is vacuous). This is what lets the kernel certify `safe-tail`'s
+    /// `vnil` branch (index `Zero` clashes with `Succ n`).
+    Unreachable,
+    /// Unification solved: `args` carries the forced value of each constructor argument (`None` if
+    /// it stays a fresh binder), and `ambient` carries the per-branch specialization of scrutinee
+    /// index variables (`(level, value)` pairs).
+    Solved {
+        args: Vec<Option<Value>>,
+        ambient: Vec<(usize, Value)>,
+    },
+    /// Unification made no progress (or got stuck) — fall back to the plain `method_type` check so
+    /// nothing previously accepted regresses.
+    Stuck,
+}
+
+/// The accumulating solution while unifying one branch's result indices.
+struct RSolution {
+    /// Forced values for the constructor's arguments (indexed by argument position).
+    args: Vec<Option<Value>>,
+    /// Specializations of ambient scrutinee-index variables, as `(level, value)` pairs.
+    ambient: Vec<(usize, Value)>,
+}
+
+/// The outcome of unifying a single index pair.
+#[derive(Debug, Clone, Copy)]
+enum Unify {
+    /// Heads clash — branch unreachable.
+    Clash,
+    /// A variable was solved (made progress).
+    Progress,
+    /// Already rigidly equal — no new information.
+    Trivial,
+    /// Cannot decide soundly — fall back to the plain rule.
+    Stuck,
+}
+
 /// Concretize a [`Level`] to a natural number. For M0, levels are closed (no level variables in
 /// the surface), so this is total; level-variable support is added with universe polymorphism.
 fn level_to_nat(l: &Level) -> Result<u32, TypeError> {
@@ -138,6 +182,14 @@ impl Checker {
         for _ in 0..d {
             let level = d - 1 - env.dim_len();
             env = env.extend_dim(crate::term::Interval::Dim(level));
+        }
+        // Apply per-branch refinement overrides (item 1b): specialize the named ambient variables to
+        // their solved values. Each override term is evaluated in the fully-built env (it may mention
+        // the branch's freshly-bound constructor arguments), then written at the variable's level.
+        // This is the kernel analog of the re-checker's `refine_ambient`.
+        for (lvl, t) in ctx.overrides() {
+            let v = eval(&env, t);
+            env = env.set_level(*lvl, v);
         }
         env
     }
@@ -889,6 +941,48 @@ impl Checker {
         let mut usage = scrut_usage0;
         let mut row = scrut_row0;
         for (ctor, method) in decl.constructors.iter().zip(methods.iter()) {
+            if indexed {
+                // Dependent pattern-match refinement (item 1b): try to unify this constructor's
+                // result indices with the scrutinee's indices.
+                let refinement = self.refine_method(
+                    ctx.len(),
+                    &self.env_for(ctx),
+                    ctor,
+                    &params,
+                    &scrut_indices,
+                );
+                match refinement {
+                    // The branch's head index clashes with the scrutinee's: it is unreachable, so its
+                    // method is vacuously well-typed and contributes no usage/effects. (This is what
+                    // certifies `safe-tail`/`vec-map`'s `vnil` arm against a `Succ`-indexed scrutinee.)
+                    Refinement::Unreachable => continue,
+                    // The branch is reachable under a solved index specialization: check its method
+                    // against the per-branch-refined conclusion.
+                    Refinement::Solved {
+                        args: solved,
+                        ambient,
+                    } => {
+                        let (method_row, method_usage) = self.check_refined_method(
+                            ctx,
+                            &decl,
+                            ctor,
+                            method,
+                            motive,
+                            &params,
+                            &scrut_indices,
+                            &solved,
+                            &ambient,
+                            sigma,
+                        )?;
+                        usage = usage.add(&method_usage);
+                        row = row.union(&method_row);
+                        continue;
+                    }
+                    // No progress: fall through to the plain (unrefined) method-type check below, so
+                    // nothing previously accepted regresses.
+                    Refinement::Stuck => {}
+                }
+            }
             let method_ty = self.method_type(ctx, &decl, ctor, &motive_val, &params)?;
             let (method_row, method_usage) = self.check_g(ctx, method, &method_ty, sigma)?;
             usage = usage.add(&method_usage);
@@ -1002,6 +1096,12 @@ impl Checker {
                         }
                     }
                     Term::Univ(_) | Term::Interval(_) | Term::Erased | Term::System(_) => t.clone(),
+                    // `Int`/`IntLit` are closed primitive kernel nodes (M11) that legitimately appear
+                    // in a constructor's argument types (e.g. `Expr`'s `lit (v Int)` in
+                    // examples/calculator.bl). They carry no variables, so — like `Univ`/`Interval` —
+                    // they translate to themselves. (Completeness fix surfaced by the declare-time
+                    // kernel gate; not part of the 1b dependent-match refinement.)
+                    Term::IntTy | Term::IntLit(_) => t.clone(),
                     Term::Pi(g, a, b) => Term::Pi(
                         *g,
                         Box::new(go(a, depth_in, m, repls)),
@@ -1130,6 +1230,408 @@ impl Checker {
         }
 
         Ok(eval(&self.env_for(ctx), &body))
+    }
+
+    // ===================================================================================
+    // Dependent pattern-match refinement (plan item 1b — the one deliberate TCB growth).
+    //
+    // Ported faithfully from the independent re-checker (`crates/blight-recheck/src/typecheck.rs`:
+    // `refine_method`/`unify_index`/`unify_seq`/`solvable_index`/`check_refined_method`/
+    // `strengthen_motive`), re-expressed against the kernel's own `Value`/`Env`/`conv`/`eval`/
+    // `quote`/`reflect`. This teaches the trusted kernel to (a) discharge an *unreachable*
+    // constructor branch whose result index CLASHES with the scrutinee's index, and (b) check a
+    // *reachable* branch under the per-branch index SPECIALIZATION. When unification is STUCK it
+    // falls back to the plain `method_type` check, so nothing previously accepted regresses.
+    //
+    // Soundness: refinement only ever *discharges* a vacuous branch (a head-constructor clash, which
+    // makes the branch genuinely unreachable for this scrutinee) or *specializes* a reachable branch
+    // under a solved index equation. It never accepts a branch the plain rule would reject for a
+    // non-clash reason — `Stuck` falls back. This is the standard dependent-pattern-matching
+    // elaboration (spec §2.7); the re-checker's separately-written implementation is independent
+    // evidence the algorithm is right.
+    // ===================================================================================
+
+    /// Refine one constructor branch against the scrutinee's index values: unify the constructor's
+    /// result indices with the scrutinee indices. A head-constructor clash ⇒ the branch is
+    /// `Unreachable`; a successful solve ⇒ `Solved` (some constructor args forced, some ambient
+    /// scrutinee-index variables specialized); no progress ⇒ `Stuck` (fall back to the plain rule).
+    fn refine_method(
+        &self,
+        lvl: usize,
+        ctx_env: &Env,
+        ctor: &Constructor,
+        params: &[Value],
+        scrut_indices: &[Value],
+    ) -> Refinement {
+        // Build placeholder values for the constructor arguments and the env that types/evaluates
+        // the (param + preceding-arg) scope — fresh neutral *levels* (≥ lvl) so unification can
+        // recognize them as the solvable unknowns. `ctx_env` only contributes its signature handle
+        // here (constructor index terms are closed over params + args).
+        let nargs = ctor.args.len();
+        let mut env = match ctx_env.sig() {
+            Some(s) => Env::with_sig(s.clone()),
+            None => Env::empty(),
+        };
+        for p in params {
+            env = env.extend(p.clone());
+        }
+        for k in 0..nargs {
+            env = env.extend(Value::Neutral(Neutral::Var(lvl + k)));
+        }
+        let mut sol = RSolution {
+            args: vec![None; nargs],
+            ambient: Vec::new(),
+        };
+        let mut any = false;
+        for (rix_t, scrut_ix) in ctor.result_indices.iter().zip(scrut_indices.iter()) {
+            let got = eval(&env, rix_t);
+            match self.unify_index(lvl, &got, scrut_ix, &mut sol) {
+                Unify::Clash => return Refinement::Unreachable,
+                Unify::Progress => any = true,
+                Unify::Trivial => {}
+                Unify::Stuck => return Refinement::Stuck,
+            }
+        }
+        if any {
+            Refinement::Solved {
+                args: sol.args,
+                ambient: sol.ambient,
+            }
+        } else {
+            Refinement::Stuck
+        }
+    }
+
+    /// First-order unification of a constructor result-index value `got` (which may mention argument
+    /// placeholders at levels `≥ lvl`) against the scrutinee index value `want` (which may mention
+    /// ambient context variables at levels `< lvl`). Solves placeholders (the branch's constructor
+    /// arguments) and ambient index variables (the per-branch specialization).
+    fn unify_index(&self, lvl: usize, got: &Value, want: &Value, sol: &mut RSolution) -> Unify {
+        // Flexible placeholder on the `got` side ⇒ solve the constructor argument.
+        if let Value::Neutral(Neutral::Var(l)) = got {
+            if *l >= lvl {
+                let k = *l - lvl;
+                if k < sol.args.len() {
+                    return match &sol.args[k] {
+                        None => {
+                            sol.args[k] = Some(want.clone());
+                            Unify::Progress
+                        }
+                        Some(prev) => {
+                            if conv(lvl, prev, want) {
+                                Unify::Trivial
+                            } else {
+                                Unify::Stuck
+                            }
+                        }
+                    };
+                }
+            }
+        }
+        // Flexible ambient index variable on the `want` side ⇒ specialize it to `got`. `got` may
+        // mention the constructor's argument placeholders (they become this branch's bound
+        // variables); it must not contain a *stuck* neutral (an application/eliminator), which we
+        // cannot soundly turn into an equation.
+        if let Value::Neutral(Neutral::Var(l)) = want {
+            if *l < lvl && self.solvable_index(got) {
+                for (lvl_a, v) in sol.ambient.iter() {
+                    if lvl_a == l {
+                        return if conv(lvl, v, got) {
+                            Unify::Trivial
+                        } else {
+                            Unify::Stuck
+                        };
+                    }
+                }
+                sol.ambient.push((*l, got.clone()));
+                return Unify::Progress;
+            }
+        }
+        match (got, want) {
+            // Same data head: decompose parameters and indices.
+            (Value::Data(n1, p1, i1), Value::Data(n2, p2, i2)) => {
+                if n1 != n2 || p1.len() != p2.len() || i1.len() != i2.len() {
+                    return Unify::Clash;
+                }
+                self.unify_seq(lvl, p1.iter().zip(p2).chain(i1.iter().zip(i2)), sol)
+            }
+            // Same constructor head: decompose arguments. Different heads are a genuine CLASH — the
+            // branch is unreachable for this scrutinee.
+            (Value::Con(c1, a1), Value::Con(c2, a2)) => {
+                if c1 != c2 || a1.len() != a2.len() {
+                    return Unify::Clash;
+                }
+                self.unify_seq(lvl, a1.iter().zip(a2), sol)
+            }
+            (Value::IntLit(a), Value::IntLit(b)) => {
+                if a == b {
+                    Unify::Trivial
+                } else {
+                    Unify::Clash
+                }
+            }
+            // Otherwise: rigidly equal ⇒ trivial; not provably so ⇒ stuck (fall back to the plain
+            // method type rather than risk an unsound accept).
+            _ => {
+                if conv(lvl, got, want) {
+                    Unify::Trivial
+                } else {
+                    Unify::Stuck
+                }
+            }
+        }
+    }
+
+    /// Unify a sequence of value pairs, combining their outcomes (clash/stuck short-circuit).
+    fn unify_seq<'b>(
+        &self,
+        lvl: usize,
+        pairs: impl Iterator<Item = (&'b Value, &'b Value)>,
+        sol: &mut RSolution,
+    ) -> Unify {
+        let mut progressed = false;
+        for (a, b) in pairs {
+            match self.unify_index(lvl, a, b, sol) {
+                Unify::Clash => return Unify::Clash,
+                Unify::Progress => progressed = true,
+                Unify::Trivial => {}
+                Unify::Stuck => return Unify::Stuck,
+            }
+        }
+        if progressed {
+            Unify::Progress
+        } else {
+            Unify::Trivial
+        }
+    }
+
+    /// May `v` be used as the right-hand side of an index equation (ambient specialization)? It must
+    /// be a value built only from variables, data/constructor heads, and literals — never a *stuck*
+    /// neutral such as an application or eliminator, which we cannot soundly equate.
+    fn solvable_index(&self, v: &Value) -> bool {
+        match v {
+            Value::Neutral(Neutral::Var(_)) => true,
+            Value::Neutral(_) => false,
+            Value::Data(_, ps, is) => {
+                ps.iter().all(|x| self.solvable_index(x))
+                    && is.iter().all(|x| self.solvable_index(x))
+            }
+            Value::Con(_, xs) => xs.iter().all(|x| self.solvable_index(x)),
+            Value::Univ(_) | Value::IntTy | Value::IntLit(_) => true,
+            _ => false,
+        }
+    }
+
+    /// Substitute neutral variables at the given *levels* by the mapped values throughout `v`.
+    fn subst_levels(&self, v: &Value, map: &[(usize, Value)]) -> Value {
+        match v {
+            Value::Neutral(Neutral::Var(l)) => {
+                for (lvl, val) in map {
+                    if lvl == l {
+                        return val.clone();
+                    }
+                }
+                v.clone()
+            }
+            Value::Data(n, ps, is) => Value::Data(
+                n.clone(),
+                ps.iter().map(|x| self.subst_levels(x, map)).collect(),
+                is.iter().map(|x| self.subst_levels(x, map)).collect(),
+            ),
+            Value::Con(c, xs) => Value::Con(
+                c.clone(),
+                xs.iter().map(|x| self.subst_levels(x, map)).collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+
+    /// Re-express the ambient index solutions (computed over constructor-argument placeholders) in
+    /// terms of the branch's actually-bound argument values.
+    fn resolve_ambient(
+        &self,
+        ambient: &[(usize, Value)],
+        placeholder_map: &[(usize, Value)],
+    ) -> Vec<(usize, Value)> {
+        ambient
+            .iter()
+            .map(|(lvl, v)| (*lvl, self.subst_levels(v, placeholder_map)))
+            .collect()
+    }
+
+    /// Check one *reachable* constructor branch under its per-branch index refinement (item 1b).
+    /// `solved[k]` forces constructor argument `k` (or `None` to leave it a fresh binder), and
+    /// `ambient` specializes the scrutinee's ambient index variables. We open the method's lambdas,
+    /// build the refined context (with value overrides for the forced args + ambient specialization),
+    /// then check the body against the conclusion `motive (refined indices) (con args)`.
+    #[allow(clippy::too_many_arguments)]
+    fn check_refined_method(
+        &self,
+        ctx: &Context,
+        decl: &DataDecl,
+        ctor: &Constructor,
+        method: &Term,
+        motive_term: &Term,
+        params: &[Value],
+        scrut_indices: &[Value],
+        solved: &[Option<Value>],
+        ambient: &[(usize, Value)],
+        sigma: Grade,
+    ) -> Result<(Row, Usage), TypeError> {
+        let base_lvl = ctx.len();
+        let mut cur = ctx.clone();
+        let mut body = method;
+        // `arg_env` evaluates the constructor's arg/index *types* (param scope, then bound args), in
+        // the same convention as the indexed-`Con` checking rule.
+        let mut arg_env = {
+            let mut e = self.env_for(ctx);
+            for p in params {
+                e = e.extend(p.clone());
+            }
+            e
+        };
+        let mut arg_vals: Vec<Value> = Vec::with_capacity(ctor.args.len());
+        // Map each constructor-argument placeholder (level `base_lvl + k`, used during unification) to
+        // the value actually bound here, so ambient equations expressed over placeholders can be
+        // re-expressed over the branch's real binders.
+        let mut placeholder_map: Vec<(usize, Value)> = Vec::with_capacity(ctor.args.len());
+
+        for (k, shape) in ctor.args.iter().enumerate() {
+            let mut rec_ix: Option<Vec<Value>> = None;
+            let dom = match shape {
+                Arg::NonRec(ty) => eval(&arg_env, ty),
+                Arg::Rec(rec_indices) => {
+                    let ix: Vec<Value> = rec_indices.iter().map(|t| eval(&arg_env, t)).collect();
+                    rec_ix = Some(ix.clone());
+                    Value::Data(decl.name.clone(), params.to_vec(), ix)
+                }
+            };
+            let inner = match body {
+                Term::Lam(inner) => inner.as_ref(),
+                other => {
+                    return Err(TypeError::Mismatch {
+                        expected: format!(
+                            "indexed Elim method for {:?} expects a lambda",
+                            ctor.name
+                        ),
+                        found: format!("{other:?}"),
+                    })
+                }
+            };
+            // The binder sits at level `cur.len()`. Bind it to its forced value if solved, else to a
+            // fresh neutral at that level.
+            let this_lvl = cur.len();
+            let arg_val = match &solved[k] {
+                Some(v) => v.clone(),
+                None => Value::Neutral(Neutral::Var(this_lvl)),
+            };
+            placeholder_map.push((base_lvl + k, arg_val.clone()));
+            cur = cur.extend(quote(this_lvl, &dom), Grade::Omega);
+            arg_vals.push(arg_val.clone());
+            arg_env = arg_env.extend(arg_val.clone());
+            body = inner;
+
+            // After a recursive argument, the method binds an induction hypothesis. Its motive is
+            // re-evaluated under the ambient refinement that unifies the scrutinee indices with this
+            // recursive argument's *own* indices (e.g. `vec-map`: scrutinee `n` ↦ tail length `m`).
+            if let Some(ix) = rec_ix {
+                let ix: Vec<Value> = ix
+                    .iter()
+                    .map(|v| self.subst_levels(v, &placeholder_map))
+                    .collect();
+                let ih_ambient = {
+                    let mut sol = RSolution {
+                        args: Vec::new(),
+                        ambient: Vec::new(),
+                    };
+                    for (sx, rx) in scrut_indices.iter().zip(ix.iter()) {
+                        let _ = self.unify_index(base_lvl, rx, sx, &mut sol);
+                    }
+                    sol.ambient
+                };
+                // Evaluate the motive in the *ambient* env (base_lvl indices) with the IH's ambient
+                // specialization injected as `Value`s directly (see the conclusion note below).
+                let motive_here = {
+                    let mut e = self.env_for(ctx);
+                    for (l, v) in ih_ambient.iter() {
+                        e = e.set_level(*l, v.clone());
+                    }
+                    eval(&e, motive_term)
+                };
+                let mut ih_ty = motive_here;
+                for v in ix {
+                    let v = self.subst_levels(&v, &ih_ambient);
+                    ih_ty = apply_value(ih_ty, v);
+                }
+                ih_ty = apply_value(ih_ty, arg_val);
+                let inner2 = match body {
+                    Term::Lam(inner) => inner.as_ref(),
+                    other => {
+                        return Err(TypeError::Mismatch {
+                            expected: format!(
+                                "indexed Elim method for {:?} expects an IH lambda",
+                                ctor.name
+                            ),
+                            found: format!("{other:?}"),
+                        })
+                    }
+                };
+                cur = cur.extend(quote(cur.len(), &ih_ty), Grade::Omega);
+                body = inner2;
+            }
+        }
+
+        // Apply the per-branch refinement: forced-argument overrides + ambient index specialization
+        // (re-expressed over the branch's bound arguments). The conclusion's motive is evaluated in
+        // the *ambient* refined env (its free vars are ambient de Bruijn indices), then applied to the
+        // refined scrutinee indices and the constructor value.
+        let refined_ambient = self.resolve_ambient(ambient, &placeholder_map);
+
+        // Build the value env that `check_g` will reconstruct for `cur`: it must agree with
+        // `env_for(cur)` on the (forced/fresh) constructor-argument and IH binders, plus carry the
+        // ambient specialization. We override the named ambient *levels* with the solved `Value`s
+        // directly (no quote round-trip, which would mis-level branch-arg neutrals). To make the
+        // refinement visible to `check_g` (which rebuilds the env from the `Context`), we record the
+        // overrides on `cur` as terms quoted at `cur.len()` — every neutral they mention (ambient
+        // vars and branch args) is in scope there, so quoting is total.
+        let cur_lvl = cur.len();
+        let mut all_overrides: Vec<(usize, Term)> = Vec::new();
+        for (l, v) in placeholder_map.iter() {
+            // Forced constructor arguments (those whose `solved[k]` was `Some`) carry a value distinct
+            // from their own fresh binder; record those as overrides so the binder reads the forced
+            // value. (Unforced args map to their own `Var(level)` — a no-op override, skipped.)
+            if !matches!(v, Value::Neutral(Neutral::Var(lv)) if *lv == *l) {
+                all_overrides.push((*l, quote(cur_lvl, v)));
+            }
+        }
+        for (l, v) in refined_ambient.iter() {
+            all_overrides.push((*l, quote(cur_lvl, v)));
+        }
+        let cur = cur.with_overrides(&all_overrides);
+
+        // The conclusion `motive (refined indices) (con args)`. The motive term's free de-Bruijn
+        // indices are relative to the *ambient* context (`ctx`, `base_lvl` binders), NOT the extended
+        // branch context `cur` — so it must be evaluated in the ambient env, with the ambient index
+        // variables specialized. We inject the specialization as `Value`s directly (via `set_level`),
+        // exactly the re-checker's `refine_ambient`: this avoids a quote round-trip that would
+        // mis-level the branch-argument neutrals the solutions may mention.
+        let motive_env = {
+            let mut e = self.env_for(ctx);
+            for (l, v) in refined_ambient.iter() {
+                e = e.set_level(*l, v.clone());
+            }
+            e
+        };
+        let mut concl = eval(&motive_env, motive_term);
+        for ix in scrut_indices {
+            let ix = self.subst_levels(ix, &refined_ambient);
+            concl = apply_value(concl, ix);
+        }
+        let con_val = Value::Con(ctor.name.clone(), arg_vals);
+        concl = apply_value(concl, con_val);
+
+        let (body_row, body_usage) = self.check_g(&cur, body, &concl, sigma)?;
+        Ok((body_row, body_usage.truncate(base_lvl)))
     }
 
     /// Infer the universe level of a type-valued term, or error if it is not a universe. This is a
@@ -3337,5 +3839,208 @@ mod tests {
             }
             other => panic!("a `force` computation must be rejected as a proof, got {other:?}"),
         }
+    }
+
+    // ===================================================================================
+    // Item 2 (grades × cubical stress): EVIDENCE-FIRST characterization tests pinning what the
+    // fused QTT-grade × cubical kernel ACTUALLY does at grade 0/1 across `transp`/`hcomp` and
+    // interval binders. These probe the project's central thesis (the two layers compose in one
+    // kernel) where it "bites" — the corpus otherwise runs everything at `Grade::Omega`. Each test
+    // documents the predicted-and-confirmed behavior; the assertions are now permanent regressions.
+    //
+    // Findings (confirmed by these tests):
+    //  • `transp`/`hcomp`/`comp` thread the ambient demand σ through their *base* (and `hcomp`/`comp`
+    //    *tube*) exactly like ordinary elimination; the type-line/carrier is 0-fragment (no demand).
+    //    So a Kan op does NOT secretly inflate a variable's multiplicity beyond σ-per-runtime-use.
+    //  • Erasure SURVIVES a Kan op: a grade-0 variable used only in the (0-fragment) type line of a
+    //    `transp` stays erased and the binder check `0 ≥ 0` passes; using it in the runtime base
+    //    position is correctly charged and a 0-graded base use is a `GradeViolation`.
+    //  • Interval/dimension binders are NOT graded (the kernel tracks only their count): an interval
+    //    variable may be mentioned any number of times with no multiplicity constraint — i.e. the
+    //    kernel treats dimensions as ω-replicable. This is the spec §10.3 "interval-var multiplicity"
+    //    open point; the evidence here is that it imposes no grade discipline (sound: dimensions are
+    //    erased at runtime), which the metatheory note records.
+    // ===================================================================================
+
+    /// Grade-0 erasure SURVIVES `transp`: `λ (A :^0 U0). λ (x :^0 A). transp (i. A) ⊥ x` is checked
+    /// at `(A:^0 U0) → (x:^0 A) → A`. WAIT — `x` flows into the transport *base* (a runtime
+    /// position), so the base charges demand on `x`; a `0`-graded `x` used at the base is `1 ≤ 0`
+    /// false ⟹ `GradeViolation`. This is the soundness teeth: a Kan op does not launder an erased
+    /// value into a relevant position.
+    #[test]
+    fn transp_base_charges_demand_erased_base_rejected() {
+        // (A :^0 U0) → (x :^0 A) → A
+        let ty = Term::Pi(
+            Grade::Zero,
+            Box::new(u(0)),
+            Box::new(Term::Pi(
+                Grade::Zero,
+                Box::new(Term::Var(0)),
+                Box::new(Term::Var(1)),
+            )),
+        );
+        // body: λ A. λ x. transp (i. A) ⊥ x.  Inside the family's dim binder, `A` is still Var(1)
+        // (dims add no term binder); the base `x` is Var(0).
+        let body = Term::Lam(Box::new(Term::Lam(Box::new(Term::Transp {
+            family: Box::new(Term::Var(1)),
+            cofib: Cofib::Bot,
+            base: Box::new(Term::Var(0)),
+        }))));
+        match check_top(body, ty) {
+            Err(TypeError::GradeViolation(_)) => {}
+            other => panic!(
+                "transp base is a runtime position; an erased base var must be a GradeViolation, got {other:?}"
+            ),
+        }
+    }
+
+    /// The accept twin: with `x :^ω A` (unrestricted), the same `transp (i. A) ⊥ x` checks — the
+    /// base's demand σ on `x` is fine against an ω binder. Confirms the rejection above is the
+    /// *grade discipline* discriminating, not `transp` being inherently untypable.
+    #[test]
+    fn transp_base_omega_var_accepted() {
+        let ty = Term::Pi(
+            Grade::Zero,
+            Box::new(u(0)),
+            Box::new(Term::Pi(
+                Grade::Omega,
+                Box::new(Term::Var(0)),
+                Box::new(Term::Var(1)),
+            )),
+        );
+        let body = Term::Lam(Box::new(Term::Lam(Box::new(Term::Transp {
+            family: Box::new(Term::Var(1)),
+            cofib: Cofib::Bot,
+            base: Box::new(Term::Var(0)),
+        }))));
+        assert!(
+            check_top(body, ty).is_ok(),
+            "an ω-graded base variable flows through transp's base position fine"
+        );
+    }
+
+    /// Erasure genuinely SURVIVES the type line: a grade-0 variable used ONLY in the (0-fragment)
+    /// family/type-line of a `transp` stays erased. `λ (A :^0 U0). λ (x :^ω A). transp (i. A) ⊥ x`
+    /// — here `A` appears only in the family (type formation) and is never charged, so its `0`
+    /// binder check `0 ≥ 0` passes even though a Kan op mentions it. (This is the "erasure survives
+    /// transp" obligation from spec §10.3, confirmed positively.)
+    #[test]
+    fn transp_family_use_keeps_grade0_var_erased() {
+        // (A :^0 U0) → (x :^ω A) → A, body transports x along the constant line `i. A`.
+        let ty = Term::Pi(
+            Grade::Zero,
+            Box::new(u(0)),
+            Box::new(Term::Pi(
+                Grade::Omega,
+                Box::new(Term::Var(0)),
+                Box::new(Term::Var(1)),
+            )),
+        );
+        let body = Term::Lam(Box::new(Term::Lam(Box::new(Term::Transp {
+            family: Box::new(Term::Var(1)), // A — used only in the type line (0-fragment)
+            cofib: Cofib::Bot,
+            base: Box::new(Term::Var(0)),
+        }))));
+        assert!(
+            check_top(body, ty).is_ok(),
+            "a grade-0 type-line variable stays erased across transp (erasure survives the Kan op)"
+        );
+    }
+
+    /// `hcomp` sums the demand of its *base* AND its *tube* (each carries σ): a linear (`1`) variable
+    /// used in BOTH positions is demanded `1 + 1 = ω`, and `ω ≤ 1` is false ⟹ `GradeViolation`. This
+    /// pins the multiplicity behavior of a Kan op with a face system: it is ordinary additive usage,
+    /// no special interval magic.
+    #[test]
+    fn hcomp_base_and_tube_sum_demand_linear_rejected() {
+        // (A :^0 U0) → (x :^1 A) → A, body: hcomp A ⊥ (i. x) x  — x in both tube and base.
+        let ty = Term::Pi(
+            Grade::Zero,
+            Box::new(u(0)),
+            Box::new(Term::Pi(
+                Grade::One,
+                Box::new(Term::Var(0)),
+                Box::new(Term::Var(1)),
+            )),
+        );
+        let body = Term::Lam(Box::new(Term::Lam(Box::new(Term::HComp {
+            ty: Box::new(Term::Var(1)), // carrier A (0-fragment)
+            cofib: Cofib::Bot,
+            tube: Box::new(Term::Var(0)), // x in the tube (under a dim binder; term index unchanged)
+            base: Box::new(Term::Var(0)), // x in the base
+        }))));
+        match check_top(body, ty) {
+            Err(TypeError::GradeViolation(_)) => {}
+            other => panic!(
+                "hcomp base+tube each demand x, summing to ω on a linear x ⟹ GradeViolation, got {other:?}"
+            ),
+        }
+    }
+
+    /// The accept twin: with `x :^ω A`, the same `hcomp A ⊥ (i. x) x` checks (ω absorbs the double
+    /// demand). Confirms the rejection above is the additive grade arithmetic discriminating.
+    #[test]
+    fn hcomp_base_and_tube_omega_var_accepted() {
+        let ty = Term::Pi(
+            Grade::Zero,
+            Box::new(u(0)),
+            Box::new(Term::Pi(
+                Grade::Omega,
+                Box::new(Term::Var(0)),
+                Box::new(Term::Var(1)),
+            )),
+        );
+        let body = Term::Lam(Box::new(Term::Lam(Box::new(Term::HComp {
+            ty: Box::new(Term::Var(1)),
+            cofib: Cofib::Bot,
+            tube: Box::new(Term::Var(0)),
+            base: Box::new(Term::Var(0)),
+        }))));
+        assert!(
+            check_top(body, ty).is_ok(),
+            "an ω-graded variable may be used in both hcomp's base and tube"
+        );
+    }
+
+    /// Interval/dimension binders are NOT graded: the kernel tracks only the dimension *count*,
+    /// never a per-dimension grade, so a dimension variable mentioned MULTIPLE times imposes no
+    /// multiplicity constraint and — crucially — never perturbs the *term* usage vector. We probe
+    /// this directly: in a context `[A :^0 U0, x :^0 A]` with one dimension `i` in scope, infer the
+    /// transport `transp (k. A) ⊥ x` (whose family mentions the in-scope dimension space) and read
+    /// back the usage vector. The dimension contributes nothing to grades; only the term `x`'s base
+    /// use is charged (grade σ). This positively pins the spec §10.3 "interval-var multiplicity"
+    /// open point: dimensions are ω-replicable / ungraded (sound — they erase at runtime).
+    #[test]
+    fn interval_var_carries_no_grade_in_usage_vector() {
+        let sig = std::rc::Rc::new(nat_sig());
+        let checker = Checker::new(sig);
+        // Context [A :^0 U0, x :^? A] with a dimension in scope. Build it the way `check` would.
+        let ctx = Context::empty()
+            .extend(u(0), Grade::Zero) // A  (index 1)
+            .extend(Term::Var(0), Grade::Omega) // x : A  (index 0)
+            .extend_dim(); // one interval variable `i`
+                           // transp (k. A) ⊥ x — `A` is Var(1), base `x` is Var(0).
+        let term = Term::Transp {
+            family: Box::new(Term::Var(1)),
+            cofib: Cofib::Bot,
+            base: Box::new(Term::Var(0)),
+        };
+        // Infer at ambient demand σ = 1 (one runtime use of the result).
+        let (_ty, _row, usage) = checker
+            .infer_g(&ctx, &term, Grade::One)
+            .expect("transp over an in-scope dimension infers");
+        // The usage vector has exactly the two TERM slots (A, x) — the dimension adds no slot. The
+        // base charges `x` at σ = 1; `A` (type line only) stays 0. No dimension multiplicity appears.
+        assert_eq!(
+            usage.len(),
+            2,
+            "usage vector tracks only the two term variables, not the dimension"
+        );
+        assert_eq!(usage.get(0), Grade::One, "base position charges x at σ");
+        assert_eq!(
+            usage.get(1),
+            Grade::Zero,
+            "type-line-only A stays erased across transp"
+        );
     }
 }

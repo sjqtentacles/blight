@@ -16,6 +16,10 @@ Anything in the tower can be wrong and at worst produce a wrong *answer*; it can
 `Proof`. Anything in the kernel is trusted forever. The roadmap below classifies each capability on
 exactly that axis.
 
+> The two unproven research corners (quantities × cubical; graded effects + normalization) now have
+> evidence-backed notes in [docs/metatheory.md](metatheory.md), reporting the kernel's *measured*
+> behavior at grade 0/1 rather than speculation.
+
 ## What the kernel already has (this surprises people)
 
 Reading [`crates/blight-kernel/src/term.rs`](../crates/blight-kernel/src/term.rs), the core term
@@ -23,8 +27,9 @@ grammar **already includes**:
 
 - **Algebraic effects + handlers** — `Op { effect, op, arg }`, `Handle { … }`, and the effectful
   computation type `EffTy(Row, A)` (spec §4). There is a working native runtime for them
-  ([`runtime/effects.c`](../crates/blight-codegen/runtime/effects.c)): deep handlers, a CPS
-  continuation, an effect trampoline. See [`examples/effects_demo.bl`](../examples/effects_demo.bl).
+  ([`runtime/effects.c`](../crates/blight-codegen/runtime/effects.c)): **full CPS deep handlers with
+  multi-shot delimited continuations** (not merely tail-resumptive), via an effect trampoline. See
+  [`examples/effects_demo.bl`](../examples/effects_demo.bl).
 - **Partiality** — `Delay A`, `now`, `later` (spec §4.5), driven by the `bl_force` trampoline in
   bounded C stack (the 1,000,000-deep test).
 - **Inductives, dependent types, a cubical layer, graded (quantitative) binders.**
@@ -78,9 +83,12 @@ The design:
    calling `bl_print_string` and `read` by reading stdin, re-installing itself (deep handler).
 4. `build_binary` installs the top-level `Console` handler in the authored `main`.
 
-Why the **re-checker declines** (rather than rejects) effectful programs: the independent re-checker
-covers the pure fragment; an effectful `main` is *outside its fragment*, so it offers no second
-opinion — that is sound (declining ≠ accepting a falsehood), and it is exactly what
+Why the **re-checker declines** (rather than rejects) a *cubical or foreign* `main`, while it now
+**checks effectful programs at the type level**: the independent re-checker re-derives the types of
+`perform`/`handle`/`! E A` (consulting the kernel's operation signatures) but does not track effect
+rows or continuation grades — so an effectful program is a genuine second opinion at the type level
+(**Checked**), and only the truly out-of-fragment forms (cubical Kan ops, `foreign` postulates,
+higher-order motives) are **Declined**. Declining ≠ accepting a falsehood, which is exactly what
 `effects_demo.bl` documents. The headline: **I/O is a library + a runtime handler, not a kernel
 feature.**
 

@@ -19,6 +19,13 @@ pub struct Context {
     /// Number of dimension (interval) variables in scope. Dimensions are not graded and have no
     /// type, so we only track their count to manage their de Bruijn space (spec §2.6).
     dims: usize,
+    /// Per-branch *value overrides* for dependent pattern-match refinement (spec §2.7, kernel item
+    /// 1b): a list of `(de-Bruijn-level, value-term)` pairs that specialize an ambient variable to a
+    /// concrete value within a refined match branch (e.g. the scrutinee index `n ↦ Succ m` in the
+    /// `vcons` branch of `vec-map`). The evaluation environment built by the checker consults these
+    /// so the motive/conclusion reflect the branch's solved index equations. Empty in the ordinary
+    /// (non-refining) path, so behavior is unchanged everywhere else.
+    overrides: Vec<(usize, Term)>,
 }
 
 impl Context {
@@ -27,6 +34,7 @@ impl Context {
         Context {
             entries: Vec::new(),
             dims: 0,
+            overrides: Vec::new(),
         }
     }
 
@@ -39,6 +47,7 @@ impl Context {
         Context {
             entries,
             dims: self.dims,
+            overrides: self.overrides.clone(),
         }
     }
 
@@ -47,12 +56,37 @@ impl Context {
         Context {
             entries: self.entries.clone(),
             dims: self.dims + 1,
+            overrides: self.overrides.clone(),
         }
     }
 
     /// Number of dimension variables in scope.
     pub fn dim_len(&self) -> usize {
         self.dims
+    }
+
+    /// The per-branch value overrides (de-Bruijn-level → value-term) for dependent-match refinement.
+    pub fn overrides(&self) -> &[(usize, Term)] {
+        &self.overrides
+    }
+
+    /// Add (or replace) value overrides for dependent-match refinement, returning a new context.
+    /// Existing overrides at the same level are replaced; others are kept. Used by the eliminator's
+    /// refinement to specialize ambient scrutinee-index variables within a branch.
+    pub fn with_overrides(&self, extra: &[(usize, Term)]) -> Self {
+        let mut overrides = self.overrides.clone();
+        for (lvl, t) in extra {
+            if let Some(slot) = overrides.iter_mut().find(|(l, _)| l == lvl) {
+                slot.1 = t.clone();
+            } else {
+                overrides.push((*lvl, t.clone()));
+            }
+        }
+        Context {
+            entries: self.entries.clone(),
+            dims: self.dims,
+            overrides,
+        }
     }
 
     /// Look up the entry at de Bruijn index `i`.
@@ -82,6 +116,7 @@ impl Context {
                 })
                 .collect(),
             dims: self.dims,
+            overrides: self.overrides.clone(),
         }
     }
 
@@ -106,6 +141,7 @@ impl Context {
                 })
                 .collect(),
             dims: self.dims,
+            overrides: self.overrides.clone(),
         }
     }
 

@@ -266,6 +266,20 @@ impl Env {
         self.values.get(index)
     }
 
+    /// Replace the value bound at de Bruijn *level* `lvl` (0 = outermost) with `v`. The internal
+    /// store is innermost-first (de Bruijn-index order), so level `lvl` lives at index
+    /// `len - 1 - lvl`. Used to apply a per-branch index specialization during dependent
+    /// pattern-match refinement (see the kernel's `infer_elim` refinement path). Out-of-range
+    /// levels are a no-op.
+    pub fn set_level(&self, lvl: usize, v: Value) -> Env {
+        let mut e = self.clone();
+        let n = e.values.len();
+        if lvl < n {
+            e.values[n - 1 - lvl] = v;
+        }
+        e
+    }
+
     pub fn len(&self) -> usize {
         self.values.len()
     }
