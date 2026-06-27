@@ -1,0 +1,28 @@
+; functor.bl — an ML-style functor beyond `redblacktree.bl`.
+;
+; A *signature* is a record type (a Sigma), a *module* is a value of it, and a *functor* is an
+; ordinary function between module records. `std/order` gives us the `ORD` signature
+; (`Sigma (a : Type0). a -> a -> Bool`) and `Nat-Ord` (the Nat module). Here we define our own
+; functor `Eql : (E : ORD) -> EQ E` that derives an *equality-style* module — a record packaging the
+; carrier with a "both ways" comparison `(le x y) && (le y x)` built from the input order. Applying
+; it to `Nat-Ord` yields a Nat equality module, all re-checked through the spore. Load-only:
+; exercised by `cargo test -p blight-repl --test examples`.
+
+(load "std/order.bl")
+
+; The functor's result signature: a carrier paired with a Bool-valued binary relation.
+;   EQ E := Sigma (t : Type0). (t -> t -> Bool)
+(define EQ (Pi ((E ORD)) (Type 1))
+  (lam (E)
+    (Sigma ((t (Type 0)))
+      (Pi ((x t) (y t)) Bool))))
+
+; functor Eql : (E : ORD) -> EQ E. The derived relation is antisymmetric closure of the order:
+; `eq x y = (le x y) && (le y x)`, where `le = snd E` is the module's comparison.
+(define Eql (Pi ((E ORD)) (EQ E))
+  (lam (E)
+    (pair (fst E)
+      (lam (x y) (and ((snd E) x y) ((snd E) y x))))))
+
+; Apply the functor to the Nat module: a Nat equality module typechecks.
+(the (EQ Nat-Ord) (Eql Nat-Ord))

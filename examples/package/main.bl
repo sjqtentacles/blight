@@ -1,0 +1,9 @@
+; demo/main.bl — the entry module of the `demo` spores package.
+;
+; Unlike `(load …)` (which re-splices its target every time), `(import "pkg/mod")` resolves a module
+; through the `spore.toml` manifest and splices it exactly once — re-importing is a no-op, and import
+; cycles are detected and reported. Here we import `std/nat` from the `std` dependency and use it.
+
+(import "std/nat")
+
+(define main Nat (plus (Succ Zero) (Succ (Succ Zero))))

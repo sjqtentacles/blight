@@ -1,0 +1,18 @@
+; sum_nat.bl — sum of 1..10 = 55 in the unary `Nat` tower (its OWN golden = 55, a small n so the
+; unary arithmetic stays tractable). The result is `Succ^55 Zero` and every `plus` is O(value); the
+; gap versus sum_int.bl / C / Rust at n = 1000 is what the benchmark game illustrates.
+;
+;   cargo run -p blight-repl --features llvm -- build bench/games/sum/sum_nat.bl -o sumn && ./sumn  # => 55
+
+(load "std/nat.bl")
+
+; sum-go i acc : structural on the unary index `i`, accumulating `i + (i-1) + ... + 1` into `acc`.
+(define-rec sum-go (Pi ((i Nat) (acc Nat)) Nat)
+  (lam (i acc) (match i
+    [(Zero) acc]
+    [(Succ k) (sum-go k (plus (Succ k) acc))])))
+
+(define ten Nat
+  (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+
+(define main Nat (sum-go ten Zero))

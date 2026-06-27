@@ -1,0 +1,19 @@
+; list_sum.bl — sum a list of naturals with a right fold.
+;
+; `std/list`'s `foldr` collapses `[1,2,3]` with `plus` and a `Zero` seed, giving `6`. Buildable:
+;
+;   cargo run -p blight-repl --features llvm -- build examples/list_sum.bl -o list_sum
+;   ./list_sum      # prints 6
+
+(load "std/list.bl")
+
+(define one   Nat (Succ Zero))
+(define two   Nat (Succ (Succ Zero)))
+(define three Nat (Succ (Succ (Succ Zero))))
+
+; [1, 2, 3] : List Nat
+(define sample (List Nat)
+  (cons one (cons two (cons three nil))))
+
+; sum = foldr plus 0 [1,2,3] = 1 + (2 + (3 + 0)) = 6.
+(define main Nat (foldr Nat Nat plus Zero sample))

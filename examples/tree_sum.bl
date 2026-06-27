@@ -1,0 +1,26 @@
+; tree_sum.bl — sum the node values of a binary `Tree Nat` by structural recursion.
+;
+; Builds a small tree with `tree-insert` (from std/tree) over the `Nat` order, then folds it. The
+; inserted values are 3, 1, 2, so the sum is 6.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/tree_sum.bl -o tree_sum && ./tree_sum  # => 6
+
+(load "std/tree.bl")
+
+; Sum a `Tree Nat` (structural recursion on the sub-trees).
+(deftotal tree-sum (Pi ((tr (Tree Nat))) Nat)
+  (lam (tr) (match tr
+    [(leaf) Zero]
+    [(node l x r) (plus (tree-sum l) (plus x (tree-sum r)))])))
+
+(define one   Nat (Succ Zero))
+(define two   Nat (Succ (Succ Zero)))
+(define three Nat (Succ (Succ (Succ Zero))))
+
+; Insert 3, 1, 2 into an empty Nat-ordered tree.
+(define built (Tree Nat)
+  (tree-insert Nat nat-le two
+    (tree-insert Nat nat-le one
+      (tree-insert Nat nat-le three (leaf)))))
+
+(define main Nat (tree-sum built))

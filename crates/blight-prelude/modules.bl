@@ -1,0 +1,6 @@
+; modules.bl — compatibility shim (spec §6, §8). The ML-style signatures/modules/functors that used
+; to live here now reside in the std tree: `std/tree.bl` provides `ORD`, `Nat-Ord`, `Tree`,
+; `TreeSig`, `tree-if`, `tree-insert`, `RedBlackTree`, and `NatTree` (and transitively `std/order`,
+; `std/nat`, `std/bool`). This shim preserves the historical `(load "modules.bl")` entry point.
+
+(load "std/tree.bl")

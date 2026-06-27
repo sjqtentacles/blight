@@ -1,0 +1,21 @@
+; std/prelude.bl — the standard library aggregator.
+;
+; UNTRUSTED tower code. Loading is splicing, and `(instance …)` registration is *not* idempotent
+; (re-registering the same `(class, head)` is an overlapping-instance error), so the aggregator must
+; load each module's source exactly once. `std/tree` transitively loads `std/order` → `std/nat` +
+; `std/bool`, and `std/list` adds the list functions on top of `std/nat`; together they cover the
+; whole std surface with no duplicated `(load …)` of any instance-bearing module.
+;
+; (The M6 `(import …)` form makes this dedup automatic; until a module is converted to imports, the
+; aggregator encodes the dependency DAG by hand.)
+
+(load "std/tree.bl")
+(load "std/list.bl")
+; Dependency-free additions (no `(load …)`, no instances), safe to splice directly.
+(load "std/maybe.bl")
+(load "std/either.bl")
+(load "std/function.bl")
+(load "std/pair.bl")
+; `std/ordering` loads std/nat (already spliced via std/tree → std/order → std/nat), which only
+; redeclares the instance-free `Nat`/`Bool` modules — no overlapping `(instance …)`.
+(load "std/ordering.bl")

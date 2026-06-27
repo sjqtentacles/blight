@@ -1,0 +1,26 @@
+; fib_nat.bl — fib(10) in the unary `Nat` tower (its OWN golden = 55, smaller n than the native-Int
+; version so the unary arithmetic stays tractable). This is the deliberately-slow comparison point:
+; the result is built as `Succ^55 Zero` and every `plus` is O(value), so big n is intractable here —
+; that gap versus fib_int.bl/C/Rust is exactly what the benchmark game illustrates.
+;
+;   cargo run -p blight-repl --features llvm -- build bench/games/fib/fib_nat.bl -o fibn && ./fibn  # => 55
+
+(load "std/nat.bl")
+(load "std/pair.bl")
+
+(deftotal fib-step (Pi ((p (Pair Nat Nat))) (Pair Nat Nat))
+  (lam (p) (match p
+    [(mk-pair a b) (mk-pair b (plus a b))])))
+
+(define-rec fibpair (Pi ((n Nat)) (Pair Nat Nat))
+  (lam (n) (match n
+    [(Zero) (mk-pair Zero (Succ Zero))]
+    [(Succ k) (fib-step (fibpair k))])))
+
+(define fib (Pi ((n Nat)) Nat)
+  (lam (n) (pair-fst Nat Nat (fibpair n))))
+
+(define ten Nat
+  (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+
+(define main Nat (fib ten))

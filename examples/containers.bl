@@ -1,0 +1,29 @@
+; containers.bl — the new standard containers: `Maybe`, `Either`, and the indexed `Vec`.
+;
+; Showcases the lifted parameter/index cap (spec §6, §8 stdlib): `Either a b` is a two-parameter
+; sum and `Vec a n` is a length-indexed family. `main` builds a short vector and reads its length
+; back as a `Nat`, so the program is buildable end-to-end:
+;
+;   cargo run -p blight-repl --features llvm -- build examples/containers.bl -o containers
+;   ./containers
+;
+; (Run with `--recheck` to have the independent re-checker re-verify everything before emit.)
+
+(load "std/nat.bl")
+(load "std/maybe.bl")
+(load "std/either.bl")
+(load "std/vec.bl")
+
+; A two-element vector of `Nat`s: [1, 2] : Vec Nat 2.
+(define one Nat (Succ Zero))
+(define two Nat (Succ (Succ Zero)))
+
+(define sample (Vec Nat two)
+  (vcons one one (vcons Zero two (vnil))))
+
+; Recover its length as a plain `Nat` (this is what `main` returns: 2).
+(define main Nat (vec-length Nat two sample))
+
+; A `Maybe`/`Either` smoke test: pull a default out of `nothing`, and fold an `Either`.
+(define defaulted Nat (from-maybe Nat one (nothing)))
+(define folded Nat (either Nat Nat Nat (lam (x) x) (lam (y) (Succ y)) (right Zero)))

@@ -82,10 +82,13 @@ fn check_program(src: &str) -> Result<blight_kernel::Proof, String> {
     for form in &forms {
         let decl = parse_decl(form).map_err(|e| format!("parse_decl: {e:?}"))?;
         match &decl {
-            Decl::DefData { .. } => {
-                env.declare(&decl, None).map_err(|e| format!("declare: {e:?}"))?;
+            Decl::DefData { .. } | Decl::DefEffect { .. } | Decl::Foreign { .. } => {
+                env.declare(&decl, None)
+                    .map_err(|e| format!("declare: {e:?}"))?;
             }
-            Decl::Define { name, .. } | Decl::DefineRec { name, .. } => {
+            Decl::Define { name, .. }
+            | Decl::DefineRec { name, .. }
+            | Decl::DefTotal { name, .. } => {
                 let ty_surface = declared_type(name)?;
                 let ty_core =
                     elaborate(&env, &ty_surface).map_err(|e| format!("elab type: {e:?}"))?;

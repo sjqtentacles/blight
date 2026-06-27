@@ -1,0 +1,51 @@
+; spore_meta.bl — small metatheorems about the in-Blight core model (spec §8.2 Stage 4, §9 M6).
+;
+; UNTRUSTED. These are "Blight proving properties of Blight's own kernel model": each goal is stated
+; over the `spore.bl` datatypes (BTerm/BCtx), proved by a tactic *script*, and the resulting term is
+; re-checked through the kernel door (LCF — a buggy tactic can only fail, never mint a false proof).
+; Requires `spore.bl` loaded first.
+
+; ---- Metatheorem 1: conv reflexivity --------------------------------------------------------
+; The model's conversion relation (definitional equality, here the cubical `Path`) is *reflexive*
+; on every modeled core term: `Π (t : BTerm). t ≡ t`. This is the base structural property the
+; kernel's `conv` relies on; we discharge it by the cubical reflexivity tactic.
+(define-by bconv-refl
+  (Pi ((t BTerm)) (Path BTerm t t))
+  (intro t refl))
+
+; ---- Metatheorem 2: a substitution-shaped lemma (context right-unit) ------------------------
+; Concatenating a context with the empty context on the right is the identity:
+;   Π (g : BCtx). (bctx-append g BNil) ≡ g
+; Since `bctx-append` recurses on its first argument, the left-unit holds definitionally but the
+; right-unit is a genuine induction — the same shape as the substitution/weakening lemmas the kernel
+; needs (e.g. `shift 0 = id`). We prove it by structural induction on `g`, closing the `BNil` case
+; by reflexivity and the `BSnoc` case by congruence under `(λ r. BSnoc r ty)` over the IH (the
+; congruence head is ascribed `BCtx → BCtx` so the kernel can check the applied wrapper).
+(define-by bctx-append-nil
+  (Pi ((g BCtx)) (Path BCtx (bctx-append g BNil) g))
+  (intro g
+    (induction g
+      [(BNil) refl]
+      [(BSnoc rest ty)
+        (cong (the (Pi ((r BCtx)) BCtx) (lam (r) (BSnoc r ty))) (exact rest#ih))])))
+
+; ---- Metatheorem 3: bctx-len is a homomorphism over append -----------------------------------
+; Concatenation adds context lengths:
+;   Π (g h : BCtx). (bctx-len (bctx-append g h)) ≡ (plus (bctx-len g) (bctx-len h))
+; Both `bctx-append` and `plus` recurse on their first argument, so the `BNil` case holds
+; definitionally (`bctx-len (append BNil h) = bctx-len h = plus Zero (bctx-len h)`); the `BSnoc`
+; case is a genuine induction: `Succ (bctx-len (append rest h))` must equal
+; `plus (Succ (bctx-len rest)) (bctx-len h) ≡ Succ (plus (bctx-len rest) (bctx-len h))`, which is
+; `cong Succ` over the IH. This is the length analogue of the substitution composition lemmas the
+; kernel relies on, and exercises a metatheorem with a *second* universally-quantified context `h`.
+; (`h` is introduced *before* the induction variable `g` so `g` stays the innermost binder the
+; motive abstracts over — `h` rides along as a stable outer hypothesis.)
+(define-by bctx-len-append
+  (Pi ((h BCtx) (g BCtx))
+      (Path Nat (bctx-len (bctx-append g h)) (plus (bctx-len g) (bctx-len h))))
+  (intro h
+    (intro g
+      (induction g
+        [(BNil) refl]
+        [(BSnoc rest ty)
+          (cong (the (Pi ((r Nat)) Nat) (lam (r) (Succ r))) (exact rest#ih))]))))

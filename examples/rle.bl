@@ -1,0 +1,47 @@
+; rle.bl — run-length encoding of a `List Nat` into a `List (Pair Nat Nat)` of (value, count).
+;
+; `rle` recurses *structurally* on the input spine: each step computes `(rle rest)` — a recursive
+; call on the immediate sub-term `rest` — and then merges the head element `x` into that already-
+; encoded tail with the non-recursive helper `rle-cons` (so the recursion stays a single peel, in
+; the kernel's structural fragment; see docs/roadmap.md). `rle-cons` bumps the leading run's count if
+; its value matches `x`, otherwise opens a fresh `(x, 1)` run.
+;
+; Encoding `[7,7,7,1,1]` gives `[(7,3),(1,2)]`. `main : Nat` reads back the *count of the first run*
+; (3), so the program builds and prints a concrete numeral.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/rle.bl -o rle && ./rle  # => 3
+
+(load "std/list.bl")
+(load "std/order.bl")
+(load "std/pair.bl")
+
+; Prepend `x` to an already-encoded run list. If the leading run has value `x`, increment its count;
+; otherwise start a new `(x, 1)` run. Non-recursive — it only inspects the (at most one) leading run.
+(deftotal rle-cons (Pi ((x Nat) (runs (List (Pair Nat Nat)))) (List (Pair Nat Nat)))
+  (lam (x runs) (match runs
+    [(nil) (cons (mk-pair x (Succ Zero)) nil)]
+    [(cons p rest) (match p
+       [(mk-pair v n) (match (nat-eq x v)
+          [(true)  (cons (mk-pair v (Succ n)) rest)]   ; extend the leading run
+          [(false) (cons (mk-pair x (Succ Zero)) (cons (mk-pair v n) rest))])])])))  ; new run
+
+; Run-length encode: structural recursion on the spine, merging each head into the encoded tail.
+(deftotal rle (Pi ((xs (List Nat))) (List (Pair Nat Nat)))
+  (lam (xs) (match xs
+    [(nil) nil]
+    [(cons x rest) (rle-cons x (rle rest))])))
+
+; The count of the first run (0 if empty).
+(deftotal first-run-count (Pi ((runs (List (Pair Nat Nat)))) Nat)
+  (lam (runs) (match runs
+    [(nil) Zero]
+    [(cons p rest) (pair-snd Nat Nat p)])))
+
+(define seven Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero))))))))
+(define one   Nat (Succ Zero))
+
+; [7, 7, 7, 1, 1]
+(define input (List Nat)
+  (cons seven (cons seven (cons seven (cons one (cons one nil))))))
+
+(define main Nat (first-run-count (rle input)))

@@ -1,0 +1,17 @@
+; region_scratch.bl — a region scope showcasing arena allocation (spec §3.5).
+;
+; `(region r body)` binds a linear region capability `r : Rgn`; the backend escape analysis routes
+; the body's non-escaping scratch allocations into a bump-pointer arena reclaimed in O(1) at scope
+; exit — bypassing the GC. Here the scratch is the intermediate `Nat`s `plus` builds; the result
+; `2` escapes (so it stays on the GC heap). Buildable:
+;
+;   cargo run -p blight-repl --features llvm -- build examples/region_scratch.bl -o region_scratch
+;   ./region_scratch      # prints 2
+
+(load "std/nat.bl")
+(load "regions.bl")
+
+(define one Nat (Succ Zero))
+
+; The whole `plus`-computation runs inside the region; its scratch is arena-allocated.
+(define main Nat (region r (plus one one)))

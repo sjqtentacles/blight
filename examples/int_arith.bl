@@ -1,0 +1,13 @@
+; int_arith.bl — native machine integers (spec §7.6 / M11).
+;
+; `Int` is a *primitive* kernel type: literals `(int N)` are unboxed 64-bit machine integers and the
+; primitives `int+ int- int* int/ int= int<` reduce *definitionally* (the kernel computes `2 + 3 ≡ 5`
+; during type-checking, and the backend lowers each to a single hardware instruction on `BL_INT`).
+; This is the deliberate Int/Float trusted-primitive growth of the kernel: unlike the unary `Nat`
+; tower, arithmetic here is O(1), so a product that would be astronomically large in unary prints
+; instantly.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/int_arith.bl -o ints
+;   ./ints              # => 10000000000
+
+(define main Int (int* (int 100000) (int 100000)))

@@ -1,0 +1,41 @@
+; list_sort.bl — insertion sort over a `List Nat`, then read back the smallest element (the head of
+; the sorted list). Sorting [3, 1, 2] gives [1, 2, 3], whose head is 1.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/list_sort.bl -o sort && ./sort  # => 1
+
+(load "std/list.bl")
+(load "std/order.bl")
+
+; Non-recursive (List Nat) selector so `insert`'s recursive call sits directly in the match body.
+(deftotal list-nat-if (Pi ((t (List Nat)) (e (List Nat)) (b Bool)) (List Nat))
+  (lam (t e b) (match b [(true) t] [(false) e])))
+
+; Insert `x` into an already-sorted list, keeping it sorted (structural recursion on the spine).
+(deftotal insert (Pi ((x Nat) (xs (List Nat))) (List Nat))
+  (lam (x xs) (match xs
+    [(nil) (cons x nil)]
+    [(cons y rest)
+      (list-nat-if
+        (cons x (cons y rest))          ; x <= y: x goes in front
+        (cons y (insert x rest))        ; x > y: keep y, recurse
+        (nat-le x y))])))
+
+; Insertion sort: fold `insert` over the list.
+(deftotal isort (Pi ((xs (List Nat))) (List Nat))
+  (lam (xs) (match xs
+    [(nil) nil]
+    [(cons x rest) (insert x (isort rest))])))
+
+; `head-or 0` of a list.
+(deftotal head-or (Pi ((d Nat) (xs (List Nat))) Nat)
+  (lam (d xs) (match xs
+    [(nil) d]
+    [(cons x rest) x])))
+
+(define one   Nat (Succ Zero))
+(define two   Nat (Succ (Succ Zero)))
+(define three Nat (Succ (Succ (Succ Zero))))
+
+(define input (List Nat) (cons three (cons one (cons two nil))))
+
+(define main Nat (head-or Zero (isort input)))

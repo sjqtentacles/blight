@@ -1,2 +1,13 @@
 /target
 Cargo.lock
+
+# Benchmark outputs (regenerable via bench/game.sh and bench/run.sh)
+/bench/game-results.json
+/bench/game-*.json
+/bench/games/**/*.json
+/bench/*-results.json
+
+# Compiled example/probe binaries and build artifacts
+*.o
+*.ll
+*.dSYM/

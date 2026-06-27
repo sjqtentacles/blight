@@ -1,0 +1,16 @@
+; plus_zero_proof.bl — proving a theorem by tactics, re-checked by the kernel.
+;
+; `plus-zero : Π (n : Nat). Path Nat (plus n Zero) n` is the right-unit law for addition. It is NOT
+; definitional (`plus` recurses on its first argument, so `plus n Zero` is stuck on a variable `n`),
+; so it needs a genuine induction. The tactic script does structural induction on `n`:
+;
+;   • case Zero    : goal reduces to `Path Nat Zero Zero`            ⇒ refl
+;   • case (Succ k): goal reduces to `Path Nat (Succ (plus k Zero)) (Succ k)`,
+;                    with IH `k#ih : Path Nat (plus k Zero) k`       ⇒ cong Succ k#ih
+;
+; Tactics only PROPOSE a term; the spore re-checks it (LCF), so a buggy script can fail but never
+; mint a false proof. `tactics.bl` declares the tactic substrate and loads `std/nat`; the proof
+; itself lives in `plus_zero_tac.bl`.
+
+(load "tactics.bl")
+(load "plus_zero_tac.bl")

@@ -1,0 +1,17 @@
+; factorial_nat.bl — 5! = 120 in the unary `Nat` tower (its OWN golden = 120, a small n so the unary
+; `mult` stays tractable). The product is built as `Succ^120 Zero` and `mult` is O(a·b); pushing n up
+; to the native-Int version's 20 would mean a 2.4-quintillion-deep unary value — exactly the blow-up
+; the benchmark game contrasts against factorial_int.bl / C / Rust.
+;
+;   cargo run -p blight-repl --features llvm -- build bench/games/factorial/factorial_nat.bl -o facn && ./facn  # => 120
+
+(load "std/nat.bl")
+
+(deftotal fact (Pi ((n Nat)) Nat)
+  (lam (n) (match n
+    [(Zero) (Succ Zero)]
+    [(Succ k) (mult (Succ k) (fact k))])))
+
+(define five Nat (Succ (Succ (Succ (Succ (Succ Zero))))))
+
+(define main Nat (fact five))

@@ -1,0 +1,18 @@
+; redblacktree.bl — an ML-style functor applied to a module (the M3 headline).
+;
+; A *signature* is a record type (a Sigma), a *module* is a value of it, and a *functor* is an
+; ordinary function between module records. `std/tree` defines `ORD` (a comparison signature),
+; `Nat-Ord` (the Nat module), and `RedBlackTree : (E : ORD) -> TreeSig E`. Applying the functor to
+; `Nat-Ord` yields `NatTree`, a tree API specialized to `Nat` — all checked through the spore.
+
+(load "std/tree.bl")
+
+; The functor applied to the Nat module is already defined in std/tree as `NatTree`. We re-derive it
+; here to show the application explicitly, and confirm it inhabits the functor's result signature.
+(the (TreeSig Nat-Ord) (RedBlackTree Nat-Ord))
+
+; Build a concrete tree by ordered insertion using the Nat module's carrier and comparison.
+; `tree-insert A cmp x tr` inserts `x` into `tr` under `cmp`.
+(the (Tree Nat)
+  (tree-insert Nat nat-le (Succ Zero)
+    (tree-insert Nat nat-le (Succ (Succ Zero)) leaf)))

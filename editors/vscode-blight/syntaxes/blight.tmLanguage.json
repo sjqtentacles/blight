@@ -1,0 +1,98 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Blight",
+  "scopeName": "source.blight",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string" },
+    { "include": "#definition" },
+    { "include": "#special-form" },
+    { "include": "#tactic" },
+    { "include": "#type-former" },
+    { "include": "#effect-row" },
+    { "include": "#grade" },
+    { "include": "#constructor" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.semicolon.blight",
+      "begin": ";",
+      "end": "$"
+    },
+    "string": {
+      "name": "string.quoted.double.blight",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.blight",
+          "match": "\\\\[\\\\\"nt]"
+        }
+      ]
+    },
+    "definition": {
+      "patterns": [
+        {
+          "comment": "Type-level definers: name is a type/entity.",
+          "match": "(\\()\\s*(defdata|class|instance|signature|module|functor|trait|impl|effect)\\b\\s*(\\(?)\\s*([A-Za-z][^\\s()\\[\\]{};]*)?",
+          "captures": {
+            "1": { "name": "punctuation.section.parens.begin.blight" },
+            "2": { "name": "storage.type.blight" },
+            "4": { "name": "entity.name.type.blight" }
+          }
+        },
+        {
+          "comment": "Value-level definers: name is a function/binding.",
+          "match": "(\\()\\s*(define-rec|define-by|define|deftotal)\\b\\s*([A-Za-z][^\\s()\\[\\]{};]*)?",
+          "captures": {
+            "1": { "name": "punctuation.section.parens.begin.blight" },
+            "2": { "name": "storage.type.blight" },
+            "3": { "name": "entity.name.function.blight" }
+          }
+        }
+      ]
+    },
+    "special-form": {
+      "comment": "Special forms recognized only in head position (after an opening paren).",
+      "match": "(?<=\\(|\\[)\\s*(lam|match|the|let|region|pair|fst|snd|app|handle|plam)\\b",
+      "captures": {
+        "1": { "name": "keyword.control.blight" }
+      }
+    },
+    "tactic": {
+      "comment": "Tactic vocabulary used inside define-by scripts.",
+      "match": "(?<=\\(|\\[|\\s)(refl|assumption|exact|intro|induction|cong|then|orelse|repeat)\\b",
+      "captures": {
+        "1": { "name": "keyword.other.tactic.blight" }
+      }
+    },
+    "type-former": {
+      "comment": "Core type formers and built-in types.",
+      "match": "\\b(Pi|Sigma|Path|PathP|Type|Rgn|String|Unit|IO|Handle|Ordering|Level)\\b",
+      "name": "support.type.blight"
+    },
+    "effect-row": {
+      "comment": "Effect-row marker '!' as in (! IO Unit).",
+      "match": "(?<=\\(|\\s)!(?=\\s)",
+      "name": "keyword.operator.effect.blight"
+    },
+    "grade": {
+      "comment": "Resource grades 0 / 1 / omega in binder position (before a closing bracket/brace).",
+      "match": "(?<=\\s)(0|1|\u03c9)(?=\\s*[)\\]}])",
+      "name": "constant.numeric.grade.blight"
+    },
+    "constructor": {
+      "comment": "Capitalized identifiers not matched above read as constructors/types.",
+      "match": "\\b[A-Z][A-Za-z0-9_'?!*+/<>=.-]*\\b",
+      "name": "entity.name.type.constructor.blight"
+    },
+    "punctuation": {
+      "patterns": [
+        { "match": "[()]", "name": "punctuation.section.parens.blight" },
+        { "match": "[\\[\\]]", "name": "punctuation.section.brackets.blight" },
+        { "match": "[{}]", "name": "punctuation.section.braces.implicit.blight" }
+      ]
+    }
+  }
+}

@@ -1,0 +1,47 @@
+; ackermann.bl — general (non-structural) recursion and the `force` eliminator (spec §4.5).
+;
+; The Ackermann function is the textbook example of a *total* function that is not
+; primitive-recursive: its recursion descends lexicographically on the pair (m, n), not
+; structurally on a single argument. Blight's structural-descent checker (`deftotal`) therefore
+; *rejects* the natural Ackermann definition — the recursive call `(ack (Succ m1) n1)` is on
+; `Succ m1`, which is not a sub-term of `m`. That is the honest boundary: the kernel only certifies
+; the totality it can *see*.
+;
+; `define-rec` is Blight's *general* recursion. A non-structural recursive call compiles to a
+; `later`-guarded step of the Capretta delay monad (spec §4.5): the result becomes a *partial* value
+; `Delay Nat` that the runtime steps through the bounded-stack delay trampoline. Totality is never
+; asserted for a definition the kernel cannot see terminates, so soundness is preserved.
+;
+; `force` is the delay eliminator: it drives a `Delay A` to its underlying `A`. Typing `force`
+; contributes the built-in `Partial` label to the effect row, so a *proof* may not use it — but a
+; runnable program may. `main` forces the delayed result so the program prints the final numeral
+; instead of the delay constructor.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/ackermann.bl -o ack && ./ack
+;
+; `parity` below is genuinely non-structural in the same way Ackermann is: the recursive call
+; `(parity k)` is on `k = n - 2`, which is *not* the immediate sub-term `m` of `Succ m`. `deftotal`
+; rejects that descent (try changing `define-rec` to `deftotal`); `define-rec` guards the call under
+; `later`, yielding a `Delay Nat`. (The classic *nested* Ackermann call `(ack m1 (ack (Succ m1) n1))`
+; passes one recursive delay as the argument of another curried self-call; driving that needs
+; delay-monad *bind*, a tracked roadmap item, so this example keeps each self call's arguments flat.)
+
+(load "std/nat.bl")
+
+; parity n = 0 if n is even, 1 if n is odd — computed by stepping down two at a time. The call
+; `(parity k)` recurses on `k`, the sub-term of `Succ (Succ k)` reached by peeling *two* `Succ`s, so
+; it is outside the kernel's one-step structural fragment: `deftotal` rejects it, `define-rec`
+; guards it under `later`, and the result is `Delay Nat`. The return type is therefore ascribed
+; `Delay Nat`; base cases use `now` to inject a value into the delay monad.
+(define-rec parity (Pi ((n Nat)) (Delay Nat))
+  (lam (n) (match n
+    [(Zero) (now Zero)]
+    [(Succ m) (match m
+       [(Zero) (now (Succ Zero))]
+       [(Succ k) (parity k)])])))
+
+(define seven Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero))))))))
+
+; `parity seven` steps 7 → 5 → 3 → 1 and converges to `1` (seven is odd). `force` drives the delay
+; trampoline to that final numeral so the program prints `1` rather than the delay constructor.
+(define main Nat (force (parity seven)))

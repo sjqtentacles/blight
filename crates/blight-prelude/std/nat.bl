@@ -1,0 +1,72 @@
+; std/nat.bl — the natural numbers and their basic arithmetic (spec §6, §8 stdlib).
+;
+; UNTRUSTED tower code: every function bottoms out in the kernel via the spore re-check. `Nat` is
+; the unary Peano encoding the kernel's structural-recursion checker understands directly, so the
+; total functions here all pass `deftotal`'s structural-descent analysis. The parity predicates
+; return `Bool`, so we splice std/bool (it declares no instances, so re-splicing it elsewhere is
+; harmless).
+
+(load "std/bool.bl")
+
+(defdata Nat () (Zero) (Succ (n Nat)))
+
+; Addition by structural recursion on the first argument.
+(define-rec plus (Pi ((a Nat) (b Nat)) Nat)
+  (lam (a b) (match a
+    [(Zero) b]
+    [(Succ n) (Succ (plus n b))])))
+
+; Multiplication by structural recursion on the first argument.
+(define-rec mult (Pi ((a Nat) (b Nat)) Nat)
+  (lam (a b) (match a
+    [(Zero) Zero]
+    [(Succ n) (plus b (mult n b))])))
+
+; Truncated predecessor (`pred Zero = Zero`).
+(deftotal pred (Pi ((n Nat)) Nat)
+  (lam (n) (match n
+    [(Zero) Zero]
+    [(Succ k) k])))
+
+; Truncated subtraction (`sub a b = max 0 (a - b)`): structural recursion on the first argument `a`.
+; Each step peels a `Succ` off both `a` and `b`; the recursive call `(sub n k)` descends on `n`, the
+; *immediate* sub-term of `a` (the kernel's single-step induction hypothesis), while the inner
+; `match b` merely selects — it is on a different value and introduces no recursion of its own. The
+; curried `(lam (a) … (lam (b) …))` shape keeps `b` bound *inside* each arm so the motive abstracts
+; only `a`; see docs/roadmap.md for the precise supported-recursion fragment (recursing on a
+; *non-immediate* sub-term, e.g. peeling two `Succ`s before the call, is outside it).
+(deftotal sub (Pi ((a Nat) (b Nat)) Nat)
+  (lam (a) (match a
+    [(Zero) (lam (b) Zero)]
+    [(Succ n) (lam (b) (match b
+       [(Zero) (Succ n)]
+       [(Succ k) (sub n k)]))])))
+
+; Minimum: structural recursion on the first argument.
+(deftotal min (Pi ((a Nat) (b Nat)) Nat)
+  (lam (a) (match a
+    [(Zero) (lam (b) Zero)]
+    [(Succ n) (lam (b) (match b
+       [(Zero) Zero]
+       [(Succ k) (Succ (min n k))]))])))
+
+; Maximum: structural recursion on the first argument.
+(deftotal max (Pi ((a Nat) (b Nat)) Nat)
+  (lam (a) (match a
+    [(Zero) (lam (b) b)]
+    [(Succ n) (lam (b) (match b
+       [(Zero) (Succ n)]
+       [(Succ k) (Succ (max n k))]))])))
+
+; Parity. Single structural recursion on the immediate sub-term, flipping the result with `not`.
+; (`even (Succ k) = not (even k)`.) This keeps each call on the kernel's one-step induction
+; hypothesis, the fragment the native backend compiles correctly; see docs/roadmap.md.
+(deftotal even (Pi ((n Nat)) Bool)
+  (lam (n) (match n
+    [(Zero) true]
+    [(Succ k) (not (even k))])))
+
+(deftotal odd (Pi ((n Nat)) Bool)
+  (lam (n) (match n
+    [(Zero) false]
+    [(Succ k) (not (odd k))])))

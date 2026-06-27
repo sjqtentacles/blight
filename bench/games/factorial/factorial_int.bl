@@ -1,0 +1,20 @@
+; factorial_int.bl — 20! = 2432902008176640000 over native O(1) machine `Int`, matching the
+; C/Rust/OCaml/Haskell/Python reference impls (shared golden = 2432902008176640000, the largest
+; factorial that still fits in signed 64-bit).
+;
+; `Int` has no eliminator, so a structural `Nat` fuel counter drives the loop while the index `i`
+; and product `acc` are unboxed `Int`s: each step folds `acc * i` (O(1) `int*`) and bumps `i`.
+;
+;   cargo run -p blight-repl --features llvm -- build bench/games/factorial/factorial_int.bl -o fac && ./fac  # => 2432902008176640000
+
+(load "std/nat.bl")
+
+(deftotal fact-go (Pi ((fuel Nat) (i Int) (acc Int)) Int)
+  (lam (fuel i acc) (match fuel
+    [(Zero) acc]
+    [(Succ f) (fact-go f (int+ i (int 1)) (int* acc i))])))
+
+(define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+(define twenty Nat (mult (Succ (Succ Zero)) ten))
+
+(define main Int (fact-go twenty (int 1) (int 1)))

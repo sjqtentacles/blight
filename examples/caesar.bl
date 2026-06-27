@@ -1,0 +1,10 @@
+; caesar.bl — shift every codepoint of a string by a fixed amount and print the result.
+;
+; `string-shift k s` adds `k` to each codepoint (no modular wrap — codepoints are unbounded `Nat`s).
+; Shifting `"abc"` by 1 gives `"bcd"`. `main : String`, so it prints as text.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/caesar.bl -o caesar && ./caesar  # => bcd
+
+(load "std/string.bl")
+
+(define main String (string-shift (Succ Zero) "abc"))

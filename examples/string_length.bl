@@ -1,0 +1,10 @@
+; string_length.bl — count the codepoints in a string literal.
+;
+; The reader desugars `"hello"` into a `String` cons-list of `Nat` codepoints; `string-length`
+; folds the spine to a `Nat`. Result: 5.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/string_length.bl -o sl && ./sl  # => 5
+
+(load "std/string.bl")
+
+(define main Nat (string-length "hello"))

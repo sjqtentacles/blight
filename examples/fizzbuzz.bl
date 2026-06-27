@@ -1,0 +1,62 @@
+; fizzbuzz.bl — the classic FizzBuzz classification for a single number, as a `Nat` code.
+;
+; Blight has no easy Nat→String rendering, so instead of printing the words we print a *classification
+; code* for the number 15:
+;   0 = plain number   1 = Fizz (divisible by 3)   2 = Buzz (divisible by 5)   3 = FizzBuzz (both)
+; 15 is divisible by both 3 and 5, so this prints 3 (FizzBuzz).
+;
+; Divisibility is decided by a remainder computed with fuel-bounded subtraction: `nat-mod n d` is not
+; structurally recursive in `n` (each step subtracts `d`, not one `Succ`), so we recurse on a `Nat`
+; `fuel` upper bound (`n` itself always suffices), the structural fragment the kernel handles (see
+; docs/roadmap.md). Helpers keep each recursive function to a single `match`.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/fizzbuzz.bl -o fizzbuzz && ./fizzbuzz  # => 3
+
+(load "std/nat.bl")
+(load "std/order.bl")
+
+; `is-zero n` — `true` iff `n` is `Zero`.
+(deftotal is-zero (Pi ((n Nat)) Bool)
+  (lam (n) (match n
+    [(Zero) true]
+    [(Succ k) false])))
+
+; One reduction step: while `d <= n`, subtract `d`; otherwise `n` is the remainder. Factored so
+; `mod-go` keeps a single `match` (on `fuel`).
+(deftotal mod-reduce (Pi ((cont (Pi ((n Nat)) Nat)) (n Nat) (d Nat)) Nat)
+  (lam (cont n d) (match (nat-le d n)
+    [(true)  (cont (sub n d))]   ; d <= n: subtract once more
+    [(false) n])))               ; n < d: remainder found
+
+; `mod-go fuel n d` = n mod d (for d > 0). Structural recursion on `fuel`.
+(deftotal mod-go (Pi ((fuel Nat) (n Nat) (d Nat)) Nat)
+  (lam (fuel n d) (match fuel
+    [(Zero) n]
+    [(Succ f) (mod-reduce (lam (n2) (mod-go f n2 d)) n d)])))
+
+; `nat-mod n d` — n mod d, fuelled by `n` (n subtractions of any positive d always suffice).
+(deftotal nat-mod (Pi ((n Nat) (d Nat)) Nat)
+  (lam (n d) (mod-go n n d)))
+
+; `divides d n` — `true` iff d evenly divides n (remainder is zero).
+(deftotal divides (Pi ((d Nat) (n Nat)) Bool)
+  (lam (d n) (is-zero (nat-mod n d))))
+
+(define three Nat (Succ (Succ (Succ Zero))))
+(define five  Nat (Succ (Succ (Succ (Succ (Succ Zero))))))
+
+; FizzBuzz code: bit 0 = divisible by 3 (Fizz), bit 1 = divisible by 5 (Buzz). So
+;   neither → 0, Fizz only → 1, Buzz only → 2, both → 3.
+(deftotal fizzbuzz-code (Pi ((n Nat)) Nat)
+  (lam (n) (match (divides three n)
+    [(true)  (match (divides five n)
+       [(true)  three]    ; Fizz + Buzz
+       [(false) (Succ Zero)])]  ; Fizz only
+    [(false) (match (divides five n)
+       [(true)  (Succ (Succ Zero))]   ; Buzz only
+       [(false) Zero])])))            ; plain number
+
+; 15 = 3 * 5.
+(define fifteen Nat (mult three five))
+
+(define main Nat (fizzbuzz-code fifteen))

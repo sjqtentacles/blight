@@ -1,0 +1,23 @@
+; effects_demo.bl — algebraic effects and a handler (spec §4.2/§4.3).
+;
+; `(effect State (get Unit Nat) (put Nat Unit))` declares a `State` effect with two operations.
+; `(perform get tt)` reads the state; a `(handle …)` interprets the operations, discharging the
+; effect so the handled computation is *pure* and re-checkable at `Nat`.
+;
+; Effects sit OUTSIDE the independent re-checker's fragment, so `blight build --recheck` and the
+; recheck test corpus *decline* (not reject) this program — that is expected and sound (declining
+; just means "no second opinion offered"). The seed kernel still fully type-checks it, which is why
+; this is a load-only example (exercised by `cargo test -p blight-repl --test examples`).
+
+(load "std/nat.bl")
+
+(defdata Unit () (tt))
+
+(effect State (get Unit Nat) (put Nat Unit))
+
+; Read the state with `get`; the handler below interprets `get` to hand back `Zero`, and `return x`
+; yields the read value. So the whole handled computation is the pure `Nat` `Zero`.
+(the Nat
+  (handle (perform get tt)
+    (return x x)
+    (get x k (k Zero))))

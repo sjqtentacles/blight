@@ -1,0 +1,58 @@
+; zip_vec.bl — zip two EQUALLY-LONG vectors into a vector of pairs.
+;
+; `zip-vec`'s type is `(Vec A n) -> (Vec B n) -> Vec (Pair A B) n`: both inputs and the output
+; share the SAME length index `n`. The type forbids zipping mismatched lengths, and guarantees the
+; result has that exact length. This is a "dependent indexed motive" (the result `Vec (Pair A B) n`
+; mentions the index `n`) AND it stresses index *refinement*: matching the first vector forces the
+; second vector's length, so its impossible arm (`vnil` against a `Succ m` length) is unreachable.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/zip_vec.bl -o zip_vec --recheck
+;   ./zip_vec      # prints 2
+;
+; The `--recheck` flag is the point. Blight's trusted core ("the spore") accepts it, and then a
+; *separately implemented* re-checker (the `blight-recheck` crate) independently re-verifies every
+; judgement before any code is emitted. Matching `v` while the second vector `w` is still in scope
+; makes the elaborator lift `w` into a *higher-order* eliminator motive (the result is a function
+; `Vec B n -> Vec (Pair A B) n`). The independent re-checker cannot faithfully reconstruct that
+; motive, so it *honestly DECLINES* this one judgement (an explicit "outside my fragment" refusal)
+; rather than raising a false soundness alarm — every other judgement, including the dependent
+; indexed motives of `safe-tail`/`vec-map`, is fully re-verified.
+
+(load "std/nat.bl")
+(load "std/pair.bl")
+(load "std/vec.bl")
+
+; zip-vec : (Vec A n) -> (Vec B n) -> (Vec (Pair A B) n). Match the first vector; the index then
+; forces the second vector's length in each arm. `vnil` ⇒ both are empty ⇒ `vnil`. `vcons` ⇒ the
+; second vector also has length `Succ m`, so its head/tail are obtained by matching it (its empty
+; arm is unreachable), and we pair the heads and recurse on the tails.
+(define-rec zip-vec
+  (Pi ((A (Type 0)) (B (Type 0)) (n Nat) (v (Vec A n)) (w (Vec B n))) (Vec (Pair A B) n))
+  (lam (A B n v w)
+    (match v
+      [(vnil) vnil]
+      [(vcons m x xs)
+        (match w
+          [(vnil) vnil]
+          [(vcons k y ys)
+            (vcons m (mk-pair x y) (zip-vec A B m xs ys))])])))
+
+(define one Nat (Succ Zero))
+(define two Nat (Succ (Succ Zero)))
+
+; sample-a : Vec Nat 2 = [0, 0]; sample-b : Vec Nat 2 = [1, 1]. (vcons takes tail-length, element,
+; tail; lengths count down 1, 0.)
+(define sample-a (Vec Nat two)
+  (vcons one Zero
+    (vcons Zero Zero
+      (vnil))))
+(define sample-b (Vec Nat two)
+  (vcons one one
+    (vcons Zero one
+      (vnil))))
+
+; main = 2. Zipping two length-2 vectors yields a length-2 vector of pairs; `vec-length` reads the
+; preserved length back as a concrete Nat. The shared-length guarantee lives in zip-vec's TYPE and
+; is re-verified by the independent re-checker under `--recheck`.
+(define main Nat
+  (vec-length (Pair Nat Nat) two (zip-vec Nat Nat two sample-a sample-b)))

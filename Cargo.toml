@@ -2,7 +2,9 @@
 resolver = "2"
 members = [
     "crates/blight-kernel",
+    "crates/blight-recheck",
     "crates/blight-elab",
+    "crates/blight-codegen",
     "crates/blight-repl",
 ]
 

@@ -1,0 +1,22 @@
+; sum_int.bl — sum of 1..1000 = 500500 over native O(1) machine `Int`, matching the
+; C/Rust/OCaml/Haskell/Python reference impls (shared golden = 500500).
+;
+; `Int` has no eliminator, so a structural `Nat` fuel counter drives the loop while the running
+; index `i` and accumulator `acc` are unboxed `Int`s advanced with the O(1) `int+` primitive:
+; each step folds `acc + i` and bumps `i`. The fuel `1000` is built with `mult` (a Nat *value*, not a
+; thousand-deep source literal).
+;
+;   cargo run -p blight-repl --features llvm -- build bench/games/sum/sum_int.bl -o sum && ./sum  # => 500500
+
+(load "std/nat.bl")
+
+(deftotal sum-go (Pi ((fuel Nat) (i Int) (acc Int)) Int)
+  (lam (fuel i acc) (match fuel
+    [(Zero) acc]
+    [(Succ f) (sum-go f (int+ i (int 1)) (int+ acc i))])))
+
+(define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+(define hundred Nat (mult ten ten))
+(define thousand Nat (mult hundred ten))
+
+(define main Int (sum-go thousand (int 1) (int 0)))

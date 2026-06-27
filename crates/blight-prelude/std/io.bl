@@ -1,0 +1,27 @@
+; std/io.bl — the `Console` effect: line-based text input/output (spec §4, §8 stdlib).
+;
+; UNTRUSTED tower code. `Console` is an ordinary user effect (like `State` in the examples): it
+; declares two operations,
+;   * `print : String -> Unit`  — write a string to stdout (no implicit newline);
+;   * `read  : Unit   -> String` — read one line from stdin (newline stripped).
+; A program `main : (! Console A)` performs these and is run by the native top-level Console handler
+; the build driver installs (it folds the bubbling effect tree against real stdio). Effects are
+; outside the independent re-checker's fragment, so such programs are *declined* (not rejected) by
+; `--recheck`; the seed kernel type-checks them and they compile and run natively.
+
+(load "std/string.bl")
+
+; `Unit` is used as the parameter/result of the ops. Reuse the canonical one if already loaded; the
+; examples declare their own, so we declare it here too (re-declaring an identical inductive is fine).
+(defdata Unit () (tt))
+
+(effect Console
+  (print String Unit)
+  (read  Unit   String))
+
+; Convenience wrappers so user code reads naturally.
+(deftotal put-str (Pi ((s String)) (! Console Unit))
+  (lam (s) (perform print s)))
+
+(deftotal get-line (Pi ((u Unit)) (! Console String))
+  (lam (u) (perform read tt)))

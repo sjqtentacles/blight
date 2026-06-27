@@ -1,0 +1,18 @@
+; foreign_answer.bl — the FFI escape hatch (spec §7.6).
+;
+; `(foreign name <type> "c_symbol")` postulates an opaque value of the ascribed type, backed by an
+; external C function `BlValue c_symbol(void)`. The kernel *trusts* it (this is the one deliberate
+; hole that grows the trusted computing base), so the independent re-checker DECLINES to certify any
+; program that mentions it — `blight build --recheck` reports it as honestly unverifiable.
+;
+; Here `bl_foreign_answer` (runtime/prelude_rt.c) hands back the unary `Nat` 42. `main` just returns
+; it, so the program prints 42 — produced entirely by trusted C, threaded back into checked code.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/foreign_answer.bl -o answer
+;   ./answer            # => 42
+
+(load "std/nat.bl")
+
+(foreign answer Nat "bl_foreign_answer")
+
+(define main Nat answer)

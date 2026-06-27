@@ -1,0 +1,60 @@
+; collatz_steps.bl — number of Collatz steps to reach 1, fuel-bounded so the recursion is
+; structural on the `fuel` `Nat` (the Collatz map is not structural in `n`). For n = 6:
+;   6 → 3 → 10 → 5 → 16 → 8 → 4 → 2 → 1   (8 steps)
+;
+; Every recursive function recurses only on the *immediate* constructor sub-term of its scrutinee
+; (the kernel's single-step structural induction); helper functions handle anything that needs to
+; look deeper. See docs/roadmap.md for the precise supported-recursion fragment.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/collatz_steps.bl -o collatz && ./collatz  # => 8
+
+(load "std/nat.bl")
+
+; Halve a Nat (floor). Structural recursion on the *immediate* sub-term of `n` (so it stays inside
+; the kernel's single-step induction), carrying a `keep` toggle that drops every other element. The
+; inner `match` is on `Bool` (no recursive fields), so it introduces no induction hypothesis of its
+; own — only the outer `match k` recursion is threaded. See docs/roadmap.md for why recursing on a
+; *non-immediate* sub-term (e.g. peeling two `Succ`s before recursing) is outside the fragment.
+(deftotal half-go (Pi ((n Nat) (keep Bool)) Nat)
+  (lam (n keep) (match n
+    [(Zero) Zero]
+    [(Succ k) (match keep
+       [(true)  (half-go k false)]
+       [(false) (Succ (half-go k true))])])))
+
+(deftotal half (Pi ((n Nat)) Nat)
+  (lam (n) (half-go n true)))
+
+; The next Collatz value of `n`: n/2 if even, else 3n+1. Both candidates are finite Nats, so picking
+; with a flat `match` on parity is safe under call-by-value.
+(deftotal collatz-next (Pi ((n Nat)) Nat)
+  (lam (n) (match (even n)
+    [(true)  (half n)]
+    [(false) (Succ (mult (Succ (Succ (Succ Zero))) n))])))
+
+; `collatz-go fuel n acc`: structural on `fuel`. Delegates the `n` inspection to `collatz-on-n` so
+; this function keeps a single `match`.
+;
+; Inspect the predecessor `k` of `n`: if `k = 0` then `n = 1` and we're done; otherwise step.
+(deftotal collatz-on-n1
+  (Pi ((cont (Pi ((n Nat) (acc Nat)) Nat)) (k Nat) (n Nat) (acc Nat)) Nat)
+  (lam (cont k n acc) (match k
+    [(Zero) acc]                                  ; n = 1 ⇒ done, return the step count
+    [(Succ m) (cont (collatz-next n) (Succ acc))])))
+
+(deftotal collatz-on-n (Pi ((cont (Pi ((n Nat) (acc Nat)) Nat)) (n Nat) (acc Nat)) Nat)
+  (lam (cont n acc) (match n
+    [(Zero) acc]                                  ; n = 0 (shouldn't happen) ⇒ stop
+    [(Succ k) (collatz-on-n1 cont k n acc)])))
+
+(deftotal collatz (Pi ((fuel Nat) (n Nat) (acc Nat)) Nat)
+  (lam (fuel n acc) (match fuel
+    [(Zero) acc]
+    [(Succ f) (collatz-on-n (lam (n2 acc2) (collatz f n2 acc2)) n acc)])))
+
+(define six Nat (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))
+; Fuel: 64 steps is plenty for n = 6.
+(define eight Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))
+(define fuel Nat (mult eight eight))
+
+(define main Nat (collatz fuel six Zero))

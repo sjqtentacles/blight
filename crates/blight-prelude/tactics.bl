@@ -1,0 +1,27 @@
+; tactics.bl — the in-Blight tactic vocabulary (spec §6.3, §8 Stage 2).
+;
+; Tactics are an *untrusted* proof-search layer: they only ever *propose* a proof term, which the
+; spore re-checks (LCF — a buggy tactic can at worst fail to produce a proof, never a false one).
+; The tactic *scripts* are written here in Blight under the `(define-by name T <tactic>)` form; the
+; irreducible host interpreter (crates/blight-elab/src/tactic.rs) turns a script + goal into a core
+; term and runs it through the kernel door `check-core`.
+;
+; The tactic language (all interpreted by the host against the reflected goal):
+;
+;   refl                         close `Path A x x` by `λ i. x` (definitional reflexivity).
+;   assumption                   close the goal with a matching hypothesis.
+;   (exact e)                    close the goal with the explicit term `e`.
+;   (intro x t)                  introduce a `Pi`-binder `x`, then run `t`.
+;   (induction n arm …)          eliminate `n` by structural recursion; one `[(Con f…) t]` per
+;                                  constructor. A recursive field `f` exposes its induction
+;                                  hypothesis as the hypothesis `f#ih`.
+;   (cong f t)                   congruence: from `t : Path A x y` conclude `Path B (f x) (f y)`
+;                                  via `λ i. f (p @ i)` (the cubical `rewrite`).
+;   (then t u) (orelse t u) (repeat t)
+;                                combinators (sequence, alternation, iteration).
+;
+; This file declares the substrate the tactic proofs build on. The proofs themselves live in
+; plus_zero_tac.bl (the §9 headline acceptance: `plus-zero` proved by tactics). `Nat` and `plus`
+; come from the std library.
+
+(load "std/nat.bl")

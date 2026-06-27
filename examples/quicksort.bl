@@ -1,0 +1,68 @@
+; quicksort.bl — quicksort over a `List Nat`, made structural with a `Nat` `fuel`.
+;
+; Quicksort is not structurally recursive: it recurses on the *partitions* of the tail (the elements
+; `< pivot` and `>= pivot`), which are `filter`-ed sublists, not immediate sub-terms of the input.
+; That descent is outside `deftotal`'s one-step structural fragment (see docs/roadmap.md), so — like
+; gcd.bl, collatz_steps.bl, and mergesort.bl — we recurse on a `Nat` `fuel` upper bound (the input
+; length bounds the recursion depth) and keep the partitioning in non-recursive `filter` helpers.
+; This keeps the whole program inside the fragment the native backend compiles directly (no `Delay`),
+; so it is buildable.
+;
+; Sorting `[5,3,8,1,2,7]` gives `[1,2,3,5,7,8]`; `main : Nat` prints the head (the minimum), 1.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/quicksort.bl -o quicksort && ./quicksort  # => 1
+
+(load "std/list.bl")
+(load "std/order.bl")
+
+; Elements of `xs` strictly less than `p` (the `<` partition).
+(deftotal lesser (Pi ((p Nat) (xs (List Nat))) (List Nat))
+  (lam (p xs) (filter Nat (lam (x) (and (nat-le x p) (not (nat-eq x p)))) xs)))
+
+; Elements of `xs` greater than or equal to `p` (the `>=` partition).
+(deftotal greater-eq (Pi ((p Nat) (xs (List Nat))) (List Nat))
+  (lam (p xs) (filter Nat (lam (x) (not (nat-le x p))) xs)))
+
+; One quicksort step on a non-empty list `(cons p rest)`: sort each partition via `cont`, then
+; concatenate `sorted-lesser ++ [p] ++ sorted-greater`. Non-recursive itself.
+(deftotal qsort-step
+  (Pi ((cont (Pi ((xs (List Nat))) (List Nat))) (p Nat) (rest (List Nat))) (List Nat))
+  (lam (cont p rest)
+    (append Nat
+      (cont (lesser p rest))
+      (cons p (cont (greater-eq p rest))))))
+
+; Dispatch on the spine: the empty list is sorted; otherwise take a quicksort step.
+(deftotal qsort-on-xs
+  (Pi ((cont (Pi ((xs (List Nat))) (List Nat))) (xs (List Nat))) (List Nat))
+  (lam (cont xs) (match xs
+    [(nil) nil]
+    [(cons p rest) (qsort-step cont p rest)])))
+
+; `qsort-go fuel xs`: structural recursion on `fuel`.
+(deftotal qsort-go (Pi ((fuel Nat) (xs (List Nat))) (List Nat))
+  (lam (fuel xs) (match fuel
+    [(Zero) xs]
+    [(Succ f) (qsort-on-xs (lam (xs2) (qsort-go f xs2)) xs)])))
+
+; `qsort xs` with fuel = |xs| (each level removes the pivot, so length fuel is ample).
+(deftotal qsort (Pi ((xs (List Nat))) (List Nat))
+  (lam (xs) (qsort-go (length Nat xs) xs)))
+
+(deftotal head-or (Pi ((d Nat) (xs (List Nat))) Nat)
+  (lam (d xs) (match xs
+    [(nil) d]
+    [(cons x rest) x])))
+
+(define one   Nat (Succ Zero))
+(define two   Nat (Succ (Succ Zero)))
+(define three Nat (Succ (Succ (Succ Zero))))
+(define five  Nat (Succ (Succ (Succ (Succ (Succ Zero))))))
+(define seven Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero))))))))
+(define eight Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))
+
+; [5, 3, 8, 1, 2, 7]
+(define input (List Nat)
+  (cons five (cons three (cons eight (cons one (cons two (cons seven nil)))))))
+
+(define main Nat (head-or Zero (qsort input)))

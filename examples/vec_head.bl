@@ -1,0 +1,25 @@
+; vec_head.bl — a length-indexed vector beyond `containers.bl`.
+;
+; Builds a three-element `Vec Nat 3` and recovers its statically-tracked length as a `Nat`. The
+; index `3` is carried in the type and reflected back by `vec-length`. Buildable:
+;
+;   cargo run -p blight-repl --features llvm -- build examples/vec_head.bl -o vec_head
+;   ./vec_head      # prints 3
+
+(load "std/nat.bl")
+(load "std/vec.bl")
+
+(define one   Nat (Succ Zero))
+(define two   Nat (Succ (Succ Zero)))
+(define three Nat (Succ (Succ (Succ Zero))))
+
+; [a, b, c] : Vec Nat 3. `vcons` takes (tail-length, element, tail), so the tail lengths count
+; down 2, 1, 0 as the spine shrinks (matching `containers.bl`).
+(define sample (Vec Nat three)
+  (vcons two one
+    (vcons one two
+      (vcons Zero three
+        (vnil)))))
+
+; main = the length recovered from the index = 3.
+(define main Nat (vec-length Nat three sample))

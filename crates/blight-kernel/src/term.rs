@@ -152,6 +152,80 @@ pub enum Term {
     },
     /// `unglue` elimination.
     Unglue(Box<Term>),
+
+    // ---- effects and handlers (spec §4) ----
+    /// `perform op a` — invoke effect operation `op` of `effect` with argument `a` (spec §4.2).
+    /// Contributes the effect's label to the row at the operation's continuation-multiplicity
+    /// grade. Reduces to an `OpNode` under NbE (an effectful-neutral awaiting an enclosing
+    /// `Handle`).
+    Op {
+        effect: crate::row::EffName,
+        op: crate::signature::OpName,
+        arg: Box<Term>,
+    },
+    /// `handle body { return x. r ; (op x k. e)... }` (spec §4.3). The handler interprets each
+    /// listed operation, discharging that label from `body`'s row. Binders:
+    /// - `return_clause` binds the result value `x` (1 binder).
+    /// - each op clause binds the operation argument `x` then the continuation `k` (2 binders,
+    ///   `k` innermost = de Bruijn 0, `x` = de Bruijn 1), where `k : Bᵢ → C ! E`.
+    Handle {
+        body: Box<Term>,
+        return_clause: Box<Term>,
+        op_clauses: Vec<(crate::signature::OpName, Box<Term>)>,
+    },
+    /// `! E A` — the effectful computation type: an `A`-computation that may use the effects in
+    /// row `E` (spec §4.1). Pure `A` is `! ⟨⟩ A`.
+    EffTy(crate::row::Row, Box<Term>),
+
+    // ---- partiality (spec §4.5) ----
+    /// `Delay A` — the (intensional Capretta) delay type former: a possibly-non-terminating
+    /// computation of `A`. Divergence surfaces in this type.
+    Delay(Box<Term>),
+    /// `now a : Delay A` — an immediately-available value.
+    Now(Box<Term>),
+    /// `later d : Delay A` — a guarded delay step. NbE treats `Later` as a non-forced node so each
+    /// normalization step unfolds finitely.
+    Later(Box<Term>),
+    /// `force d : A` when `d : Delay A` — the delay eliminator (spec §4.5). `force (now a) ⇝ a`;
+    /// `force` over a `later`/neutral stays stuck (NbE keeps `Later` guarded). Typing `force`
+    /// contributes the built-in `Partial` label to the row, so a proof may not use it.
+    Force(Box<Term>),
+
+    // ---- foreign function interface (spec §7.6 — the explicit unsafe hatch) ----
+    /// `foreign "sym" : A` — an *opaque postulate* standing for an external C symbol `sym` of the
+    /// ascribed type `A`. This is the one deliberate hole in the otherwise-total core: the kernel
+    /// takes it on faith (it type-checks as a stuck constant of type `A`, never reduces, and carries
+    /// no body), so it GROWS the trusted computing base. The independent re-checker therefore
+    /// *declines* to certify any judgement that mentions a `Foreign` — a `foreign` import is trusted
+    /// code that cannot be re-verified. Codegen lowers it to a direct call to the C symbol.
+    Foreign { symbol: String, ty: Box<Term> },
+
+    // ---- primitive machine integers (M11 — int-codegen; TCB-growing, user-approved) ----
+    /// `Int` — the type of 64-bit signed machine integers (`i64`). A primitive kernel type:
+    /// `IntTy : Univ 0`. It is *not* an inductive `Data`; it is a built-in base type with native
+    /// arithmetic, so the kernel grows its trusted base to include `i64` semantics.
+    IntTy,
+    /// An integer literal `n : Int`, holding its `i64` value directly (not a unary `Nat`).
+    IntLit(i64),
+    /// A primitive arithmetic/comparison operation on two `Int` operands. Arithmetic ops
+    /// (`Add/Sub/Mul/Div`) have type `Int`; comparisons (`Eq/Lt`) also return `Int` (`1` = true,
+    /// `0` = false) — we deliberately return `Int` rather than the inductive `Bool` so the kernel's
+    /// Int fragment is self-contained (the typing rule needs no `Bool` signature in scope, which
+    /// keeps the TCB growth minimal and the kernel's own unit tests signature-free). A friendly
+    /// `Bool`-returning comparison can be built in untrusted stdlib on top of this.
+    IntPrim {
+        op: IntPrimOp,
+        lhs: Box<Term>,
+        rhs: Box<Term>,
+    },
+
+    // ---- erasure (spec §7.2) ----
+    /// A sentinel marking a sub-term that has been removed by the grade-`0` erasure pass. It has
+    /// no runtime content and must never appear in a term submitted to the kernel; it exists only
+    /// in the *output* of [`crate::erase::erase`] so that an erased argument position can be
+    /// represented before the surrounding binder/application is dropped. Reaching it at runtime is
+    /// a compiler bug.
+    Erased,
 }
 
 /// The name of an inductive (or higher inductive) type.
@@ -161,3 +235,16 @@ pub struct DataName(pub String);
 /// The name of a constructor.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConName(pub String);
+
+/// A primitive `Int` operation (M11). Arithmetic (`Add/Sub/Mul/Div`) returns `Int`; comparisons
+/// (`Eq/Lt`) return `Int` (`1`/`0`). Division (and `Sub` producing a negative, etc.) are total on
+/// `i64` with wrapping/`0`-on-div-by-zero semantics handled in `eval` (see [`crate::normalize`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IntPrimOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Eq,
+    Lt,
+}

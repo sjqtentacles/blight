@@ -1,0 +1,19 @@
+; plus_zero_tac.bl — the headline §9 M3 acceptance: prove `plus-zero` *by tactics*.
+;
+; `plus-zero : Π (n : Nat). Path Nat (plus n Zero) n`. We discharge it with structural induction on
+; `n` and the cubical reflexivity/congruence tactics — no hand-written core term. The host tactic
+; interpreter assembles the proof term and the spore re-checks it (LCF):
+;
+;   • case Zero    : goal `Path Nat (plus Zero Zero) Zero` ≡ `Path Nat Zero Zero`        ⇒ refl
+;   • case (Succ k): goal `Path Nat (plus (Succ k) Zero) (Succ k)`
+;                          ≡ `Path Nat (Succ (plus k Zero)) (Succ k)`
+;                    with IH `k#ih : Path Nat (plus k Zero) k`                            ⇒ cong Succ k#ih
+;
+; Requires `Nat` and `plus` in scope (load tactics.bl first).
+
+(define-by plus-zero
+  (Pi ((n Nat)) (Path Nat (plus n Zero) n))
+  (intro n
+    (induction n
+      [(Zero)   refl]
+      [(Succ k) (cong Succ (exact k#ih))])))

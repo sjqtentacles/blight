@@ -1,0 +1,34 @@
+; fib.bl — the Fibonacci sequence via a single structural recursion.
+;
+; The naive two-call recurrence needs the *pair* trick to stay a clean single structural recursion:
+; `fibpair n = (fib n, fib (n+1))`, built by recursion on `n` (each step shifts the window). Then
+; `fib n = fst (fibpair n)`. `fib 7 = 13` (the sequence is 0,1,1,2,3,5,8,13). Buildable:
+;
+;   cargo run -p blight-repl --features llvm -- build examples/fib.bl -o fib
+;   ./fib      # prints 13
+
+(load "std/nat.bl")
+(load "std/pair.bl")
+
+; The window step, factored so its scrutinee is a plain variable (keeps the eliminator motive in the
+; re-checker's supported fragment): from (a, b) produce the next window (b, a + b).
+(deftotal fib-step (Pi ((p (Pair Nat Nat))) (Pair Nat Nat))
+  (lam (p) (match p
+    [(mk-pair a b) (mk-pair b (plus a b))])))
+
+; fibpair n = (fib n, fib (n+1)).
+;   fibpair Zero     = (0, 1)
+;   fibpair (Succ k) = fib-step (fibpair k)
+(define-rec fibpair (Pi ((n Nat)) (Pair Nat Nat))
+  (lam (n) (match n
+    [(Zero) (mk-pair Zero (Succ Zero))]
+    [(Succ k) (fib-step (fibpair k))])))
+
+(define fib (Pi ((n Nat)) Nat)
+  (lam (n) (pair-fst Nat Nat (fibpair n))))
+
+; 7 = Succ^7 Zero.
+(define seven Nat
+  (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero))))))))
+
+(define main Nat (fib seven))

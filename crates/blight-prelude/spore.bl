@@ -1,0 +1,196 @@
+; spore.bl — the "spore that knows itself" (spec §8.2 Stage 4, §9 M6).
+;
+; UNTRUSTED metacircular model. This file models the kernel's *core term language* as ordinary
+; Blight data (`BTerm`), defines a few total functions over it (a size measure, a de Bruijn weakening
+; `bshift`, a single-variable substitution `bsubst`, and a well-scopedness predicate `bwellscoped`),
+; and states small structural facts about them. The host kernel then *checks this whole file is
+; well-typed* — i.e. Blight is used to describe a fragment of Blight's own core, and the trusted
+; kernel certifies the description type-checks. The companion file spore_meta.bl proves a couple of
+; metatheorems about this model by tactics.
+;
+; Scope & honesty (spec §10): the kernel caps inductives at ≤1 parameter / ≤1 index
+; (crates/blight-elab/src/elab.rs declare_data), so the model is *extrinsic* — a `BTerm` datatype
+; plus relations and functions over it, not an intrinsically-typed syntax. We model the nine core
+; formers the re-checker's fragment covers (Var/Univ/Pi/Lam/App and Sigma/Pair/Fst/Snd); the cubical
+; Kan table, effects/handlers, and partiality are out of this fragment by design (documented in
+; §Phase E of docs/implementation.md).
+;
+; KERNEL INDEX CAP — the first construct that hits it: an *intrinsically-typed* term model
+; `BTm : BCtx → BTerm → Type` (a well-typed-syntax representation indexed by its context and its
+; type) is the natural next step, but it requires an inductive family with **two indices** (the
+; context and the type). The kernel rejects this at declaration time (`declare_data`: "supports at
+; most one inductive index"), so it cannot be expressed directly. The extrinsic encoding here
+; (`BTerm` + `bwellscoped`/`bctx-*` as *relations and functions*, with the context/type carried as
+; ordinary value arguments rather than indices) is the standard work-around and stays strictly
+; within the ≤1/≤1 cap. Likewise a typed substitution lemma indexed by both source and target
+; contexts would need two indices; we instead state the untyped `bsubst`/`bshift` laws.
+
+; ---- de Bruijn naturals (indices and universe levels) ----------------------------------------
+(defdata Nat () (Zero) (Succ (n Nat)))
+
+(deftotal plus (Pi ((a Nat) (b Nat)) Nat)
+  (lam (a b) (match a
+    [(Zero) b]
+    [(Succ n) (Succ (plus n b))])))
+
+; Boolean equality on Nat — used to compare de Bruijn indices in substitution.
+(defdata Bool () (false) (true))
+
+(deftotal nat-eq (Pi ((a Nat) (b Nat)) Bool)
+  (lam (a) (match a
+    [(Zero) (lam (b) (match b [(Zero) true] [(Succ k) false]))]
+    [(Succ n) (lam (b) (match b [(Zero) false] [(Succ k) (nat-eq n k)]))])))
+
+; Strictly-less-than on Nat (for the shift cutoff): `nat-lt a b` is true iff a < b.
+(deftotal nat-lt (Pi ((a Nat) (b Nat)) Bool)
+  (lam (a) (match a
+    [(Zero) (lam (b) (match b [(Zero) false] [(Succ k) true]))]
+    [(Succ n) (lam (b) (match b [(Zero) false] [(Succ k) (nat-lt n k)]))])))
+
+; Boolean conjunction — used to fold well-scopedness checks over a term's subterms.
+(deftotal band (Pi ((a Bool) (b Bool)) Bool)
+  (lam (a b) (match a [(false) false] [(true) b])))
+
+; ---- the model of grades (binder annotations 0 / 1 / ω) --------------------------------------
+; The kernel `Grade` is a *binder annotation*, not a value/type, so the model defines its own
+; first-class copy `BGrade` (spec note at elab.rs parse_grade).
+(defdata BGrade () (G0) (G1) (Gw))
+
+; Semiring addition on grades (0 is the unit; ω absorbs): used by usage accounting.
+(deftotal bgrade-add (Pi ((p BGrade) (q BGrade)) BGrade)
+  (lam (p q) (match p
+    [(G0) q]
+    [(G1) (match q [(G0) (G1)] [(G1) (Gw)] [(Gw) (Gw)])]
+    [(Gw) (Gw)])))
+
+; Semiring multiplication on grades (0 absorbs; 1 is the unit).
+(deftotal bgrade-mul (Pi ((p BGrade) (q BGrade)) BGrade)
+  (lam (p q) (match p
+    [(G0) (G0)]
+    [(G1) q]
+    [(Gw) (match q [(G0) (G0)] [(G1) (Gw)] [(Gw) (Gw)])])))
+
+; ---- the model of core terms (extrinsic; de Bruijn) ------------------------------------------
+; BTerm models the kernel's `Term` core fragment. Children are packed as value fields, so BTerm has
+; zero inductive parameters and zero indices — comfortably within the ≤1/≤1 cap. Each constructor
+; mirrors a kernel `Term` variant the independent re-checker handles:
+;   BVar n         ↔ Term::Var(n)            de Bruijn variable
+;   BUniv l        ↔ Term::Univ(l)           universe at level l
+;   BPi g dom cod  ↔ Term::Pi(g, dom, cod)   dependent function type (binds 1 in cod)
+;   BLam b         ↔ Term::Lam(b)            lambda (binds 1 in b)
+;   BApp f a       ↔ Term::App(f, a)         application
+;   BSig dom cod   ↔ Term::Sigma(dom, cod)   dependent pair type (binds 1 in cod)
+;   BPair a b      ↔ Term::Pair(a, b)        pair introduction
+;   BFst p         ↔ Term::Fst(p)            first projection
+;   BSnd p         ↔ Term::Snd(p)            second projection
+(defdata BTerm ()
+  (BVar  (n Nat))
+  (BUniv (l Nat))
+  (BPi   (g BGrade) (dom BTerm) (cod BTerm))
+  (BLam  (b BTerm))
+  (BApp  (f BTerm) (a BTerm))
+  (BSig  (dom BTerm) (cod BTerm))
+  (BPair (a BTerm) (b BTerm))
+  (BFst  (p BTerm))
+  (BSnd  (p BTerm)))
+
+; A structural size measure: proves the model is genuinely recursive and usable as a termination
+; metric for the metatheorems in spore_meta.bl.
+(deftotal bsize (Pi ((t BTerm)) Nat)
+  (lam (t) (match t
+    [(BVar n)        (Succ Zero)]
+    [(BUniv l)       (Succ Zero)]
+    [(BPi g dom cod) (Succ (plus (bsize dom) (bsize cod)))]
+    [(BLam b)        (Succ (bsize b))]
+    [(BApp f a)      (Succ (plus (bsize f) (bsize a)))]
+    [(BSig dom cod)  (Succ (plus (bsize dom) (bsize cod)))]
+    [(BPair a b)     (Succ (plus (bsize a) (bsize b)))]
+    [(BFst p)        (Succ (bsize p))]
+    [(BSnd p)        (Succ (bsize p))])))
+
+; de Bruijn weakening: `bshift t` returns a function `λ d c. <t lifted>` that lifts every free
+; variable `≥ c` of `t` by `d`. Structuring it as recursion on the *term* (returning a function of
+; the shift amount `d` and cutoff `c`) keeps every recursive call structural — the cutoff varies
+; across binders, which a leading-argument structural recursion cannot express, but a curried result
+; can. This mirrors the kernel's `shift` (crates/blight-kernel/src/normalize.rs) on the core
+; fragment, modeled as a total Blight function so its laws become Blight-provable metatheorems.
+(deftotal bshift-var (Pi ((d Nat) (c Nat) (n Nat)) Nat)
+  (lam (d c n) (match (nat-lt n c)
+    [(true) n]
+    [(false) (plus n d)])))
+
+(deftotal bshift (Pi ((t BTerm)) (Pi ((d Nat) (c Nat)) BTerm))
+  (lam (t) (match t
+    [(BVar n)        (lam (d c) (BVar (bshift-var d c n)))]
+    [(BUniv l)       (lam (d c) (BUniv l))]
+    [(BPi g dom cod) (lam (d c) (BPi g ((bshift dom) d c) ((bshift cod) d (Succ c))))]
+    [(BLam b)        (lam (d c) (BLam ((bshift b) d (Succ c))))]
+    [(BApp f a)      (lam (d c) (BApp ((bshift f) d c) ((bshift a) d c)))]
+    [(BSig dom cod)  (lam (d c) (BSig ((bshift dom) d c) ((bshift cod) d (Succ c))))]
+    [(BPair a b)     (lam (d c) (BPair ((bshift a) d c) ((bshift b) d c)))]
+    [(BFst p)        (lam (d c) (BFst ((bshift p) d c)))]
+    [(BSnd p)        (lam (d c) (BSnd ((bshift p) d c)))])))
+
+; Single-variable substitution on variables: `bsubst-var j u n` replaces de Bruijn `n` by either the
+; replacement term `u` (when `n = j`), the same variable (when `n < j`), or the predecessor variable
+; (when `n > j`, since removing binder `j` lowers every outer index by one). Returns a `BTerm`.
+(deftotal bsubst-var (Pi ((j Nat) (u BTerm) (n Nat)) BTerm)
+  (lam (j u n) (match (nat-eq n j)
+    [(true) u]
+    [(false) (match (nat-lt n j)
+      [(true)  (BVar n)]
+      [(false) (match n
+        [(Zero)   (BVar Zero)]
+        [(Succ k) (BVar k)])])])))
+
+; de Bruijn single substitution: `bsubst t` returns `λ j u. t[u/j]`, substituting `u` for variable
+; `j` in `t`. Recursion is structural on the *term*, currying the cutoff `j` and replacement `u` so
+; the cutoff can grow (`Succ j`) and the replacement be weakened (`bshift u 1 0`) under each binder —
+; the same curried-result trick `bshift` uses. This is the model's analogue of the kernel's `subst0`
+; on the core fragment (crates/blight-kernel/src/normalize.rs), a total Blight function so its laws
+; become Blight-provable metatheorems.
+(deftotal bsubst (Pi ((t BTerm)) (Pi ((j Nat) (u BTerm)) BTerm))
+  (lam (t) (match t
+    [(BVar n)        (lam (j u) (bsubst-var j u n))]
+    [(BUniv l)       (lam (j u) (BUniv l))]
+    [(BPi g dom cod) (lam (j u) (BPi g ((bsubst dom) j u) ((bsubst cod) (Succ j) ((bshift u) (Succ Zero) Zero))))]
+    [(BLam b)        (lam (j u) (BLam ((bsubst b) (Succ j) ((bshift u) (Succ Zero) Zero))))]
+    [(BApp f a)      (lam (j u) (BApp ((bsubst f) j u) ((bsubst a) j u)))]
+    [(BSig dom cod)  (lam (j u) (BSig ((bsubst dom) j u) ((bsubst cod) (Succ j) ((bshift u) (Succ Zero) Zero))))]
+    [(BPair a b)     (lam (j u) (BPair ((bsubst a) j u) ((bsubst b) j u)))]
+    [(BFst p)        (lam (j u) (BFst ((bsubst p) j u)))]
+    [(BSnd p)        (lam (j u) (BSnd ((bsubst p) j u)))])))
+
+; Well-scopedness: `bwellscoped t` returns `λ n. <bool>` that is `true` iff every free variable of
+; `t` is `< n` (i.e. `t` is well-scoped in a context of length `n`). Structural recursion on the
+; term, currying the scope bound `n` so it can grow (`Succ n`) under each binder — the same shape as
+; `bshift`/`bsubst`. This models the kernel's implicit well-scopedness invariant on core terms.
+(deftotal bwellscoped (Pi ((t BTerm)) (Pi ((n Nat)) Bool))
+  (lam (t) (match t
+    [(BVar k)        (lam (n) (nat-lt k n))]
+    [(BUniv l)       (lam (n) true)]
+    [(BPi g dom cod) (lam (n) (band ((bwellscoped dom) n) ((bwellscoped cod) (Succ n))))]
+    [(BLam b)        (lam (n) ((bwellscoped b) (Succ n)))]
+    [(BApp f a)      (lam (n) (band ((bwellscoped f) n) ((bwellscoped a) n)))]
+    [(BSig dom cod)  (lam (n) (band ((bwellscoped dom) n) ((bwellscoped cod) (Succ n))))]
+    [(BPair a b)     (lam (n) (band ((bwellscoped a) n) ((bwellscoped b) n)))]
+    [(BFst p)        (lam (n) ((bwellscoped p) n))]
+    [(BSnd p)        (lam (n) ((bwellscoped p) n))])))
+
+; The model's typing-context as a snoc-list of types (each a BTerm). Single inductive, no params.
+(defdata BCtx ()
+  (BNil)
+  (BSnoc (rest BCtx) (ty BTerm)))
+
+(deftotal bctx-len (Pi ((g BCtx)) Nat)
+  (lam (g) (match g
+    [(BNil) Zero]
+    [(BSnoc rest ty) (Succ (bctx-len rest))])))
+
+; Context concatenation, recursive on the *first* context, so `bctx-append BNil h ≡ h` holds
+; definitionally while `bctx-append g BNil ≡ g` needs an induction (the right-unit metatheorem in
+; spore_meta.bl). This is the model's analogue of telescope concatenation used by substitution.
+(deftotal bctx-append (Pi ((g BCtx) (h BCtx)) BCtx)
+  (lam (g h) (match g
+    [(BNil) h]
+    [(BSnoc rest ty) (BSnoc (bctx-append rest h) ty)])))

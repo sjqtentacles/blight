@@ -1,0 +1,23 @@
+; factorial.bl — the factorial function by a single structural recursion on `n`.
+;
+; `fact 0 = 1` and `fact (Succ k) = (Succ k) * fact k`. The recursive call `(fact k)` descends on
+; `k`, the immediate sub-term of `n`, so this is in the kernel's structural-descent fragment and
+; passes `deftotal`. `fact 4 = 24` (1·2·3·4). Buildable:
+;
+;   cargo run -p blight-repl --features llvm -- build examples/factorial.bl -o factorial
+;   ./factorial      # prints 24
+
+(load "std/nat.bl")
+
+; fact n: multiply n down to 1.
+;   fact Zero     = 1
+;   fact (Succ k) = (Succ k) * fact k
+(deftotal fact (Pi ((n Nat)) Nat)
+  (lam (n) (match n
+    [(Zero) (Succ Zero)]
+    [(Succ k) (mult (Succ k) (fact k))])))
+
+; 4 = Succ^4 Zero.
+(define four Nat (Succ (Succ (Succ (Succ Zero)))))
+
+(define main Nat (fact four))

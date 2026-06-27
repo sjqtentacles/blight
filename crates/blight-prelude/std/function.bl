@@ -1,0 +1,24 @@
+; std/function.bl — basic function combinators (spec §6, §8 stdlib).
+;
+; UNTRUSTED tower code: dependency-free, non-recursive `define`s the kernel re-checks through the
+; spore. All four are polymorphic in their type arguments (taken as explicit `(Type 0)` params).
+
+; The identity function.
+(define id (Pi ((A (Type 0)) (x A)) A)
+  (lam (A x) x))
+
+; Forward composition: `compose A B C g f x = g (f x)`.
+(define compose
+  (Pi ((A (Type 0)) (B (Type 0)) (C (Type 0))
+       (g (Pi ((y B)) C)) (f (Pi ((x A)) B)) (x A)) C)
+  (lam (A B C g f x) (g (f x))))
+
+; The constant function: `const A B x y = x`.
+(define const (Pi ((A (Type 0)) (B (Type 0)) (x A) (y B)) A)
+  (lam (A B x y) x))
+
+; Argument flip: `flip A B C f y x = f x y`.
+(define flip
+  (Pi ((A (Type 0)) (B (Type 0)) (C (Type 0))
+       (f (Pi ((x A) (y B)) C)) (y B) (x A)) C)
+  (lam (A B C f y x) (f x y)))

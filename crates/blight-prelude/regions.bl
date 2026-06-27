@@ -1,0 +1,19 @@
+; regions.bl — the region capability type `Rgn` (spec §3.5). UNTRUSTED tower code.
+;
+; Spec §3.5: "a region is a scope with a grade-1 capability token … this is not new trusted
+; machinery — it is an interpretation of the spine." So `Rgn` is *not* a kernel primitive: it is an
+; ordinary opaque data type declared here, in untrusted prelude code, with a single nullary token
+; constructor. A *region capability* is then just a value of `Rgn` bound by a grade-1 (linear)
+; binder. The kernel's existing linear-binder rule (it rejects a body that demands a grade-1 binder
+; more than once) is exactly what scopes the capability's lifetime — no new typing rule is needed,
+; and the trusted base does not grow at all.
+;
+; The backend reads `(region r body)` (which the elaborator desugars to a grade-1 λ applied to a
+; fresh `rgn-tok`) and arena-allocates the non-escaping allocations inside the scope. Memory safety
+; (no dangling arena pointer) is the *untrusted* backend escape analysis's job, exactly where the
+; spec puts it; the linear token only documents and bounds the scope at the type level.
+
+; The opaque region-handle type, with one nullary token constructor. Keeping it nullary means the
+; only way to obtain an `Rgn` is the token the elaborator threads in — there is no field a body can
+; project out and smuggle past the region boundary.
+(defdata Rgn () (rgn-tok))

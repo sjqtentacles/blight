@@ -1,0 +1,19 @@
+; traits.bl — dictionary-passing traits from std/order.
+;
+; `Show a` is the dictionary type `a -> Nat`; `Ord a` is `a -> a -> Bool`. A constrained call like
+; `(show x)` leaves the `{d (Show A)}` slot implicit and the elaborator resolves it by instance
+; search, then the kernel re-checks the fully-applied term. `std/order` ships `Show`/`Ord` instances
+; for both `Nat` and `Bool`.
+;
+;   cargo run -p blight-repl    # then paste the forms below, or:
+;   (this file is exercised by `cargo test -p blight-repl --test examples`)
+
+(load "std/order.bl")
+
+; `show` resolves the `Show Nat` / `Show Bool` dictionaries.
+(the Nat (show (Succ (Succ Zero))))
+(the Nat (show true))
+
+; `cmp` resolves the `Ord Nat` / `Ord Bool` dictionaries.
+(the Bool (cmp (Succ Zero) (Succ Zero)))
+(the Bool (cmp false true))

@@ -1,0 +1,13 @@
+[package]
+name = "demo"
+version = "0.1.0"
+
+# `std` resolves to the prelude's std tree. A module id like `std/nat` maps to
+# `<this path>/nat.bl`, so the dependency root is the `std/` directory itself.
+[dependencies]
+std = { path = "../../crates/blight-prelude/std" }
+
+# This package's own entry-point modules (informational). `demo/main` resolves to `main.bl`
+# alongside this manifest.
+[lib]
+modules = ["demo/main"]

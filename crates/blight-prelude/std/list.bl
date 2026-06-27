@@ -1,0 +1,64 @@
+; std/list.bl — singly-linked lists parameterized by one element type (spec §6, §8 stdlib).
+;
+; UNTRUSTED tower code. `List` uses the kernel's single inductive parameter; the total functions
+; recurse structurally on the spine. Depends on std/nat for `length`.
+
+(load "std/nat.bl")
+
+(defdata List ((a (Type 0)))
+  (nil)
+  (cons (x a) (xs (List a))))
+
+; The spine length.
+(deftotal length (Pi ((A (Type 0)) (xs (List A))) Nat)
+  (lam (A xs) (match xs
+    [(nil) Zero]
+    [(cons x rest) (Succ (length A rest))])))
+
+; Append. The first list is the scrutinee; structural recursion on its spine. The second list and
+; the element type ride along verbatim in each recursive call.
+(deftotal append (Pi ((A (Type 0)) (xs (List A)) (ys (List A))) (List A))
+  (lam (A xs ys) (match xs
+    [(nil) ys]
+    [(cons x rest) (cons x (append A rest ys))])))
+
+; Map a function over the spine (structural recursion).
+(deftotal map (Pi ((A (Type 0)) (B (Type 0)) (f (Pi ((x A)) B)) (xs (List A))) (List B))
+  (lam (A B f xs) (match xs
+    [(nil) nil]
+    [(cons x rest) (cons (f x) (map A B f rest))])))
+
+; A non-recursive `Bool` selector so `filter`'s recursive calls sit directly in the outer match's
+; method body (the same shape `std/tree`'s `tree-if` uses) — this keeps the independent re-checker's
+; motive in the supported fragment.
+(deftotal list-if (Pi ((A (Type 0)) (t (List A)) (e (List A)) (b Bool)) (List A))
+  (lam (A t e b) (match b [(true) t] [(false) e])))
+
+; Keep the elements satisfying the `Bool`-valued predicate.
+(deftotal filter (Pi ((A (Type 0)) (p (Pi ((x A)) Bool)) (xs (List A))) (List A))
+  (lam (A p xs) (match xs
+    [(nil) nil]
+    [(cons x rest)
+      (list-if A (cons x (filter A p rest)) (filter A p rest) (p x))])))
+
+; Right fold: `foldr f z [x1 … xn] = f x1 (… (f xn z))`.
+(deftotal foldr
+  (Pi ((A (Type 0)) (B (Type 0)) (f (Pi ((x A) (acc B)) B)) (z B) (xs (List A))) B)
+  (lam (A B f z xs) (match xs
+    [(nil) z]
+    [(cons x rest) (f x (foldr A B f z rest))])))
+
+; Reverse, by an accumulator threaded through a structural recursion on the spine.
+(deftotal reverse-onto (Pi ((A (Type 0)) (xs (List A)) (acc (List A))) (List A))
+  (lam (A xs acc) (match xs
+    [(nil) acc]
+    [(cons x rest) (reverse-onto A rest (cons x acc))])))
+
+(define reverse (Pi ((A (Type 0)) (xs (List A))) (List A))
+  (lam (A xs) (reverse-onto A xs nil)))
+
+; Flatten a list of lists (structural recursion on the outer spine).
+(deftotal concat (Pi ((A (Type 0)) (xss (List (List A)))) (List A))
+  (lam (A xss) (match xss
+    [(nil) nil]
+    [(cons xs rest) (append A xs (concat A rest))])))

@@ -1,0 +1,75 @@
+; std/list_extra.bl — extra list combinators on top of std/list (spec §6, §8 stdlib).
+;
+; UNTRUSTED tower code. Everything here recurses structurally on an *immediate* sub-term of its
+; scrutinee, so the total functions all pass `deftotal`. `take`/`drop` recurse on the `Nat` count
+; (curried so the eliminator motive abstracts only the count), `foldl`/`zip` on the list spine, and
+; `sort` reuses the insertion-sort shape from examples/list_sort.bl. Depends on std/list (which
+; pulls in std/nat), std/order for `nat-le`/`nat-eq`, and std/pair for `zip`'s result.
+
+(load "std/list.bl")
+(load "std/order.bl")
+(load "std/pair.bl")
+
+; `take n xs` — the first `n` elements of `xs` (or all of `xs` if it is shorter). Structural
+; recursion on `n`: the `(lam (xs) …)` is bound *inside* each `n`-arm so the motive abstracts only
+; `n`, and the recursive call `(take A k rest)` descends on `k`, the immediate sub-term of `n`.
+(deftotal take (Pi ((A (Type 0)) (n Nat) (xs (List A))) (List A))
+  (lam (A n) (match n
+    [(Zero) (lam (xs) nil)]
+    [(Succ k) (lam (xs) (match xs
+       [(nil) nil]
+       [(cons x rest) (cons x (take A k rest))]))])))
+
+; `drop n xs` — `xs` with its first `n` elements removed. Structural recursion on `n` (same shape).
+(deftotal drop (Pi ((A (Type 0)) (n Nat) (xs (List A))) (List A))
+  (lam (A n) (match n
+    [(Zero) (lam (xs) xs)]
+    [(Succ k) (lam (xs) (match xs
+       [(nil) nil]
+       [(cons x rest) (drop A k rest)]))])))
+
+; Left fold: `foldl f acc [x1 … xn] = f (… (f (f acc x1) x2) …) xn`. Structural recursion on the
+; spine, threading the accumulator forward. The accumulator and the type args ride along verbatim.
+(deftotal foldl
+  (Pi ((A (Type 0)) (B (Type 0)) (f (Pi ((acc B) (x A)) B)) (acc B) (xs (List A))) B)
+  (lam (A B f acc xs) (match xs
+    [(nil) acc]
+    [(cons x rest) (foldl A B f (f acc x) rest)])))
+
+; `zip xs ys` — pair up elements positionally, stopping at the shorter list. Structural recursion on
+; `xs` (curried over `ys` so the motive abstracts only `xs`); the recursive call descends on `rest`.
+(deftotal zip (Pi ((A (Type 0)) (B (Type 0)) (xs (List A)) (ys (List B))) (List (Pair A B)))
+  (lam (A B xs) (match xs
+    [(nil) (lam (ys) nil)]
+    [(cons x xrest) (lam (ys) (match ys
+       [(nil) nil]
+       [(cons y yrest) (cons (mk-pair x y) (zip A B xrest yrest))]))])))
+
+; `elem y xs` — `true` iff the `Nat` `y` occurs in `xs`. Monomorphic over `Nat` so it can use
+; std/order's `nat-eq`. Structural recursion on the spine.
+(deftotal elem (Pi ((y Nat) (xs (List Nat))) Bool)
+  (lam (y xs) (match xs
+    [(nil) false]
+    [(cons x rest) (or (nat-eq y x) (elem y rest))])))
+
+; ---- insertion sort over `List Nat` (structural, total) ----
+; A non-recursive `(List Nat)` selector so `insert-nat`'s recursive call sits directly in the match
+; body (the trick from std/list's `list-if` / examples/list_sort.bl's `list-nat-if`).
+(deftotal list-nat-if (Pi ((t (List Nat)) (e (List Nat)) (b Bool)) (List Nat))
+  (lam (t e b) (match b [(true) t] [(false) e])))
+
+; Insert `x` into an already-sorted `List Nat`, keeping it sorted (structural on the spine).
+(deftotal insert-nat (Pi ((x Nat) (xs (List Nat))) (List Nat))
+  (lam (x xs) (match xs
+    [(nil) (cons x nil)]
+    [(cons y rest)
+      (list-nat-if
+        (cons x (cons y rest))
+        (cons y (insert-nat x rest))
+        (nat-le x y))])))
+
+; Insertion sort: insert each element into the sorted tail.
+(deftotal sort (Pi ((xs (List Nat))) (List Nat))
+  (lam (xs) (match xs
+    [(nil) nil]
+    [(cons x rest) (insert-nat x (sort rest))])))

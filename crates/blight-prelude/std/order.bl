@@ -1,0 +1,60 @@
+; std/order.bl — total orders and comparisons on Nat as `Ord`/`Show` traits (spec §6.4 stdlib).
+;
+; UNTRUSTED tower code. A *trait* is a class head resolved by instance search plus a type former
+; giving each instance's dictionary type; constrained functions take the dictionary implicitly.
+; Depends on std/nat and std/bool.
+
+(load "std/nat.bl")
+(load "std/bool.bl")
+
+; `nat-le x y` is `true` iff x ≤ y (structural recursion on the first argument).
+(deftotal nat-le (Pi ((x Nat) (y Nat)) Bool)
+  (lam (x) (match x
+    [(Zero) (lam (y) true)]
+    [(Succ n) (lam (y) (match y
+       [(Zero) false]
+       [(Succ k) (nat-le n k)]))])))
+
+; Structural equality on Nat.
+(deftotal nat-eq (Pi ((x Nat) (y Nat)) Bool)
+  (lam (x) (match x
+    [(Zero) (lam (y) (match y [(Zero) true] [(Succ k) false]))]
+    [(Succ n) (lam (y) (match y [(Zero) false] [(Succ k) (nat-eq n k)]))])))
+
+; ---- Show: render a value to a Nat code -------------------------------------------------------
+(class Show)
+; `Show a` is the dictionary type `a -> Nat`.
+(define Show (Pi ((a (Type 0))) (Type 0))
+  (lam (a) (Pi ((x a)) Nat)))
+
+(instance (Show Nat) (lam (n) n))
+(instance (Show Bool)
+  (lam (b) (match b [(false) Zero] [(true) (Succ Zero)])))
+
+; `show {A} {Show A} (x : A) : Nat` — the `{d (Show A)}` slot is resolved by instance search.
+(define show (Pi ({A (Type 0) 0} {d (Show A)} (x A)) Nat)
+  (lam (A d x) (d x)))
+
+; ---- Ord: a comparison to Bool ----------------------------------------------------------------
+(class Ord)
+; `Ord a` is the dictionary type `a -> a -> Bool`.
+(define Ord (Pi ((a (Type 0))) (Type 0))
+  (lam (a) (Pi ((x a) (y a)) Bool)))
+
+(instance (Ord Nat) (lam (x y) (nat-eq x y)))
+(instance (Ord Bool)
+  (lam (x y) (match x
+    [(false) (match y [(false) true] [(true) false])]
+    [(true)  (match y [(false) false] [(true) true])])))
+
+; `cmp {A} {Ord A} (x y : A) : Bool`.
+(define cmp (Pi ({A (Type 0) 0} {d (Ord A)} (x A) (y A)) Bool)
+  (lam (A d x y) (d x y)))
+
+; ---- the ORD signature / module (ML-style records) --------------------------------------------
+; (signature ORD) := the record type `Sigma (a : Type0). (a -> a -> Bool)`.
+(define ORD (Type 1)
+  (Sigma ((a (Type 0))) (Pi ((x a) (y a)) Bool)))
+
+; A *module* ascribed to ORD: the carrier `Nat` paired with its comparison.
+(define Nat-Ord ORD (pair Nat nat-le))

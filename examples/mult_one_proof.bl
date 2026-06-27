@@ -1,0 +1,19 @@
+; mult_one_proof.bl — proving the right-identity law for multiplication by tactics.
+;
+; `mult-one : Π (n : Nat). Path Nat (mult n (Succ Zero)) n`. Like `plus-zero` (examples/plus_zero_proof.bl)
+; this is not definitional — `mult` recurses on its first argument, so `mult n 1` is stuck on a
+; variable `n` — so it needs a genuine structural induction. The Succ case relies on
+; `mult (Succ k) 1 = plus 1 (mult k 1) = Succ (mult k 1)`, so with the induction hypothesis
+; `k#ih : Path Nat (mult k 1) k` the goal closes by `cong Succ k#ih`.
+;
+; Tactics only PROPOSE a term; the spore re-checks it (LCF), so a buggy script can fail but never
+; mint a false proof. Load-only: this file is exercised by `cargo test -p blight-repl --test examples`.
+
+(load "tactics.bl")
+
+(define-by mult-one
+  (Pi ((n Nat)) (Path Nat (mult n (Succ Zero)) n))
+  (intro n
+    (induction n
+      [(Zero)   refl]
+      [(Succ k) (cong Succ (exact k#ih))])))

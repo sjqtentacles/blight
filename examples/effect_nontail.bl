@@ -1,0 +1,26 @@
+; effect_nontail.bl — general (non-tail) algebraic-effect handlers compiled natively (spec §4.3).
+;
+; Unlike `state_handler.bl` (where `perform` sits in tail position), here the performed operation is
+; an ordinary *sub-expression*: `(plus (perform get tt) (perform get tt))`. The continuation `λn. plus
+; n …` and `λm. plus 2 m` must be captured across the application — a genuine delimited continuation.
+;
+; The native backend captures these continuations at runtime: every elimination site (application
+; `bl_app` and data construction `bl_con_bubble`) is OpNode-aware, so a performed effect bubbles out
+; with the pending work composed onto its continuation, exactly mirroring the kernel's value-based
+; semantics (`apply`/`replay` in normalize.rs). The deep handler (`bl_handle_clo`) then resumes it.
+;
+; Effects sit OUTSIDE the independent re-checker's fragment, so `--recheck` *declines* (not rejects)
+; this program; the seed kernel fully type-checks it and it compiles and runs natively.
+;
+; The handler resumes every `get` with 2, so `plus 2 2 = 4`.
+
+(load "std/nat.bl")
+
+(defdata Unit () (tt))
+
+(effect State (get Unit Nat) (put Nat Unit))
+
+(define main Nat
+  (handle (plus (perform get tt) (perform get tt))
+    (return x x)
+    (get x k (k (Succ (Succ Zero))))))

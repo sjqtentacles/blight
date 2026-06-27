@@ -1,0 +1,16 @@
+[package]
+name = "blight-recheck"
+description = "An independent, untrusted minimal re-checker for Blight kernel proofs (spec §8.3): a second, smaller checker that re-verifies a Proof's conclusion from scratch."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+blight-kernel = { path = "../blight-kernel" }
+
+[dev-dependencies]
+blight-elab = { path = "../blight-elab" }
+
+[lints.rust]
+unsafe_code = "forbid"

@@ -1,0 +1,43 @@
+; safe_tail.bl — a tail you *cannot* call on an empty vector, that REMEMBERS the length shrank.
+;
+; `safe-tail`'s type is `(Vec A (Succ n)) -> Vec A n`: it demands a provably non-empty vector and
+; promises a result that is *exactly one shorter*. Both halves live in the type. This is a
+; "dependent indexed motive": the result type `Vec A n` mentions the index, unlike `safe-head`
+; (whose result `Maybe A` does not). Dropping the head off a `Succ n`-length vector yields an
+; `n`-length vector — and the type checker proves it.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/safe_tail.bl -o safe_tail --recheck
+;   ./safe_tail      # prints 1
+;
+; The `--recheck` flag is the point. Blight's trusted core ("the spore") accepts it, and then a
+; *separately implemented* re-checker (the `blight-recheck` crate) independently re-verifies every
+; judgement before any code is emitted. The dependent indexed motive is what makes the two checkers'
+; AGREEMENT here non-trivial: the `vnil` arm is *unreachable* (its length `Zero` can never equal the
+; scrutinee's `Succ n`), and the `vcons` arm forces the tail's length to be exactly `n`.
+
+(load "std/nat.bl")
+(load "std/vec.bl")
+
+; safe-tail : (Vec A (Succ n)) -> Vec A n. The `Succ n` input index is the non-emptiness guarantee;
+; the `n` output index is the "one shorter" guarantee. Blight has no dependent-coverage pruning, so
+; the body must still list the `vnil` arm — but it is unreachable: no caller can supply a
+; `Vec A Zero` where `Vec A (Succ n)` is demanded.
+(define-rec safe-tail (Pi ((A (Type 0)) (n Nat) (v (Vec A (Succ n)))) (Vec A n))
+  (lam (A n v)
+    (match v
+      [(vnil) vnil]
+      [(vcons m x xs) xs])))
+
+(define one Nat (Succ Zero))
+(define two Nat (Succ (Succ Zero)))
+
+; sample : Vec Nat 2 = [1, 1]. (vcons takes tail-length, element, tail; lengths count down 1, 0.)
+(define sample (Vec Nat two)
+  (vcons one one
+    (vcons Zero one
+      (vnil))))
+
+; main = 1. The tail of a length-2 vector has length 1; `vec-length` reads that index back as a
+; concrete Nat. The "exactly one shorter" promise lives in safe-tail's TYPE and is re-verified by
+; the independent re-checker under `--recheck`.
+(define main Nat (vec-length Nat one (safe-tail Nat one sample)))

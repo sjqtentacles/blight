@@ -1,0 +1,5 @@
+; traits.bl — compatibility shim (spec §6.4). The `Show`/`Ord` traits + dictionary-passing that used
+; to live here now reside in `std/order.bl` (with `show`, `cmp`, and the `Nat`/`Bool` instances).
+; This shim preserves the historical `(load "traits.bl")` entry point.
+
+(load "std/order.bl")

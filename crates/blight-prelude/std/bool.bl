@@ -1,0 +1,18 @@
+; std/bool.bl — the booleans and the basic boolean connectives (spec §6, §8 stdlib).
+;
+; UNTRUSTED tower code: each connective is a non-recursive `deftotal` that the kernel re-checks
+; through the spore. Loadable in isolation.
+
+(defdata Bool () (false) (true))
+
+; Negation.
+(deftotal not (Pi ((b Bool)) Bool)
+  (lam (b) (match b [(false) true] [(true) false])))
+
+; Conjunction (short-circuit shape: pattern-match the first argument).
+(deftotal and (Pi ((x Bool) (y Bool)) Bool)
+  (lam (x y) (match x [(false) false] [(true) y])))
+
+; Disjunction.
+(deftotal or (Pi ((x Bool) (y Bool)) Bool)
+  (lam (x y) (match x [(false) y] [(true) true])))

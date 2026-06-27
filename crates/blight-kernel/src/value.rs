@@ -61,6 +61,102 @@ pub enum Value {
         ty: Box<Value>,
         equiv: Box<Value>,
     },
+
+    // ---- effects (spec §4): the effectful-neutral and runtime continuation ----
+    /// An **effectful-neutral** (spec §4, M2): a `perform op arg` whose enclosing handler is not
+    /// yet known, so the computation is *stuck on the operation* exactly like a [`Neutral`] is
+    /// stuck on a variable. The `cont` spine records the eliminations applied *since* the operation
+    /// was performed (in order, outermost-last): when a `Handle` interprets this operation it will
+    /// resume by replaying `cont` onto the value the handler passes to the continuation `k`.
+    ///
+    /// This is the free-monad node realized for a direct-style evaluator: each eliminator
+    /// (`apply`, `do_elim`, projections, `papp`, `unglue`) *bubbles* an `OpNode` by pushing itself
+    /// onto `cont` rather than getting stuck.
+    OpNode {
+        effect: crate::row::EffName,
+        op: crate::signature::OpName,
+        arg: Box<Value>,
+        /// Pending eliminations to replay on resume, in application order (index 0 first).
+        cont: Vec<Frame>,
+    },
+
+    /// A **runtime delimited continuation** (spec §4.3, M2): produced *only* by the evaluator when
+    /// a [`Value::OpNode`] is interpreted by an enclosing `Handle`. Invoking `k v` (via [`apply`])
+    /// resumes the captured computation by replaying `cont` onto `v` and then re-installing the
+    /// handler `handler` around the result (deep-handler semantics — the handler stays in force for
+    /// the remainder of the resumed computation). There is no source/`Term` form for this; `k` in a
+    /// handler clause is an ordinary bound variable of function type `Bᵢ → C ! E`.
+    Cont {
+        /// The captured continuation spine to replay on the resume value.
+        cont: Vec<Frame>,
+        /// The handler to re-install around the resumed result (deep handlers).
+        handler: Rc<HandlerVal>,
+    },
+
+    // ---- partiality (spec §4.5): the intensional Capretta delay ----
+    /// `Delay A` as a *type* value (the type former). Carries the underlying value type `A`.
+    Delay(Box<Value>),
+    /// `now a : Delay A` — an immediately-available value of `Delay A`.
+    Now(Box<Value>),
+    /// `later d : Delay A` — a single **guarded** delay step. NbE does *not* force the inner
+    /// `Delay A` value: `Later` is a canonical, non-reducing node, so each normalization step
+    /// unfolds at most one layer and stays finite even for divergent (`define-rec`) computations.
+    Later(Box<Value>),
+    /// `force d` stuck on a **guarded** `later` (spec §4.5): forcing a `later` does not unfold it
+    /// (intensional partiality keeps the delay structure observable), so `force (later d)` is a
+    /// canonical, non-reducing node. (`force` on a `now` reduces; `force` on a neutral reflects to
+    /// `Neutral::Force`; `force` on an `OpNode` bubbles — only the `later` case lands here.)
+    Force(Box<Value>),
+
+    // ---- primitive machine integers (M11) ----
+    /// `Int` as a type value (`IntTy : Univ 0`).
+    IntTy,
+    /// An integer literal value holding its `i64`.
+    IntLit(i64),
+}
+
+/// A handler value (spec §4.3): the captured environment plus the `return` and operation clauses,
+/// kept as un-evaluated bodies (with their binders) so they can be run against fresh `x`/`k`. This
+/// is the data an enclosing `Handle` folds an [`Value::OpNode`] tree with, and what a resumed
+/// [`Value::Cont`] re-installs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandlerVal {
+    /// The environment captured at the `Handle` site (the clauses' free variables live here).
+    pub env: Env,
+    /// `return x. r` — the value clause, binding the result `x` (1 binder, de Bruijn 0 = `x`).
+    pub return_clause: Term,
+    /// `(op x k. e)...` — one clause per handled operation, each binding `x` then `k`
+    /// (2 binders: `k` innermost = de Bruijn 0, `x` = de Bruijn 1).
+    pub op_clauses: Vec<(crate::signature::OpName, Term)>,
+}
+
+/// One pending elimination in an [`Value::OpNode`] continuation spine (or a resumed continuation).
+/// Mirrors the [`Neutral`] eliminator set: replaying a frame on a value `v` re-applies that
+/// elimination to `v`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Frame {
+    /// `_ a` — application of the (resumed) value to a fixed argument `a`.
+    App(Value),
+    /// `f _` — application of a fixed function value `f` to the (resumed) value. This is the
+    /// *argument-position* frame: it bubbles when an operation is performed in an argument, so
+    /// call-by-value sequencing `(λx. …) (perform op a)` records "apply the function to my result".
+    AppFun(Value),
+    /// `fst _`.
+    Fst,
+    /// `snd _`.
+    Snd,
+    /// `_ @ r` — path application at an interval.
+    PApp(Interval),
+    /// `unglue _`.
+    Unglue,
+    /// `Elim D motive methods _` — eliminating the (resumed) value as a scrutinee.
+    Elim {
+        data: DataName,
+        motive: Box<Value>,
+        methods: Vec<Value>,
+    },
+    /// `force _` — forcing the (resumed) delay value.
+    Force,
 }
 
 /// A neutral: a free variable (de Bruijn *level*) under a stack of eliminations.
@@ -77,6 +173,23 @@ pub enum Neutral {
         motive: Box<Value>,
         methods: Vec<Value>,
         scrutinee: Box<Neutral>,
+    },
+    /// `force _` — forcing a neutral (a variable of `Delay A`), kept stuck.
+    Force(Box<Neutral>),
+    /// `foreign "sym" : A` — an opaque trusted constant (spec §7.6). It is *stuck by construction*:
+    /// nothing reduces it, and two foreigns are convertible only when their symbols (and types)
+    /// coincide. Carrying the type lets `quote` reconstruct the original `Term::Foreign`.
+    Foreign {
+        symbol: String,
+        ty: Box<Value>,
+    },
+    /// A *stuck* primitive `Int` operation (M11): at least one operand is neutral (not a literal),
+    /// so the operation cannot reduce. Carries both operand values so `quote` can reconstruct the
+    /// `Term::IntPrim`. (When both operands are `IntLit`s, `eval` reduces to an `IntLit` instead.)
+    IntPrim {
+        op: crate::term::IntPrimOp,
+        lhs: Box<Value>,
+        rhs: Box<Value>,
     },
 }
 

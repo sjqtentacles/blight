@@ -1,0 +1,26 @@
+; std/ordering.bl — a three-way comparison result and Nat comparison (spec §6, §8 stdlib).
+;
+; UNTRUSTED tower code. `Ordering` is the classic `LT`/`EQ`/`GT` result; `nat-compare` decides it
+; by structural recursion on the first argument, complementing std/order's boolean `nat-le`/`nat-eq`.
+; Depends on std/nat.
+
+(load "std/nat.bl")
+
+(defdata Ordering () (LT) (EQ) (GT))
+
+; Reverse an ordering (swap `LT`/`GT`, fix `EQ`).
+(deftotal ordering-flip (Pi ((o Ordering)) Ordering)
+  (lam (o) (match o
+    [(LT) GT]
+    [(EQ) EQ]
+    [(GT) LT])))
+
+; Three-way comparison of two Nats: structural recursion on the first argument.
+(deftotal nat-compare (Pi ((x Nat) (y Nat)) Ordering)
+  (lam (x) (match x
+    [(Zero) (lam (y) (match y
+       [(Zero) EQ]
+       [(Succ k) LT]))]
+    [(Succ n) (lam (y) (match y
+       [(Zero) GT]
+       [(Succ k) (nat-compare n k)]))])))

@@ -1,0 +1,20 @@
+; fib_int.bl — fib(30) over native O(1) machine `Int`, matching the C/Rust/OCaml/Haskell/Python
+; reference impls (shared golden = 832040).
+;
+; `Int` has no eliminator (it is a trusted primitive), so the loop is driven by a structural `Nat`
+; fuel counter while the running window (a, b) = (fib k, fib k+1) is carried in unboxed `Int`s and
+; advanced with the O(1) `int+` primitive. `fib n = fst window` after `n` steps.
+;
+;   cargo run -p blight-repl --features llvm -- build bench/games/fib/fib_int.bl -o fib && ./fib  # => 832040
+
+(load "std/nat.bl")
+
+(deftotal fib-go (Pi ((n Nat) (a Int) (b Int)) Int)
+  (lam (n a b) (match n
+    [(Zero) a]
+    [(Succ k) (fib-go k b (int+ a b))])))
+
+(define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+(define thirty Nat (mult (Succ (Succ (Succ Zero))) ten))
+
+(define main Int (fib-go thirty (int 0) (int 1)))

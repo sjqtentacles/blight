@@ -1,0 +1,24 @@
+; either_compute.bl — a small `Either`/`Maybe` computation.
+;
+; Folds a `right 3` with the eliminator `either` (the `right` handler adds one), giving `4`, and
+; also exercises `maybe`/`from-maybe`. Buildable:
+;
+;   cargo run -p blight-repl --features llvm -- build examples/either_compute.bl -o either_compute
+;   ./either_compute      # prints 4
+
+(load "std/nat.bl")
+(load "std/maybe.bl")
+(load "std/either.bl")
+
+(define three Nat (Succ (Succ (Succ Zero))))
+
+; e : Either Nat Nat = right 3
+(define e (Either Nat Nat) (right three))
+
+; Fold: left x -> x, right y -> y + 1. On `right 3` this is `3 + 1 = 4`.
+(define main Nat
+  (either Nat Nat Nat (lam (x) x) (lam (y) (Succ y)) e))
+
+; A Maybe smoke test that also nets 4: default-out of `just 4` keeps the 4.
+(define from-just Nat
+  (from-maybe Nat Zero (just (Succ (Succ (Succ (Succ Zero)))))))

@@ -3,9 +3,16 @@
 > Companion to [`blight-spec.md`](blight-spec.md). The spec says *what* Blight is; this
 > document says *how* we build it, in what order, and under what engineering discipline.
 
-Status: **M0 in progress.** This document is the engineering plan we implement against. It is
-deliberately concrete about the trusted-base boundary, the host representation, and the
-test-first workflow, and it restates the spec's roadmap (spec §9) with engineering risks.
+> **User-facing surface.** For building, running, and a feature tour, start at the repo root
+> [`README.md`](../README.md). Runnable programs and a sample `spores` package live in
+> [`examples/`](../examples/) (loaded and checked by `crates/blight-repl/tests/examples.rs`, so they
+> cannot rot). Contribution guidelines — especially the trusted-base rule — are in
+> [`CONTRIBUTING.md`](../CONTRIBUTING.md).
+
+Status: **M0-M6 implemented and green** (`cargo test --workspace`, with and without the `llvm`
+feature). This document is the engineering plan we implement against. It is deliberately concrete
+about the trusted-base boundary, the host representation, and the test-first workflow, and it
+restates the spec's roadmap (spec §9) with engineering risks.
 
 ---
 
@@ -19,6 +26,7 @@ test-first workflow, and it restates the spec's roadmap (spec §9) with engineer
 6. [TDD workflow and the test ledger](#6-tdd-workflow-and-the-test-ledger)
 7. [Milestone map (M0..M6)](#7-milestone-map-m0m6)
 8. [Testing and auditing strategy](#8-testing-and-auditing-strategy)
+9. [M6 status: self-hosting + ecosystem](#9-m6-status-self-hosting--ecosystem)
 
 ---
 
@@ -143,6 +151,11 @@ engineering treatment:
   implementation rather than only against our own intuition.
 - **`ua` is derived from `Glue`**, not primitive (spec §2.6 notes this is permissible), shrinking
   the irreducible surface.
+- **Heterogeneous cases are implemented**, not stubbed: `transp` over a non-constant Π domain, a
+  dependent Σ first component, and a non-constant `PathP` line, plus `hcomp` over a genuinely varying
+  partial face, all reduce structurally by their CCHM component rules (`crates/blight-kernel/src/kan.rs`),
+  each gated by its own conformance golden. The independent re-checker mirrors the whole table in its
+  value layer, so cubical Kan operations are *Checked* (not `Declined`).
 
 The critical scheduling note (see §6): the M0 acceptance proof `plus-zero` does **not** exercise
 the Kan table, so the table is driven by its *own* conformance suite, never by the acceptance test.
@@ -238,3 +251,104 @@ The dependency structure (spec §9): M0→M1→M2; M0→M3; M2→M3→M4; M1→M
   no published end-to-end normalization proof; M0 soundness rests on the component results plus
   testing. The spec §10 stratification/encoding fallbacks exist precisely so we can retreat to a
   proved-sound configuration if the unified proof proves out of reach.
+
+---
+
+## 9. M6 status: self-hosting + ecosystem
+
+M6 (spec §8.2 stages 4-5, §9 M6) is implemented at full ambition across five deliverables. The
+Rust host is now needed only as the *seed compiler* and the *independent re-checker*; the standard
+library, the package surface, and a model of the core are all expressed in Blight.
+
+### D1 — standard library reorganized into a `std/` tree
+
+The flat prelude was split into composable modules under `crates/blight-prelude/std/`:
+
+| Module | Provides | Depends on |
+|---|---|---|
+| `std/nat.bl` | `Nat`, `plus`, `mult`, `pred` | — |
+| `std/bool.bl` | `Bool`, `not`, `and`, `or` | — |
+| `std/order.bl` | `nat-le`, `nat-eq`, `Show`/`Ord` traits + `Nat`/`Bool` instances, `show`, `cmp`, `ORD`/`Nat-Ord` | `std/nat`, `std/bool` |
+| `std/list.bl` | `List`, `length`, `append` | `std/nat` |
+| `std/tree.bl` | `Tree`, `TreeSig`, `tree-if`, `tree-insert`, `RedBlackTree` functor, `NatTree` | `std/order` |
+| `std/prelude.bl` | aggregator (loads `std/tree` + `std/list`) | the DAG above |
+
+The historical flat entry points (`modules.bl`, `traits.bl`, `tactics.bl`) are kept as thin
+compatibility shims that `(load …)` their `std/` successors. `(instance …)` registration is *not*
+idempotent (re-registering the same `(class, head)` is an overlapping-instance error), so the
+aggregator encodes the dependency DAG by hand and loads each instance-bearing module exactly once.
+`crates/blight-repl/tests/stdlib.rs` loads every module in isolation and the aggregate.
+
+### D2 — `spores` package manager
+
+`crates/blight-elab/src/spores.rs` parses a `spore.toml` manifest into a `PackageManifest` and
+resolves `pkg/mod` module references to source. `Program` gained `imported: HashSet`/`importing:
+Vec` tracking plus `Program::with_package`, and an idempotent `(import "pkg/mod")` form that dedups
+(re-import is a no-op) and detects cycles (the in-progress import stack). The five duplicated test
+resolvers were consolidated into `crates/blight-repl/tests/support/mod.rs`. Tests:
+`spores_resolver_loads_dependency`, `import_resolves_std`, `import_is_idempotent`,
+`import_cycle_detected`.
+
+### D3 — WASM object backend
+
+A `Target` enum (`Native | Wasm32`) is threaded through `emit_object`/`driver`; `llvm.rs`'s
+`write_object` is parameterized to call `Target::initialize_webassembly` and retarget to
+`wasm32-unknown-unknown` (CPU/features cleared) for the wasm path. `blight build --target=wasm32`
+emits a WebAssembly object and, when a wasm-capable `clang` + `wasm-ld` are present (overridable via
+`BLIGHT_WASM_CC` / `BLIGHT_WASM_LD`), links a runnable `.wasm` module exporting `bl_main` against a
+minimal freestanding wasm ABI shim (`runtime/wasm_rt.c`: a bump allocator over linear memory + no-op
+GC/stack stubs). Without that toolchain it falls back to object-only. The llvm-gated test
+`emits_wasm_object_for_main` asserts the `\0asm` magic bytes.
+
+### E — re-checker coverage matrix
+
+The independent re-checker (`blight-recheck`) was generalized past the bare core fragment. Its
+current honest coverage:
+
+| Construct | Re-checker | Notes |
+|---|---|---|
+| Var / Univ / Pi / Lam / App | ✅ checked | full core |
+| Sigma / Pair / Fst / Snd | ✅ checked | full core |
+| `Elim` over non-indexed data | ✅ checked | motive `λs. M`, method types reconstructed |
+| `Elim` over multi-parameter / multi-index families | ✅ checked | `infer_elim`/`method_type` build the indexed motive (`λ i… s. M`), apply the motive to all indices + the scrutinee, and reconstruct indexed recursive-argument IHs — mirroring the kernel for N parameters and M indices (the ≤1 cap is lifted) |
+| Cubical Kan (`Transp`/`HComp`/`Comp`) | ✅ checked | the re-checker now models the Kan table in its own value layer (`crates/blight-recheck/src/kan.rs`), independently of the kernel |
+| `Glue` / `ua` | ⛔ `Declined` (counted) | the univalence machinery is not modeled in the re-checker value layer |
+| Effects/handlers (`Op`/`Handle`/`EffTy`) | ⛔ `Declined` (counted) | effect rows not modeled in the re-checker value layer |
+| Partiality (`Delay`/`Now`/`Later`) | ⛔ `Declined` (counted) | later modality not modeled |
+
+`recheck_agrees_with_kernel_on_M0_M5` drives the M0-M6 corpus (Nat arithmetic, linear grades,
+traits, modules, tactics, cubical paths, regions) plus indexed/multi-parameter eliminators
+(`recheck_agrees_on_indexed_elim`, `recheck_agrees_on_multi_param_and_multi_index`) and a cubical
+Kan term (`recheck_checks_transp_not_declined`), asserting **0 `Rejected`** results; `Declined`
+constructs are counted and reported rather than silently skipped. Two small checkers agreeing across
+this corpus is the §8.3 evidence story.
+
+### E — `spore.bl` growth and the kernel index cap
+
+`spore.bl` models the kernel's core term language extrinsically as `BTerm` and now carries, beyond
+the `bsize` measure and de Bruijn weakening `bshift`: single-variable substitution `bsubst`
+(`t[u/j]`, weakening the replacement under each binder, the model analogue of the kernel's
+`subst0`) and a well-scopedness predicate `bwellscoped`. `spore_meta.bl` proves three metatheorems
+by tactics (re-checked through the kernel door): `bconv-refl` (conv reflexivity), `bctx-append-nil`
+(context right-unit), and `bctx-len-append` (`bctx-len` is a homomorphism over append — a genuine
+two-quantifier induction, with the second context `h` introduced *before* the induction variable so
+the `Elim` motive abstracts only `g`).
+
+**Multi-index families (cap now lifted).** An *intrinsically-typed* term model `BTm : BCtx → BTerm
+→ Type` (well-typed syntax indexed by its context *and* its type) needs an inductive family with
+**two indices**. This was previously blocked by a kernel cap of ≤1 parameter / ≤1 index; that cap is
+now **lifted** end-to-end — the surface `declare_data`, the kernel's `infer_elim`/`method_type`, and
+the independent re-checker all handle full N-parameter / M-index telescopes (see
+`std/either.bl` for a two-parameter inductive and `std/vec.bl` for an indexed family, both re-checked
+by the independent checker). The extrinsic encoding here (a `BTerm` datatype with
+`bwellscoped`/`bctx-*` as relations and functions) remains a perfectly good model; the intrinsically
+indexed version is now also expressible should `spore.bl` adopt it.
+
+## Performance
+
+See [docs/performance.md](performance.md) for the cost model (compile pipeline + runtime value
+representation, GC, the `Later`/`Fix` trampoline, region arenas, the wasm runtime), measured numbers
+from the in-tree benchmark harness, and the honest advantages/disadvantages. The harness is:
+`crates/blight-codegen/benches/pipeline.rs` (pure-Rust pipeline stages, criterion),
+`crates/blight-codegen/benches/runtime.rs` (runtime + GC/arena counters, `--features llvm`), and
+`bench/run.sh` (hyperfine over built binaries).

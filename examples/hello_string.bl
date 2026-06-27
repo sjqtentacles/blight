@@ -1,0 +1,13 @@
+; hello_string.bl — the smallest buildable Blight program that prints *text*.
+;
+; Strings are untrusted tower code: a `String` (std/string.bl) is a cons-list of `Nat` codepoints,
+; and the reader desugars a quoted literal `"hello"` into the `push`/`empty` chain — the kernel only
+; ever sees `Con`s, no new primitive types. The native backend prints a `String`-typed `main` as
+; text (via the runtime's `bl_print_string`), so this prints `hello`.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/hello_string.bl -o hello_string
+;   ./hello_string        # => hello
+
+(load "std/string.bl")
+
+(define main String "hello")

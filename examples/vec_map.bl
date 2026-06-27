@@ -1,0 +1,41 @@
+; vec_map.bl — a length-preserving map over length-indexed vectors.
+;
+; `vec-map`'s type says everything: `(A -> B) -> Vec A n -> Vec B n`. The OUTPUT length is the
+; SAME `n` as the input — the type *guarantees* the map neither drops nor adds elements. This is a
+; "dependent indexed motive": the result type `Vec B n` mentions the index `n`, unlike a
+; length-erasing fold (`vec-length`, whose motive is just `Nat`).
+;
+;   cargo run -p blight-repl --features llvm -- build examples/vec_map.bl -o vec_map --recheck
+;   ./vec_map      # prints 2
+;
+; The `--recheck` flag is the point. Blight's trusted core ("the spore") accepts it, and then a
+; *separately implemented* re-checker (the `blight-recheck` crate) independently re-verifies every
+; judgement before any code is emitted. Two checkers, written apart, must AGREE — including on this
+; dependent indexed motive, where the per-branch index refinement (`vnil` ⇒ length `Zero`,
+; `vcons` ⇒ length `Succ m`) is what makes the elimination type-check.
+
+(load "std/nat.bl")
+(load "std/vec.bl")
+
+; vec-map : (A -> B) -> (Vec A n) -> (Vec B n). The `match` reconstructs the spine with the same
+; shape: `vnil` maps to `vnil` (length `Zero`), `vcons m x xs` maps to `vcons m (f x) (map xs)`
+; (length `Succ m`). Both arms preserve the length index, so the result is `Vec B n`.
+(define-rec vec-map (Pi ((A (Type 0)) (B (Type 0)) (f (Pi ((x A)) B)) (n Nat) (v (Vec A n))) (Vec B n))
+  (lam (A B f n v)
+    (match v
+      [(vnil) vnil]
+      [(vcons m x xs) (vcons m (f x) (vec-map A B f m xs))])))
+
+(define one Nat (Succ Zero))
+(define two Nat (Succ (Succ Zero)))
+
+; sample : Vec Nat 2 = [0, 0]. (vcons takes tail-length, element, tail; lengths count down 1, 0.)
+(define sample (Vec Nat two)
+  (vcons one Zero
+    (vcons Zero Zero
+      (vnil))))
+
+; main = 2. Mapping `Succ` over a length-2 vector yields another length-2 vector; `vec-length`
+; reads the preserved length back as a concrete Nat. The whole point: the length `2` is the SAME
+; index before and after the map, guaranteed by `vec-map`'s type and re-verified by `--recheck`.
+(define main Nat (vec-length Nat two (vec-map Nat Nat (lam (x) (Succ x)) two sample)))

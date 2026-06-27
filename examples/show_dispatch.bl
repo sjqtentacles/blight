@@ -1,0 +1,20 @@
+; show_dispatch.bl — trait dictionary dispatch resolving to a `Nat` (spec §6.4).
+;
+; `Show a` is the dictionary type `a -> Nat` (std/order). The call `(show two)` leaves the
+; `{d (Show Nat)}` slot implicit; the elaborator resolves it by instance search to the `Show Nat`
+; dictionary (the identity on `Nat`), and the kernel re-checks the fully-applied term. `(show true)`
+; resolves the `Show Bool` instance instead. Load-only (typecheck/dispatch demo, like `traits.bl`):
+; exercised by `cargo test -p blight-repl --test examples`.
+
+(load "std/order.bl")
+
+(define two Nat (Succ (Succ Zero)))
+
+; Dispatch on `Show Nat` (identity) — this is `2`.
+(the Nat (show two))
+
+; Dispatch on `Show Bool` — `true` maps to `Succ Zero` = 1.
+(the Nat (show true))
+
+; `cmp` dispatches the `Ord Nat` instance (structural equality) — `2 == 2` is `true`.
+(the Bool (cmp two two))

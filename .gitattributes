@@ -1,0 +1,11 @@
+# Blight source files: treat as text, and let GitHub Linguist count/diff them sensibly.
+*.bl text
+*.bl linguist-language=Scheme
+
+# Vendored/generated artifacts should not skew language stats.
+crates/blight-codegen/runtime/* linguist-vendored
+
+# Normalize line endings for text sources.
+*.rs text
+*.md text
+*.toml text

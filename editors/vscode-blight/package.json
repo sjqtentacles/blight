@@ -1,0 +1,36 @@
+{
+  "name": "blight",
+  "displayName": "Blight",
+  "description": "Syntax highlighting for the Blight (.bl) language.",
+  "version": "0.1.1",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.0.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "blight",
+        "aliases": [
+          "Blight",
+          "blight"
+        ],
+        "extensions": [
+          ".bl"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "blight",
+        "scopeName": "source.blight",
+        "path": "./syntaxes/blight.tmLanguage.json"
+      }
+    ]
+  }
+}

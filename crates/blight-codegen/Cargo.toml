@@ -1,0 +1,37 @@
+[package]
+name = "blight-codegen"
+description = "The Blight native backend (untrusted, spec §7): lowers checked core terms through erasure, closure conversion, monomorphization, ANF, and LLVM codegen to a native binary."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+blight-kernel = { path = "../blight-kernel" }
+blight-elab = { path = "../blight-elab" }
+# LLVM codegen is gated behind the `llvm` feature so the whole pure-Rust pipeline
+# (erase → lower → closure-conv → mono → ANF) builds and tests without a system LLVM.
+# Enable with: `cargo test -p blight-codegen --features llvm` after `brew install llvm@18`
+# and `export LLVM_SYS_181_PREFIX="$(brew --prefix llvm@18)"`.
+inkwell = { version = "0.9", features = ["llvm18-1"], optional = true }
+
+[features]
+default = []
+llvm = ["dep:inkwell"]
+
+[dev-dependencies]
+criterion = "0.5"
+
+# Compile-pipeline microbenchmarks (lower -> region -> closure -> mono -> anf). Pure Rust, no LLVM
+# required: `cargo bench -p blight-codegen --bench pipeline`.
+[[bench]]
+name = "pipeline"
+harness = false
+
+# Runtime / memory benchmarks: build representative programs to native binaries and measure
+# wall-clock + GC/arena counters. Requires the `llvm` feature (and a system LLVM 18 + clang):
+# `cargo bench -p blight-codegen --features llvm --bench runtime`.
+[[bench]]
+name = "runtime"
+harness = false
+required-features = ["llvm"]

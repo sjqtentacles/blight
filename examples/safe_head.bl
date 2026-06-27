@@ -1,0 +1,52 @@
+; safe_head.bl — a head you *cannot* call on an empty vector.
+;
+; `safe-head`'s input type is `Vec A (Succ n)`: it demands a vector whose length is a *successor*,
+; i.e. provably non-empty. Handing it `(vnil) : Vec A Zero` is a TYPE ERROR — the index `Succ n`
+; cannot match `Zero` — so the program is rejected before any code runs. No runtime crash, no
+; null, no test: the impossibility lives in the type, and a type checker enforces it.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/safe_head.bl -o safe_head --recheck
+;   ./safe_head      # prints 1
+;
+; The `--recheck` flag is the point. Blight's trusted core ("the spore") accepts the good call,
+; and then a *separately implemented* re-checker (the `blight-recheck` crate) independently
+; re-verifies every judgement before any code is emitted. Two checkers, written apart, must agree.
+;
+; To watch it fail, point `main` at an empty vector and rebuild with `--recheck`:
+;
+;   (define main Nat (from-maybe Nat Zero (safe-head Nat Zero (vnil))))
+;
+; The independent re-checker rejects it as a soundness alarm:
+;
+;   --recheck: independent re-checker REJECTED `main` ...: constructor result index mismatch
+;
+; (Ascribing the bad call directly, `(the (Maybe Nat) (safe-head Nat Zero (vnil)))`, is rejected
+; by the trusted kernel itself at build time: "expected index Succ Zero, found Zero".)
+
+(load "std/nat.bl")
+(load "std/maybe.bl")
+(load "std/vec.bl")
+
+; safe-head : (Vec A (Succ n)) -> Maybe A. The `Succ n` index is the guarantee. Blight has no
+; dependent-coverage pruning, so the body must still list the `vnil` arm — but it is unreachable:
+; no caller can ever supply a `Vec A Zero` here, since the type forbids it.
+(define-rec safe-head (Pi ((A (Type 0)) (n Nat) (v (Vec A (Succ n)))) (Maybe A))
+  (lam (A n v)
+    (match v
+      [(vnil) nothing]
+      [(vcons m x xs) (just x)])))
+
+(define one Nat (Succ Zero))
+(define two Nat (Succ (Succ Zero)))
+
+; sample : Vec Nat 2 = [1, 1]. `vcons` takes (tail-length, element, tail), so the tail lengths
+; count down 1, 0 as the spine shrinks.
+(define sample (Vec Nat two)
+  (vcons one one
+    (vcons Zero one
+      (vnil))))
+
+; main = 1. safe-head returns (just 1); from-maybe unwraps it to a bare Nat so the compiled
+; program prints a clean `1` (the runtime renders other constructors as `con#N`). The compile-time
+; non-emptiness guarantee lives entirely in safe-head's INPUT type, not here.
+(define main Nat (from-maybe Nat Zero (safe-head Nat one sample)))

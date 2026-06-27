@@ -1,0 +1,10 @@
+; string_reverse.bl — reverse a string and print it as text.
+;
+; `string-reverse` rebuilds the `push`/`empty` spine in reverse; since `main : String`, the native
+; backend prints it as text via the runtime's `bl_print_string`. Result: `cba`.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/string_reverse.bl -o sr && ./sr  # => cba
+
+(load "std/string.bl")
+
+(define main String (string-reverse "abc"))

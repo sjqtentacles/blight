@@ -1,0 +1,39 @@
+; std/string_extra.bl — extra string combinators on top of std/string (spec §6, §8 stdlib).
+;
+; UNTRUSTED tower code. A `String` is a cons-list of `Nat` codepoints (std/string.bl). The take/drop
+; helpers recurse structurally on the `Nat` count (curried so the motive abstracts only the count),
+; `string-repeat` on the count, and `string-concat` folds `string-append` over a `List String`
+; spine. Depends on std/string and std/list.
+
+(load "std/string.bl")
+(load "std/list.bl")
+
+; `string-take n s` — the first `n` codepoints of `s`. Structural recursion on `n`; the `(lam (s) …)`
+; is bound inside each `n`-arm so the eliminator motive abstracts only `n`.
+(deftotal string-take (Pi ((n Nat) (s String)) String)
+  (lam (n) (match n
+    [(Zero) (lam (s) empty)]
+    [(Succ k) (lam (s) (match s
+       [(empty) empty]
+       [(push c rest) (push c (string-take k rest))]))])))
+
+; `string-drop n s` — `s` with its first `n` codepoints removed. Structural recursion on `n`.
+(deftotal string-drop (Pi ((n Nat) (s String)) String)
+  (lam (n) (match n
+    [(Zero) (lam (s) s)]
+    [(Succ k) (lam (s) (match s
+       [(empty) empty]
+       [(push c rest) (string-drop k rest)]))])))
+
+; `string-repeat n s` — `s` concatenated with itself `n` times. Structural recursion on `n`.
+(deftotal string-repeat (Pi ((n Nat) (s String)) String)
+  (lam (n s) (match n
+    [(Zero) empty]
+    [(Succ k) (string-append s (string-repeat k s))])))
+
+; `string-concat xs` — concatenate a `List String` left-to-right. Structural recursion on the list
+; spine, gluing each head onto the recursively-built tail with `string-append`.
+(deftotal string-concat (Pi ((xs (List String))) String)
+  (lam (xs) (match xs
+    [(nil) empty]
+    [(cons s rest) (string-append s (string-concat rest))])))

@@ -1,0 +1,16 @@
+; echo.bl — the smallest `Console`-effect program (spec §4, std/io.bl).
+;
+; `main : (! Console Unit)` reads one line from stdin and prints it straight back. The `read` is
+; performed in the bound position of a `let`; its continuation `λline. perform print line` is captured
+; by the native backend (every elimination site is OpNode-aware) and resumed by the top-level Console
+; handler the build driver installs (`bl_run_console`), which folds the bubbling effect tree against
+; real stdio. `print` writes without an implicit newline, so the output is a byte-faithful echo.
+;
+; Effects sit outside the independent re-checker's fragment, so `--recheck` *declines* this program;
+; the seed kernel type-checks it and it compiles and runs natively.
+
+(load "std/io.bl")
+
+(define main (! Console Unit)
+  (let ((line (perform read tt)))
+    (perform print line)))

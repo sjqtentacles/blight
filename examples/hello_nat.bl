@@ -1,0 +1,14 @@
+; hello_nat.bl — the smallest buildable Blight program.
+;
+; Load the natural numbers from the standard library and define `main`, the global `blight build`
+; compiles to an executable. `main` here is `(2 * 3) + 1 = 7`, computed with `std/nat`'s `plus`/`mult`.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/hello_nat.bl -o hello
+;   ./hello
+
+(load "std/nat.bl")
+
+(define two   Nat (Succ (Succ Zero)))
+(define three Nat (Succ (Succ (Succ Zero))))
+
+(define main Nat (plus (mult two three) (Succ Zero)))
