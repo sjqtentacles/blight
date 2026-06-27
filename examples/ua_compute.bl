@@ -1,0 +1,37 @@
+; ua_compute.bl — the univalence *computation* rule, end-to-end on a closed instance (spec §7
+; cubical layer; plan A2b).
+;
+; The univalence map `ua : Equiv A B -> Path (Type 0) A B` (std/path.bl) is *computational*: in the
+; kernel, transporting along `ua e` reduces to the equivalence's forward map,
+;   transp (i. (ua e) @ i) ⊥ a  ≡  equiv-fun e a
+; via the `transp`-over-`Glue` reduction in `crates/blight-kernel/src/kan.rs`.
+;
+; This file witnesses that reduction *definitionally* on a closed instance: with `e := id-equiv Bool`
+; (forward map `λx.x`), transporting `true` along `ua e` must reduce to `equiv-fun e true = true`.
+; The proof term is plain reflexivity `λ _. true` — it type-checks **only because** the kernel
+; actually performs the Glue transport and lands on `true`. (The genuine forward-map application,
+; with distinct endpoints `A ≠ B`, is covered by the kernel white-box test
+; `kan.rs::transp_ua_glue_line_applies_forward_map`; here the closed instance keeps the example
+; self-contained while still driving `ua` + `Glue` formation + `transp` through the full pipeline.)
+;
+; Buildable / checkable:
+;   cargo run -p blight-repl --features llvm -- build examples/ua_compute.bl -o ua_compute
+; (it has no runtime `main`; it is a checked proof obligation, like the *_proof.bl examples).
+
+(load "std/bool.bl")
+(load "std/path.bl")
+
+; The identity equivalence on `Bool`, the closed `e : Equiv Bool Bool` we transport along.
+(define e-bool (Equiv Bool Bool) (id-equiv Bool))
+
+; `ua e-bool : Path (Type 0) Bool Bool` — the univalence path induced by the identity equivalence.
+(define ua-bool (Path (Type 0) Bool Bool) (ua Bool Bool e-bool))
+
+; The univalence computation rule on this closed instance: transporting `true` along `ua e-bool`
+; computes to `equiv-fun e-bool true = true`. Provable by `refl` *iff* the kernel reduces the
+; Glue-transport (otherwise the two sides would be distinct neutrals and the boundary check fails).
+(define ua-computes-bool
+  (Path Bool
+    (transp (plam (i) (ua-bool @ i)) cbot true)
+    (equiv-fun Bool Bool e-bool true))
+  (plam (i) true))

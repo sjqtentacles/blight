@@ -40,4 +40,4 @@ pub use anf::{AnfFunc, AnfProgram, Atom, Comp, Tail, TailArm};
 pub use ir::{Alloc, Arm, Cir, Func, Program};
 
 #[cfg(feature = "llvm")]
-pub use llvm::Target;
+pub use llvm::{OptLevel, Target};

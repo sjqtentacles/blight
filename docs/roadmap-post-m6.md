@@ -43,8 +43,11 @@ flowchart LR
 - **The multi-index cap is lifted end-to-end** (surface `declare_data`, kernel `Data`/`Elim`,
   re-checker `infer_elim`), which unlocked the M14 intrinsic `BTm`.
 - **Effects are now a genuine second opinion** at the type level in the re-checker (M11), not a
-  blanket decline. The re-checker declines only cubical `Glue`/`ua`, `foreign` postulates, and
-  higher-order eliminator motives.
+  blanket decline. The re-checker declines only the constructs genuinely outside its core fragment:
+  cubical `Glue`/`ua`/partial-elements, `foreign` postulates (trusted FFI), and universe-*level*
+  variables. Higher-order eliminator motives (e.g. the nested-`match` `zip-vec` lowering) are **no
+  longer declined** — both the trusted kernel (M12 refinement) and the independent re-checker now
+  fully certify them.
 
 ## Cross-references
 

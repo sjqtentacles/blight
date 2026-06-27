@@ -118,7 +118,7 @@ fn run_build(args: &[String]) -> Result<String, String> {
     // Per-build scratch dir: derive it from the output path (not just the pid) so concurrent builds
     // in the same process (e.g. parallel tests) never share a `program.o` and clobber each other.
     let work = wasm_work_dir(&out_path);
-    blight_codegen::driver::build_binary(&term, &ty, &sig, &out_path, &work)?;
+    blight_codegen::driver::build_binary_opt(&term, &ty, &sig, &out_path, &work, opts.opt)?;
     Ok(opts.output)
 }
 
@@ -196,17 +196,20 @@ struct BuildOpts {
     output: String,
     recheck: bool,
     target: blight_codegen::Target,
+    opt: blight_codegen::OptLevel,
 }
 
-/// Parse `<file.bl> [-o <bin>] [--recheck] [--target=wasm32]`, defaulting the output to the input
-/// stem (or `a.out`). With `--target=wasm32`, only a WebAssembly object is emitted (no link), so the
-/// output defaults to `<stem>.wasm`.
+/// Parse `<file.bl> [-o <bin>] [--recheck] [--target=wasm32] [--opt=<level>]`, defaulting the output
+/// to the input stem (or `a.out`). With `--target=wasm32`, only a WebAssembly object is emitted (no
+/// link), so the output defaults to `<stem>.wasm`. `--opt` selects the IR optimization pipeline
+/// (`0`/`none`, `2`/`default` (the default), `3`/`aggressive`).
 #[cfg(feature = "llvm")]
 fn parse_build_args(args: &[String]) -> Result<BuildOpts, String> {
     let mut input: Option<String> = None;
     let mut output: Option<String> = None;
     let mut recheck = false;
     let mut target = blight_codegen::Target::Native;
+    let mut opt = blight_codegen::OptLevel::default();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -229,6 +232,14 @@ fn parse_build_args(args: &[String]) -> Result<BuildOpts, String> {
                     &other["--target=".len()..]
                 ));
             }
+            "--opt" => {
+                i += 1;
+                let level = args.get(i).ok_or("`--opt` requires an argument")?;
+                opt = blight_codegen::OptLevel::parse(level)?;
+            }
+            other if other.starts_with("--opt=") => {
+                opt = blight_codegen::OptLevel::parse(&other["--opt=".len()..])?;
+            }
             other => {
                 if input.is_some() {
                     return Err(format!("unexpected argument `{other}`"));
@@ -238,8 +249,9 @@ fn parse_build_args(args: &[String]) -> Result<BuildOpts, String> {
         }
         i += 1;
     }
-    let input =
-        input.ok_or("usage: blight build <file.bl> [-o <bin>] [--recheck] [--target=wasm32]")?;
+    let input = input.ok_or(
+        "usage: blight build <file.bl> [-o <bin>] [--recheck] [--target=wasm32] [--opt=<level>]",
+    )?;
     let output = output.unwrap_or_else(|| {
         let stem = std::path::Path::new(&input)
             .file_stem()
@@ -255,6 +267,7 @@ fn parse_build_args(args: &[String]) -> Result<BuildOpts, String> {
         output,
         recheck,
         target,
+        opt,
     })
 }
 
@@ -510,6 +523,46 @@ mod tests {
         assert!(run.status.success(), "binary runs");
         let stdout = String::from_utf8_lossy(&run.stdout);
         assert_eq!(stdout.trim(), "1", "main = Succ Zero prints as 1");
+    }
+
+    /// `blight build --opt 3 …` runs the aggressive IR pipeline and still produces a correct binary
+    /// (musttail survives the pipeline; result unchanged). Also exercises the `--opt=<level>` spelling
+    /// and the rejection of an unknown level.
+    #[cfg(feature = "llvm")]
+    #[test]
+    fn build_command_opt_flag() {
+        let dir = std::env::temp_dir().join(format!("blight_buildopt_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = "(defdata Nat () (Zero) (Succ (n Nat)))\n\
+                   (define main Nat (Succ (Succ Zero)))\n";
+        let file = dir.join("prog.bl");
+        std::fs::write(&file, src).unwrap();
+        let bin = dir.join("prog_o3");
+
+        let out = run_build(&[
+            file.to_string_lossy().to_string(),
+            "-o".to_string(),
+            bin.to_string_lossy().to_string(),
+            "--opt".to_string(),
+            "3".to_string(),
+        ])
+        .expect("build with --opt 3 succeeds");
+        assert_eq!(out, bin.to_string_lossy());
+        let run = std::process::Command::new(&bin)
+            .output()
+            .expect("run binary");
+        assert!(run.status.success(), "binary runs");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout).trim(),
+            "2",
+            "main = Succ (Succ Zero) prints as 2 at --opt 3"
+        );
+
+        // The `--opt=<level>` spelling parses too.
+        assert!(parse_build_args(&["x.bl".into(), "--opt=2".into()])
+            .is_ok_and(|o| o.opt == blight_codegen::OptLevel::Default));
+        // An unknown level is rejected.
+        assert!(parse_build_args(&["x.bl".into(), "--opt".into(), "O2".into()]).is_err());
     }
 
     /// A `main` that uses `(region r …)` builds and runs — regression for the missing `arena.c`
@@ -817,6 +870,25 @@ mod tests {
     #[test]
     fn example_int_arith_builds_and_runs() {
         build_and_run_example("int_arith.bl", "10000000000");
+    }
+
+    /// `int_sum.bl`: the machine-`Int` counterpart of `bench_sum.bl`. Folds `int-add` (std/int.bl)
+    /// over a `List Int` of 800 ones, printing `800` with O(1) adds — the integer side of the
+    /// unary-`Nat`-vs-`Int` benchmark in docs/benchmarks-game.md. Built with `--recheck` (Int/List
+    /// are in-fragment).
+    #[cfg(feature = "llvm")]
+    #[test]
+    fn example_int_sum_builds_and_runs() {
+        build_and_run_example("int_sum.bl", "800");
+    }
+
+    /// `bench_sum.bl`: the unary-`Nat` counterpart of `int_sum.bl` — `foldr plus` over 800 ones,
+    /// so `main` evaluates to `Succ^800 Zero` and prints `800`. Same answer as `int_sum.bl`, but
+    /// every `+` walks a `Succ` chain (the unary cost the benchmark narrative measures).
+    #[cfg(feature = "llvm")]
+    #[test]
+    fn example_bench_sum_builds_and_runs() {
+        build_and_run_example("bench_sum.bl", "800");
     }
 
     /// `hello_string.bl`: a `String`-typed `main` prints as *text* (`hello`), end-to-end proof that

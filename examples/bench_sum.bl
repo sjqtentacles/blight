@@ -1,0 +1,20 @@
+; bench_sum.bl — faithful Blight side of the cross-language sum workload.
+;
+; Builds a list of `n` ones (a recursive generator over a unary count) and right-folds `plus` over
+; it, so the result is `n` itself. Structurally identical to the documented "sum N small numbers via
+; foldr over a List Nat" workload; the count is a unary `Nat` (the honest unary-Nat cost), assembled
+; via `mult` from small literals so the source stays readable.
+
+(load "std/list.bl")
+
+(define-rec build-ones (Pi ((n Nat)) (List Nat))
+  (lam (n) (match n
+    [(Zero) nil]
+    [(Succ k) (cons (Succ Zero) (build-ones k))])))
+
+(define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+(define eighty Nat (mult (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))) ten))
+; n = 80 * 10 = 800.
+(define n800 Nat (mult eighty ten))
+
+(define main Nat (foldr Nat Nat plus Zero (build-ones n800)))

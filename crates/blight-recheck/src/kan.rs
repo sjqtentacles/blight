@@ -67,7 +67,17 @@ pub fn transp(sig: &Signature, family: &DimClosure, cofib: &RCofib, base: &RValu
         RValue::Pi(..) => transp_pi(sig, family, base),
         RValue::Sigma(..) => transp_sigma(sig, family, base),
         RValue::PathP { .. } => transp_path(sig, family, base),
-        _ => unimplemented!("recheck transp: unsupported heterogeneous former"),
+        // No `Glue` arm by design: the re-checker *declines* any judgement mentioning `Glue` during
+        // `from_kernel` (see `term.rs`), so a Glue line can never reach here — the trusted kernel
+        // owns the univalence Kan-Glue reduction, and the independent checker deliberately does not
+        // duplicate it. The residual heads (non-constant indexed-`Data`/`Int`/`Eff` lines) are
+        // unreachable from the corpus (all constant ⟹ caught by `family_is_constant` above); we
+        // *fail safe* (panic) rather than risk a silent mis-reduction, mirroring `blight_kernel`.
+        _ => unimplemented!(
+            "recheck transp: unsupported heterogeneous former (Pi/Sigma/PathP/Data/Univ implemented; \
+             Glue is declined upstream; a non-constant indexed/Int/Eff line is unreachable from the \
+             corpus and fail-safe, never an acceptance)"
+        ),
     }
 }
 
@@ -212,7 +222,14 @@ pub fn hcomp(
                 body: Rc::new(hc),
             })
         }
-        _ => unimplemented!("recheck hcomp: varying face in a closed inductive/universe"),
+        // Mirrors `blight_kernel::kan::hcomp`: Π/Σ/PathP compose structurally above; a varying face
+        // in a closed inductive/universe/Glue needs the system machinery the value domain does not
+        // represent and is unreachable from the corpus (Glue is declined upstream). Fail-safe panic,
+        // never a silent acceptance.
+        _ => unimplemented!(
+            "recheck hcomp: varying face in a closed inductive/universe/Glue (unreachable from the \
+             corpus; fail-safe, never an acceptance)"
+        ),
     }
 }
 

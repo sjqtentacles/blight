@@ -34,21 +34,63 @@ pub enum Target {
     Wasm32,
 }
 
-/// Emit an object file for `prog` at `out_path` (e.g. `foo.o`) for the host (native) target.
-pub fn emit_object(prog: &AnfProgram, out_path: &std::path::Path) -> Result<(), String> {
-    emit_object_for_target(prog, out_path, Target::Native)
+/// IR-level optimization applied before object emission via LLVM's new pass manager
+/// ([`inkwell::module::Module::run_passes`]). Prior to B1 the emitter ran **no** IR passes (only the
+/// target machine's `OptimizationLevel::Default` governed instruction selection), so the lowered ANF
+/// went to the backend essentially verbatim. Each level runs the corresponding `opt`-style default
+/// pipeline. All default pipelines preserve `musttail` markers, so tail-call soundness (spec §7.4)
+/// is unaffected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OptLevel {
+    /// No IR passes (fastest compile; largest/slowest code). The historical behavior.
+    None,
+    /// `default<O2>` — the balanced pipeline. The default for `blight build`.
+    #[default]
+    Default,
+    /// `default<O3>` — the aggressive pipeline.
+    Aggressive,
 }
 
-/// Emit an object file for `prog` at `out_path` for the requested `target`.
+impl OptLevel {
+    /// The `opt`-style pass-pipeline string for this level, or `None` to skip the pass manager.
+    fn pipeline(self) -> Option<&'static str> {
+        match self {
+            OptLevel::None => None,
+            OptLevel::Default => Some("default<O2>"),
+            OptLevel::Aggressive => Some("default<O3>"),
+        }
+    }
+
+    /// Parse a CLI `--opt` value (`0`/`none`, `2`/`default`, `3`/`aggressive`).
+    pub fn parse(s: &str) -> Result<OptLevel, String> {
+        match s {
+            "0" | "none" => Ok(OptLevel::None),
+            "2" | "default" => Ok(OptLevel::Default),
+            "3" | "aggressive" => Ok(OptLevel::Aggressive),
+            other => Err(format!(
+                "unknown --opt level `{other}` (expected 0/none, 2/default, or 3/aggressive)"
+            )),
+        }
+    }
+}
+
+/// Emit an object file for `prog` at `out_path` (e.g. `foo.o`) for the host (native) target at the
+/// default optimization level.
+pub fn emit_object(prog: &AnfProgram, out_path: &std::path::Path) -> Result<(), String> {
+    emit_object_for_target(prog, out_path, Target::Native, OptLevel::default())
+}
+
+/// Emit an object file for `prog` at `out_path` for the requested `target` and `opt` level.
 pub fn emit_object_for_target(
     prog: &AnfProgram,
     out_path: &std::path::Path,
     target: Target,
+    opt: OptLevel,
 ) -> Result<(), String> {
     let context = Context::create();
     let codegen = Codegen::with_tags(&context, "blight_module", prog.con_tags.clone());
     codegen.emit_program(prog)?;
-    codegen.write_object(out_path, target)
+    codegen.write_object(out_path, target, opt)
 }
 
 /// Emit textual LLVM IR for `prog` (used by tests to assert on `tailcc`/`musttail`).
@@ -972,7 +1014,12 @@ impl<'ctx> Codegen<'ctx> {
         gv.as_pointer_value()
     }
 
-    fn write_object(&self, out_path: &std::path::Path, target: Target) -> Result<(), String> {
+    fn write_object(
+        &self,
+        out_path: &std::path::Path,
+        target: Target,
+        opt: OptLevel,
+    ) -> Result<(), String> {
         use inkwell::targets::{
             CodeModel, FileType, InitializationConfig, RelocMode, Target as LlvmTarget,
             TargetMachine, TargetTriple,
@@ -1018,6 +1065,16 @@ impl<'ctx> Codegen<'ctx> {
         if matches!(target, Target::Wasm32) {
             self.module
                 .set_data_layout(&machine.get_target_data().get_data_layout());
+        }
+        // Run the IR-level optimization pipeline (new pass manager) before object emission. The
+        // `default<Ox>` pipelines preserve `musttail` markers, so tail-call soundness is unaffected;
+        // a verifier pass guards against a malformed module reaching the backend.
+        if let Some(pipeline) = opt.pipeline() {
+            use inkwell::passes::PassBuilderOptions;
+            let options = PassBuilderOptions::create();
+            self.module
+                .run_passes(pipeline, &machine, options)
+                .map_err(|e| format!("LLVM pass pipeline `{pipeline}` failed: {e}"))?;
         }
         machine
             .write_to_file(&self.module, FileType::Object, out_path)
@@ -1351,5 +1408,119 @@ int main(void) {
             gc_collections > 0,
             "the non-region workload must force GC collections (got {gc_collections})"
         );
+    }
+
+    /// `--opt` parsing accepts the documented spellings and rejects anything else.
+    #[test]
+    fn opt_level_parse() {
+        assert_eq!(OptLevel::parse("0").unwrap(), OptLevel::None);
+        assert_eq!(OptLevel::parse("none").unwrap(), OptLevel::None);
+        assert_eq!(OptLevel::parse("2").unwrap(), OptLevel::Default);
+        assert_eq!(OptLevel::parse("default").unwrap(), OptLevel::Default);
+        assert_eq!(OptLevel::parse("3").unwrap(), OptLevel::Aggressive);
+        assert_eq!(OptLevel::parse("aggressive").unwrap(), OptLevel::Aggressive);
+        assert_eq!(OptLevel::default(), OptLevel::Default);
+        assert!(OptLevel::parse("O2").is_err());
+        assert!(OptLevel::parse("").is_err());
+    }
+
+    /// The IR pass pipeline runs for every level without error and preserves correctness: emitting
+    /// the *same* program at `None`/`Default`/`Aggressive` must each produce a valid object that
+    /// links and runs to the *same* result (musttail markers survive the `default<Ox>` pipelines, so
+    /// tail-call soundness is unaffected — spec §7.4). This is the B1 regression guard that wiring
+    /// `--opt` did not break codegen.
+    #[test]
+    fn opt_levels_emit_runnable_objects() {
+        // A program returning `Succ Zero` — a concrete constructor value, so the result tag is a
+        // meaningful correctness witness that each opt level must preserve. (The musttail-survival
+        // property of the pipelines is also exercised by the loop-based IR tests.)
+        let prog = succ_zero_program();
+        let dir = std::env::temp_dir().join(format!("blight_opt_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let runtime = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime");
+
+        let mut tags = Vec::new();
+        for (label, opt) in [
+            ("o0", OptLevel::None),
+            ("o2", OptLevel::Default),
+            ("o3", OptLevel::Aggressive),
+        ] {
+            let obj = dir.join(format!("opt_{label}.o"));
+            emit_object_for_target(&prog, &obj, Target::Native, opt)
+                .unwrap_or_else(|e| panic!("emit at {label} failed: {e}"));
+            let mut objs = vec![obj.clone()];
+            for src in ["gc.c", "stack.c", "delay.c", "effects.c", "arena.c"] {
+                let o = dir.join(format!("opt_{label}_{src}.o"));
+                let st = Command::new("clang")
+                    .args(["-c", "-O2", "-I"])
+                    .arg(&runtime)
+                    .arg(runtime.join(src))
+                    .arg("-o")
+                    .arg(&o)
+                    .status()
+                    .expect("clang -c");
+                assert!(st.success(), "compiling {src} for {label}");
+                objs.push(o);
+            }
+            let main_c = dir.join(format!("opt_{label}_main.c"));
+            std::fs::write(
+                &main_c,
+                r#"
+#include "blight_rt.h"
+#include <stdio.h>
+extern BlValue bl_program_entry(void);
+int main(void) {
+  bl_gc_init(8 * 1024 * 1024);
+  bl_stack_init();
+  BlValue r = bl_program_entry();
+  unsigned tag = r ? (unsigned)BL_TAG(r) : 999u;
+  printf("RESULT tag=%u\n", tag);
+  return 0;
+}
+"#,
+            )
+            .unwrap();
+            let main_obj = dir.join(format!("opt_{label}_main.o"));
+            let st = Command::new("clang")
+                .args(["-c", "-O2", "-I"])
+                .arg(&runtime)
+                .arg(&main_c)
+                .arg("-o")
+                .arg(&main_obj)
+                .status()
+                .expect("clang -c main");
+            assert!(st.success(), "compiling main for {label}");
+            objs.push(main_obj);
+
+            let bin = dir.join(format!("opt_{label}_bin"));
+            let mut link = Command::new("clang");
+            link.arg("-o").arg(&bin);
+            for o in &objs {
+                link.arg(o);
+            }
+            assert!(link.status().expect("link").success(), "link {label}");
+
+            let out = Command::new(&bin).output().expect("run");
+            assert!(out.status.success(), "{label} runs");
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let line = stdout
+                .lines()
+                .find(|l| l.starts_with("RESULT"))
+                .unwrap_or_else(|| panic!("{label}: no RESULT line: {stdout}"));
+            let tag: i32 = line
+                .split_whitespace()
+                .find_map(|t| t.strip_prefix("tag="))
+                .and_then(|v| v.parse().ok())
+                .unwrap_or_else(|| panic!("{label}: bad RESULT line: {line}"));
+            tags.push((label, tag));
+        }
+        // All opt levels must compute the identical result tag.
+        let first = tags[0].1;
+        for (label, tag) in &tags {
+            assert_eq!(
+                *tag, first,
+                "opt level {label} changed the result tag ({tag} != {first})"
+            );
+        }
     }
 }

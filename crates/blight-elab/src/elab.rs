@@ -6,7 +6,7 @@
 
 use crate::meta::{meta_term, MetaCtx};
 use crate::sexpr::Sexpr;
-use crate::surface::{Binder, Clause, ConstructorDecl, Decl, Surface};
+use crate::surface::{Binder, Clause, Cofibration, ConstructorDecl, Decl, Surface};
 use blight_kernel::Term;
 
 /// An elaboration error (parsing-into-surface or surface-into-core).
@@ -165,18 +165,14 @@ impl ElabEnv {
     /// As of plan item 1b the kernel performs *dependent pattern-match refinement* itself
     /// (`check_refined_method`/`refine_method`/`unify_index` in `blight-kernel`), so the former
     /// temporary skip of the `safe-tail`/`vec-map` index-`Mismatch` shape is **gone**: those
-    /// definitions are now kernel-certified directly. One narrow skip remains — a *higher-order
-    /// eliminator motive* (the `zip-vec` shape, detected structurally up front) — which is a distinct
-    /// kernel limitation (motive reconstruction, not refinement) that the independent re-checker also
-    /// honestly *declines*; it is out of scope for 1b.
+    /// definitions are now kernel-certified directly. As of A3 the elaborator also lowers nested
+    /// matches that lift a still-in-scope binder into a *higher-order eliminator motive* (the
+    /// `zip-vec` shape) into a core term that BOTH the kernel and the independent re-checker fully
+    /// certify — the per-arm index refinement of the lifted binder's type is performed during
+    /// lowering (see `lower_match`) — so there is no longer any skip here: every gated definition is
+    /// kernel-checked.
     fn kernel_check_def(&self, name: &str, term: &Term, ty: &Term) -> Result<(), ElabError> {
         if !gate_routes_through_kernel(ty) {
-            return Ok(());
-        }
-        // The higher-order-motive shape (`zip-vec`) is detected structurally and skipped — the kernel
-        // cannot reconstruct it yet and the re-checker declines it. Detecting it here (vs. matching a
-        // brittle kernel error) keeps the skip precise. This is NOT a dependent-match-refinement case.
-        if term_has_higher_order_elim_motive(term) {
             return Ok(());
         }
         match blight_kernel::check_top_with(self.signature().clone(), term.clone(), ty.clone()) {
@@ -631,6 +627,64 @@ fn parse_list(items: &[Sexpr]) -> Result<Surface, ElabError> {
                 }
                 return Ok(Surface::Force(Box::new(parse_surface(&items[1])?)));
             }
+            // ---- cubical Kan / Glue layer (plan A2b) ----
+            "Partial" => {
+                if items.len() != 3 {
+                    return Err(ElabError::BadForm("(Partial φ A)".into()));
+                }
+                return Ok(Surface::Partial(
+                    Box::new(parse_cofib(&items[1])?),
+                    Box::new(parse_surface(&items[2])?),
+                ));
+            }
+            "system" => {
+                let mut branches = Vec::new();
+                for b in &items[1..] {
+                    let parts = match b {
+                        Sexpr::List(p) if p.len() == 2 => p,
+                        _ => return Err(ElabError::BadForm("(system (φ t) ...)".into())),
+                    };
+                    branches.push((parse_cofib(&parts[0])?, parse_surface(&parts[1])?));
+                }
+                return Ok(Surface::System(branches));
+            }
+            "Glue" => {
+                if items.len() != 5 {
+                    return Err(ElabError::BadForm("(Glue A φ T e)".into()));
+                }
+                return Ok(Surface::Glue(
+                    Box::new(parse_surface(&items[1])?),
+                    Box::new(parse_cofib(&items[2])?),
+                    Box::new(parse_surface(&items[3])?),
+                    Box::new(parse_surface(&items[4])?),
+                ));
+            }
+            "glue" => {
+                if items.len() != 4 {
+                    return Err(ElabError::BadForm("(glue φ t a)".into()));
+                }
+                return Ok(Surface::GlueTerm(
+                    Box::new(parse_cofib(&items[1])?),
+                    Box::new(parse_surface(&items[2])?),
+                    Box::new(parse_surface(&items[3])?),
+                ));
+            }
+            "unglue" => {
+                if items.len() != 2 {
+                    return Err(ElabError::BadForm("(unglue g)".into()));
+                }
+                return Ok(Surface::Unglue(Box::new(parse_surface(&items[1])?)));
+            }
+            "transp" => {
+                if items.len() != 4 {
+                    return Err(ElabError::BadForm("(transp (plam (i) A) φ a0)".into()));
+                }
+                return Ok(Surface::Transp(
+                    Box::new(parse_surface(&items[1])?),
+                    Box::new(parse_cofib(&items[2])?),
+                    Box::new(parse_surface(&items[3])?),
+                ));
+            }
             // ---- primitive machine integers (M11) ----
             "int" => {
                 // `(int 42)` — an `Int` literal. The numeral is parsed as a real `i64` (not a unary
@@ -820,6 +874,38 @@ fn parse_name_list(s: &Sexpr) -> Result<Vec<String>, ElabError> {
     match s {
         Sexpr::List(items) => items.iter().map(sym).collect(),
         _ => Err(ElabError::BadForm("expected a list of names".into())),
+    }
+}
+
+/// Parse a surface cofibration `φ` (plan A2b): `ctop`, `cbot`, `(ieq0 r)`, `(ieq1 r)`,
+/// `(cand φ ψ)`, `(cor φ ψ)`. Interval subterms `r` are parsed as ordinary surface terms and
+/// reduced to kernel intervals later by `elab_interval`.
+fn parse_cofib(s: &Sexpr) -> Result<Cofibration, ElabError> {
+    match s {
+        Sexpr::Atom(a) if a == "ctop" => Ok(Cofibration::Top),
+        Sexpr::Atom(a) if a == "cbot" => Ok(Cofibration::Bot),
+        Sexpr::List(items) if !items.is_empty() => {
+            let head = sym(&items[0])?;
+            match (head.as_str(), &items[1..]) {
+                ("ieq0", [r]) => Ok(Cofibration::Eq0(Box::new(parse_surface(r)?))),
+                ("ieq1", [r]) => Ok(Cofibration::Eq1(Box::new(parse_surface(r)?))),
+                ("cand", [p, q]) => Ok(Cofibration::And(
+                    Box::new(parse_cofib(p)?),
+                    Box::new(parse_cofib(q)?),
+                )),
+                ("cor", [p, q]) => Ok(Cofibration::Or(
+                    Box::new(parse_cofib(p)?),
+                    Box::new(parse_cofib(q)?),
+                )),
+                _ => Err(ElabError::BadForm(
+                    "expected a cofibration: ctop, cbot, (ieq0 r), (ieq1 r), (cand φ ψ), (cor φ ψ)"
+                        .into(),
+                )),
+            }
+        }
+        _ => Err(ElabError::BadForm(
+            "expected a cofibration: ctop, cbot, (ieq0 r), (ieq1 r), (cand φ ψ), (cor φ ψ)".into(),
+        )),
     }
 }
 
@@ -1208,8 +1294,12 @@ impl Scope {
     }
 }
 
-/// Resolve a surface interval expression (a dimension variable or an endpoint) to a kernel
-/// [`Interval`].
+/// Resolve a surface interval expression to a kernel [`Interval`]. Beyond the endpoints `i0`/`i1`
+/// and dimension variables, the De Morgan structure of the interval is exposed as ordinary
+/// application sugar: `(~ r)` is negation, `(imin r s)` / `(r /\ s)` is meet, `(imax r s)` /
+/// `(r \/ s)` is join. These are pure elaborator sugar over the kernel's `Interval::{Neg,Min,Max}`
+/// (which the kernel already validates), so they add nothing to the TCB; they let tower code write
+/// the connection terms that singleton-contraction / `id-equiv`-style proofs require.
 fn elab_interval(scope: &Scope, term: &Surface) -> Result<blight_kernel::Interval, ElabError> {
     use blight_kernel::Interval;
     match term {
@@ -1219,7 +1309,45 @@ fn elab_interval(scope: &Scope, term: &Surface) -> Result<blight_kernel::Interva
             .dim_index(v)
             .map(Interval::Dim)
             .ok_or_else(|| ElabError::Unbound(format!("dimension `{v}`"))),
+        // De Morgan combinators, written as applications of reserved interval operators.
+        Surface::App(head, args) => match (&**head, args.as_slice()) {
+            (Surface::Var(op), [r]) if op == "~" || op == "ineg" => {
+                Ok(Interval::Neg(Box::new(elab_interval(scope, r)?)))
+            }
+            (Surface::Var(op), [r, s]) if op == "imin" || op == "/\\" => Ok(Interval::Min(
+                Box::new(elab_interval(scope, r)?),
+                Box::new(elab_interval(scope, s)?),
+            )),
+            (Surface::Var(op), [r, s]) if op == "imax" || op == "\\/" => Ok(Interval::Max(
+                Box::new(elab_interval(scope, r)?),
+                Box::new(elab_interval(scope, s)?),
+            )),
+            _ => Err(ElabError::BadForm(
+                "expected an interval expression (i0, i1, a dim, (~ r), (imin r s), (imax r s))"
+                    .into(),
+            )),
+        },
         _ => Err(ElabError::BadForm("expected an interval expression".into())),
+    }
+}
+
+/// Elaborate a surface [`Cofibration`] to the kernel [`blight_kernel::Cofib`], reducing its interval
+/// subterms via [`elab_interval`] (plan A2b).
+fn elab_cofib(scope: &Scope, cofib: &Cofibration) -> Result<blight_kernel::Cofib, ElabError> {
+    use blight_kernel::Cofib;
+    match cofib {
+        Cofibration::Top => Ok(Cofib::Top),
+        Cofibration::Bot => Ok(Cofib::Bot),
+        Cofibration::Eq0(r) => Ok(Cofib::Eq0(elab_interval(scope, r)?)),
+        Cofibration::Eq1(r) => Ok(Cofib::Eq1(elab_interval(scope, r)?)),
+        Cofibration::And(p, q) => Ok(Cofib::And(
+            Box::new(elab_cofib(scope, p)?),
+            Box::new(elab_cofib(scope, q)?),
+        )),
+        Cofibration::Or(p, q) => Ok(Cofib::Or(
+            Box::new(elab_cofib(scope, p)?),
+            Box::new(elab_cofib(scope, q)?),
+        )),
     }
 }
 
@@ -1363,6 +1491,65 @@ fn elab(
             let pc = elab(env, scope, p, None)?;
             let rc = elab_interval(scope, r)?;
             Ok(Term::PApp(Box::new(pc), rc))
+        }
+
+        // ---- cubical Kan / Glue layer (plan A2b) ----
+        Surface::Partial(cofib, a) => {
+            let c = elab_cofib(scope, cofib)?;
+            let a_c = elab(env, scope, a, None)?;
+            Ok(Term::Partial(c, Box::new(a_c)))
+        }
+        Surface::System(branches) => {
+            let mut bs = Vec::with_capacity(branches.len());
+            for (cofib, t) in branches {
+                let face = elab_cofib(scope, cofib)?;
+                let term = elab(env, scope, t, None)?;
+                bs.push(blight_kernel::SystemBranch { face, term });
+            }
+            Ok(Term::System(bs))
+        }
+        Surface::Glue(base, cofib, ty, equiv) => {
+            let base_c = elab(env, scope, base, None)?;
+            let c = elab_cofib(scope, cofib)?;
+            let ty_c = elab(env, scope, ty, None)?;
+            let equiv_c = elab(env, scope, equiv, None)?;
+            Ok(Term::Glue {
+                base: Box::new(base_c),
+                cofib: c,
+                ty: Box::new(ty_c),
+                equiv: Box::new(equiv_c),
+            })
+        }
+        Surface::GlueTerm(cofib, partial, base) => {
+            let c = elab_cofib(scope, cofib)?;
+            let partial_c = elab(env, scope, partial, None)?;
+            let base_c = elab(env, scope, base, None)?;
+            Ok(Term::GlueTerm {
+                cofib: c,
+                partial: Box::new(partial_c),
+                base: Box::new(base_c),
+            })
+        }
+        Surface::Unglue(g) => Ok(Term::Unglue(Box::new(elab(env, scope, g, None)?))),
+        Surface::Transp(line, cofib, base) => {
+            // The line is `(plam (i) A)`; elaborate it to a `PLam`, then unwrap to the bare body so
+            // the kernel's `Transp { family, .. }` sees the dimension-binding family directly.
+            let line_c = elab(env, scope, line, None)?;
+            let family = match line_c {
+                Term::PLam(body) => *body,
+                other => {
+                    return Err(ElabError::BadForm(format!(
+                        "(transp line φ a0): line must be `(plam (i) A)`, got {other:?}"
+                    )))
+                }
+            };
+            let c = elab_cofib(scope, cofib)?;
+            let base_c = elab(env, scope, base, None)?;
+            Ok(Term::Transp {
+                family: Box::new(family),
+                cofib: c,
+                base: Box::new(base_c),
+            })
         }
 
         Surface::Match(scruts, clauses) => {
@@ -2207,83 +2394,6 @@ fn gate_routes_through_kernel(ty: &Term) -> bool {
     }
 }
 
-/// Whether `term` contains an eliminator (`Elim`) with a **higher-order motive** — one whose body,
-/// after peeling its leading `Lam` binders (the index binders + the scrutinee binder), is itself a
-/// `Pi`. This is the `zip-vec` shape: matching `v` while a second vector `w` is still in scope lifts
-/// `w` into the motive, so the result is a *function* `Vec B n → Vec (Pair A B) n`.
-///
-/// TEMPORARY (plan item 1a, removed by 1b): the kernel cannot yet reconstruct such a motive (it
-/// errors mid-check), and the independent re-checker *honestly DECLINES* this exact shape rather than
-/// re-verify it. It is part of the same dependent-pattern-matching frontier item 1b closes. Until
-/// then the gate detects it structurally (deterministically, in untrusted elaborator code) and skips
-/// it, rather than matching a brittle kernel error string. `safe-tail`/`vec-map` do NOT match here:
-/// their motive body is a `Data` (`Vec A n`), not a `Pi`.
-fn term_has_higher_order_elim_motive(term: &Term) -> bool {
-    fn motive_is_higher_order(motive: &Term) -> bool {
-        let mut body = motive;
-        while let Term::Lam(inner) = body {
-            body = inner;
-        }
-        matches!(body, Term::Pi(_, _, _))
-    }
-    fn walk(t: &Term) -> bool {
-        match t {
-            Term::Elim {
-                motive,
-                methods,
-                scrutinee,
-                ..
-            } => {
-                motive_is_higher_order(motive)
-                    || walk(motive)
-                    || methods.iter().any(walk)
-                    || walk(scrutinee)
-            }
-            Term::Var(_) | Term::Univ(_) | Term::Interval(_) | Term::Foreign { .. } => false,
-            Term::Pi(_, a, b)
-            | Term::Sigma(a, b)
-            | Term::Pair(a, b)
-            | Term::App(a, b)
-            | Term::Ann(a, b) => walk(a) || walk(b),
-            Term::Lam(a)
-            | Term::Fst(a)
-            | Term::Snd(a)
-            | Term::PLam(a)
-            | Term::Delay(a)
-            | Term::Now(a)
-            | Term::Later(a)
-            | Term::Force(a)
-            | Term::Unglue(a)
-            | Term::EffTy(_, a) => walk(a),
-            Term::PApp(a, _) => walk(a),
-            Term::Data(_, xs, ys) => xs.iter().any(walk) || ys.iter().any(walk),
-            Term::Con(_, xs) => xs.iter().any(walk),
-            Term::PathP { family, lhs, rhs } => walk(family) || walk(lhs) || walk(rhs),
-            Term::Partial(_, a) => walk(a),
-            Term::System(branches) => branches.iter().any(|b| walk(&b.term)),
-            Term::Transp { family, base, .. } => walk(family) || walk(base),
-            Term::HComp { ty, tube, base, .. } => walk(ty) || walk(tube) || walk(base),
-            Term::Comp {
-                family, tube, base, ..
-            } => walk(family) || walk(tube) || walk(base),
-            Term::Glue {
-                base, ty, equiv, ..
-            } => walk(base) || walk(ty) || walk(equiv),
-            Term::GlueTerm { partial, base, .. } => walk(partial) || walk(base),
-            Term::Op { arg, .. } => walk(arg),
-            Term::Handle {
-                body,
-                return_clause,
-                op_clauses,
-            } => walk(body) || walk(return_clause) || op_clauses.iter().any(|(_, c)| walk(c)),
-            Term::IntTy | Term::IntLit(_) => false,
-            Term::IntPrim { lhs, rhs, .. } => walk(lhs) || walk(rhs),
-            Term::Erased => false,
-        }
-    }
-    walk(term)
-}
-
 /// Elaborate a `define-rec`/`deftotal` body. The body must be `(lam (x ...) (match xi clauses))`
 /// where the match is on one of the lambda binders; structural recursion is realized as the
 /// `Elim`'s induction hypotheses (spec §6.2). A non-structural recursive call is rejected when
@@ -2861,6 +2971,16 @@ fn elab_flat_match(
             _ => None,
         });
 
+    // For per-method *index refinement* of the re-introduced trailing binders: when this match's
+    // scrutinee `s : D ps i1..im` has variable indices `ivars`, each constructor's arm refines those
+    // index variables to the constructor's result-index expressions (e.g. matching `v : Vec A n`
+    // against `vcons m …` refines `n ↦ Succ m`). A trailing binder whose stored type mentions one of
+    // those index variables (e.g. a second vector `w : Vec B n` still in scope) must be re-bound at
+    // its *refined* type (`Vec B (Succ m)`) so that a nested match on it elaborates against the type
+    // the kernel will actually see. Without this, the elaborator builds the nested match's motive by
+    // abstracting a stale bare index variable that no longer matches the kernel's refined scrutinee
+    // index — the `zip-vec` inner-match de Bruijn/index mismatch.
+    let refine_ivars: Vec<usize> = index_vars.clone().unwrap_or_default();
     let motive = match index_vars {
         Some(ivars) if !ivars.is_empty() => {
             // Abstract, innermost-first, the scrutinee then the indices reversed, so the resulting
@@ -2979,11 +3099,110 @@ fn elab_flat_match(
         }
         sc.rec = rec;
 
+        // Per-method *index refinement* of the trailing binder types (see `refine_ivars` above).
+        // We compute, for this constructor, the refined value of each matched index variable — the
+        // constructor's `result_indices[d]` re-expressed in *this method's* de Bruijn scope — and
+        // substitute it for the (weakened) outer index variable in every trailing binder type. We
+        // handle the standard fragment where each result index is built from the constructor's own
+        // arguments (e.g. `vcons`'s `Succ m`); if a result index references a *parameter* or is
+        // otherwise outside this fragment we leave the trailing types unrefined (the kernel /
+        // re-checker still adjudicate — they will reject or decline rather than silently accept).
+        let refined_indices: Option<Vec<Term>> = if refine_ivars.is_empty() {
+            None
+        } else {
+            kernel_con.as_ref().and_then(|(_, con)| {
+                if con.result_indices.len() != refine_ivars.len() {
+                    return None;
+                }
+                let num_args = info.rec_flags.len();
+                // Map each constructor argument (source order) to its de Bruijn index within the
+                // con/IH binder block (the block sits *above* the not-yet-introduced trailing
+                // binders, so within the block the innermost binder is de Bruijn 0).
+                let mut seq: Vec<bool> = Vec::new(); // true = real arg, false = IH binder
+                for &is_rec in info.rec_flags.iter() {
+                    seq.push(true);
+                    if is_rec {
+                        seq.push(false);
+                    }
+                }
+                let total = seq.len();
+                debug_assert_eq!(total, n_con_binders);
+                let mut arg_db: Vec<usize> = Vec::with_capacity(num_args);
+                for (k, is_arg) in seq.iter().enumerate() {
+                    if *is_arg {
+                        // The k-th binder from the *outside* of the block sits at de Bruijn
+                        // `total - 1 - k` (innermost = 0). But trailing binders will be pushed
+                        // *below* (inside) these, so when we substitute into a trailing type the
+                        // con/IH binders are at de Bruijn `total - 1 - k` *plus* the trailing depth;
+                        // we record the in-block index and add the local `depth` during `conv`.
+                        arg_db.push(total - 1 - k);
+                    }
+                }
+                // Convert one `result_index` term from constructor-arg de Bruijn (innermost = last
+                // arg; params follow the args) into this method's scope. Returns `None` if it
+                // references anything we can't map (e.g. a parameter).
+                fn conv(t: &Term, depth: usize, num_args: usize, arg_db: &[usize]) -> Option<Term> {
+                    use blight_kernel::Term as T;
+                    Some(match t {
+                        T::Var(v) => {
+                            if *v < depth {
+                                T::Var(*v)
+                            } else {
+                                let a = *v - depth; // constructor-arg index (0 = last arg)
+                                if a < num_args {
+                                    let src_pos = num_args - 1 - a; // source order position
+                                    T::Var(arg_db[src_pos] + depth)
+                                } else {
+                                    // A parameter or out-of-range: outside the supported fragment.
+                                    return None;
+                                }
+                            }
+                        }
+                        T::Con(c, args) => T::Con(
+                            c.clone(),
+                            args.iter()
+                                .map(|x| conv(x, depth, num_args, arg_db))
+                                .collect::<Option<Vec<_>>>()?,
+                        ),
+                        T::Data(d, ps, is) => T::Data(
+                            d.clone(),
+                            ps.iter()
+                                .map(|x| conv(x, depth, num_args, arg_db))
+                                .collect::<Option<Vec<_>>>()?,
+                            is.iter()
+                                .map(|x| conv(x, depth, num_args, arg_db))
+                                .collect::<Option<Vec<_>>>()?,
+                        ),
+                        T::App(f, x) => T::App(
+                            Box::new(conv(f, depth, num_args, arg_db)?),
+                            Box::new(conv(x, depth, num_args, arg_db)?),
+                        ),
+                        // Anything richer is outside the fragment we refine.
+                        _ => return None,
+                    })
+                }
+                let mut out = Vec::with_capacity(con.result_indices.len());
+                for rix in &con.result_indices {
+                    out.push(conv(rix, 0, num_args, &arg_db)?);
+                }
+                Some(out)
+            })
+        };
+
         // Re-introduce the trailing binders (outermost-first so t_0 ends up at Var0 in the body).
         for i in (0..m).rev() {
             let pos = scope.vars.len() - 1 - i;
             let name = scope.vars[pos].clone();
-            sc = sc.push_var_ty(&name, Some(trailing[i].clone()));
+            // Lift the trailing type into this method's scope (past the `n_con_binders` con/IH
+            // binders), then apply the per-method index refinement.
+            let mut ty = weaken(&trailing[i], n_con_binders);
+            if let Some(refined) = &refined_indices {
+                for (d, &iv) in refine_ivars.iter().enumerate() {
+                    // The outer index variable `iv` now sits `n_con_binders` deeper.
+                    ty = subst_var(&ty, iv + n_con_binders, &refined[d]);
+                }
+            }
+            sc = sc.push_var_ty(&name, Some(ty));
         }
 
         // The method body is checked against the match result type when the motive is
@@ -2993,8 +3212,19 @@ fn elab_flat_match(
         let body_expected = if mentions_var(expected, scrut_idx) {
             None
         } else {
-            // Weaken past the constructor/IH binders and the re-introduced trailing binders.
-            Some(weaken(expected, n_con_binders + m))
+            // Weaken past the constructor/IH binders and the re-introduced trailing binders, then
+            // apply the same per-method index refinement as the trailing binders: in this arm the
+            // matched index variables are specialized to the constructor's result indices, so the
+            // body's expected type must use the refined indices (e.g. `Vec (Pair A B) n` becomes
+            // `Vec (Pair A B) (Succ m)` in `vcons`). Without this a nested match in the body would
+            // be checked against a stale index the kernel has already refined away.
+            let mut exp = weaken(expected, n_con_binders + m);
+            if let Some(refined) = &refined_indices {
+                for (d, &iv) in refine_ivars.iter().enumerate() {
+                    exp = subst_var(&exp, iv + n_con_binders + m, &weaken(&refined[d], m));
+                }
+            }
+            Some(exp)
         };
         let body = elab(env, &sc, clause.body, body_expected.as_ref())?;
         // Wrap: innermost are the trailing binders, then the constructor/IH binders.
@@ -3039,25 +3269,171 @@ fn abstract_var(term: &Term, k: usize) -> Term {
 /// `[scrut, im, …, i1]` so the scrutinee ends up innermost and the indices outermost, matching the
 /// peeling order in `check.rs`/`typecheck.rs`.
 fn abstract_vars(term: &Term, targets: &[usize]) -> Term {
-    // Abstract innermost target first; each subsequent (outer) target is now under one more binder,
-    // and any earlier target index shifts up by one — `abstract_var_at` with `depth` already moves
-    // free indices `≥ depth` up by one, so we just add a fresh binder per step and decrement the
-    // remaining (still-free) targets that were below the just-abstracted one.
-    let mut body = term.clone();
-    let mut remaining: Vec<usize> = targets.to_vec();
-    let mut step = 0usize;
-    while step < remaining.len() {
-        let k = remaining[step];
-        body = Term::Lam(Box::new(abstract_var(&body, k)));
-        // Variables not yet abstracted that were *above* `k` are unaffected; those below are
-        // unaffected too — `abstract_var` only rewrites occurrences of exactly `k` and shifts free
-        // vars uniformly. The remaining targets refer to the *original* scope, but each new binder
-        // lives outside the previously-added ones, so a remaining target `t` must be matched against
-        // the body that now has `step+1` extra binders: increase it by the binders added so far.
-        for t in remaining.iter_mut().skip(step + 1) {
-            *t += 1;
+    // Parallel (simultaneous) abstraction. `targets[j]` (a de Bruijn index in the *original* scope)
+    // becomes bound variable `j` in the body (so `targets[0]` is the innermost new binder). Every
+    // free variable that is NOT a target is shifted up by `p = targets.len()` to make room for the
+    // new binders; every occurrence of `targets[j]` is rewritten to that binder.
+    //
+    // A *sequential* fold (`abstract_var` per target) is WRONG when more than one target is
+    // abstracted: each wrapping `Lam` shifts the still-unabstracted free variables, so a later
+    // target index can collide with an already-shifted *non*-target (this is exactly the
+    // higher-order-motive `zip-vec` bug — abstracting the index `n` after the scrutinee `v` made
+    // `n`'s adjusted index coincide with the shifted element-type parameter `B`). Doing it in one
+    // pass with a fixed target→binder map avoids the collision entirely.
+    let p = targets.len();
+    // `binder_of[t] = Some(j)` means original de Bruijn `t` is `targets[j]`.
+    let binder_of = |t: usize| -> Option<usize> { targets.iter().position(|&x| x == t) };
+    fn go(t: &Term, depth: usize, p: usize, binder_of: &dyn Fn(usize) -> Option<usize>) -> Term {
+        use blight_kernel::Term as T;
+        let r = |x: &T| go(x, depth, p, binder_of);
+        let r1 = |x: &T| go(x, depth + 1, p, binder_of);
+        match t {
+            T::Var(i) => {
+                if crate::meta::is_meta(*i) {
+                    return T::Var(*i);
+                }
+                if *i < depth {
+                    // Bound by a binder introduced *inside* `term` (below the abstraction point).
+                    T::Var(*i)
+                } else {
+                    let orig = *i - depth;
+                    match binder_of(orig) {
+                        // A target: bind to its new binder `j`, re-adding the local `depth`.
+                        Some(j) => T::Var(depth + j),
+                        // A non-target free var: shift up by `p` to make room for the new binders.
+                        None => T::Var(*i + p),
+                    }
+                }
+            }
+            T::Univ(_)
+            | T::Interval(_)
+            | T::Erased
+            | T::IntTy
+            | T::IntLit(_)
+            | T::Foreign { .. } => t.clone(),
+            T::Pi(g, a, b) => T::Pi(*g, Box::new(r(a)), Box::new(r1(b))),
+            T::Sigma(a, b) => T::Sigma(Box::new(r(a)), Box::new(r1(b))),
+            T::Lam(b) => T::Lam(Box::new(r1(b))),
+            T::PLam(b) => T::PLam(Box::new(r(b))),
+            T::PApp(pp, iv) => T::PApp(Box::new(r(pp)), iv.clone()),
+            T::App(f, a) => T::App(Box::new(r(f)), Box::new(r(a))),
+            T::Pair(a, b) => T::Pair(Box::new(r(a)), Box::new(r(b))),
+            T::Fst(a) => T::Fst(Box::new(r(a))),
+            T::Snd(a) => T::Snd(Box::new(r(a))),
+            T::Ann(a, b) => T::Ann(Box::new(r(a)), Box::new(r(b))),
+            T::Data(d, ps, is) => T::Data(
+                d.clone(),
+                ps.iter().map(&r).collect(),
+                is.iter().map(&r).collect(),
+            ),
+            T::Con(c, args) => T::Con(c.clone(), args.iter().map(&r).collect()),
+            T::Elim {
+                data,
+                motive,
+                methods,
+                scrutinee,
+            } => T::Elim {
+                data: data.clone(),
+                // The motive binds one variable (the scrutinee).
+                motive: Box::new(r1(motive)),
+                methods: methods.iter().map(&r).collect(),
+                scrutinee: Box::new(r(scrutinee)),
+            },
+            T::PathP { family, lhs, rhs } => T::PathP {
+                // `family` binds one dimension variable, not a term variable: keep term depth.
+                family: Box::new(r(family)),
+                lhs: Box::new(r(lhs)),
+                rhs: Box::new(r(rhs)),
+            },
+            T::Partial(c, a) => T::Partial(c.clone(), Box::new(r(a))),
+            T::System(_) => t.clone(),
+            T::Transp {
+                family,
+                cofib,
+                base,
+            } => T::Transp {
+                family: Box::new(r(family)),
+                cofib: cofib.clone(),
+                base: Box::new(r(base)),
+            },
+            T::HComp {
+                ty,
+                cofib,
+                tube,
+                base,
+            } => T::HComp {
+                ty: Box::new(r(ty)),
+                cofib: cofib.clone(),
+                tube: Box::new(r(tube)),
+                base: Box::new(r(base)),
+            },
+            T::Comp {
+                family,
+                cofib,
+                tube,
+                base,
+            } => T::Comp {
+                family: Box::new(r(family)),
+                cofib: cofib.clone(),
+                tube: Box::new(r(tube)),
+                base: Box::new(r(base)),
+            },
+            T::Glue {
+                base,
+                cofib,
+                ty,
+                equiv,
+            } => T::Glue {
+                base: Box::new(r(base)),
+                cofib: cofib.clone(),
+                ty: Box::new(r(ty)),
+                equiv: Box::new(r(equiv)),
+            },
+            T::GlueTerm {
+                cofib,
+                partial,
+                base,
+            } => T::GlueTerm {
+                cofib: cofib.clone(),
+                partial: Box::new(r(partial)),
+                base: Box::new(r(base)),
+            },
+            T::Unglue(a) => T::Unglue(Box::new(r(a))),
+            T::Op { effect, op, arg } => T::Op {
+                effect: effect.clone(),
+                op: op.clone(),
+                arg: Box::new(r(arg)),
+            },
+            T::Handle {
+                body,
+                return_clause,
+                op_clauses,
+            } => T::Handle {
+                body: Box::new(r(body)),
+                // `return_clause` binds the result value `x` (1 binder).
+                return_clause: Box::new(r1(return_clause)),
+                // each op clause binds the operation argument `x` then the continuation `k`
+                // (2 binders).
+                op_clauses: op_clauses
+                    .iter()
+                    .map(|(name, cl)| (name.clone(), Box::new(go(cl, depth + 2, p, binder_of))))
+                    .collect(),
+            },
+            T::EffTy(row, a) => T::EffTy(row.clone(), Box::new(r(a))),
+            T::Delay(a) => T::Delay(Box::new(r(a))),
+            T::Now(a) => T::Now(Box::new(r(a))),
+            T::Later(a) => T::Later(Box::new(r(a))),
+            T::Force(a) => T::Force(Box::new(r(a))),
+            T::IntPrim { op, lhs, rhs } => T::IntPrim {
+                op: *op,
+                lhs: Box::new(r(lhs)),
+                rhs: Box::new(r(rhs)),
+            },
         }
-        step += 1;
+    }
+    let mut body = go(term, 0, p, &binder_of);
+    for _ in 0..p {
+        body = Term::Lam(Box::new(body));
     }
     body
 }
@@ -3105,6 +3481,75 @@ fn subst0_closed(t: &Term, c: &Term) -> Term {
         }
     }
     go(t, 0, c)
+}
+
+/// Substitute the free de Bruijn variable `target` with `repl` everywhere in `t`, **without**
+/// renumbering the other variables (an in-place replacement, not a binder elimination). `repl` is
+/// shifted up as the traversal crosses binders so it remains valid at each occurrence. Used for
+/// per-method index refinement of trailing-binder types (e.g. replacing the matched index variable
+/// `n` with a constructor's refined index `Succ m`).
+fn subst_var(t: &Term, target: usize, repl: &Term) -> Term {
+    fn go(t: &Term, j: usize, target: usize, repl: &Term) -> Term {
+        use blight_kernel::Term as T;
+        let r = |x: &T| go(x, j, target, repl);
+        let r1 = |x: &T| go(x, j + 1, target, repl);
+        match t {
+            T::Var(i) => {
+                if crate::meta::is_meta(*i) {
+                    T::Var(*i)
+                } else if *i == j + target {
+                    // Shift the replacement past the `j` binders crossed so far.
+                    weaken(repl, j)
+                } else {
+                    T::Var(*i)
+                }
+            }
+            T::Univ(_)
+            | T::Interval(_)
+            | T::Erased
+            | T::System(_)
+            | T::IntTy
+            | T::IntLit(_)
+            | T::Foreign { .. } => t.clone(),
+            T::Pi(g, a, b) => T::Pi(*g, Box::new(r(a)), Box::new(r1(b))),
+            T::Sigma(a, b) => T::Sigma(Box::new(r(a)), Box::new(r1(b))),
+            T::Lam(b) => T::Lam(Box::new(r1(b))),
+            T::PLam(b) => T::PLam(Box::new(r(b))),
+            T::PApp(p, iv) => T::PApp(Box::new(r(p)), iv.clone()),
+            T::App(f, x) => T::App(Box::new(r(f)), Box::new(r(x))),
+            T::Pair(a, b) => T::Pair(Box::new(r(a)), Box::new(r(b))),
+            T::Fst(p) => T::Fst(Box::new(r(p))),
+            T::Snd(p) => T::Snd(Box::new(r(p))),
+            T::Ann(a, b) => T::Ann(Box::new(r(a)), Box::new(r(b))),
+            T::Data(n, ps, is) => T::Data(
+                n.clone(),
+                ps.iter().map(&r).collect(),
+                is.iter().map(&r).collect(),
+            ),
+            T::Con(n, args) => T::Con(n.clone(), args.iter().map(&r).collect()),
+            T::Elim {
+                data,
+                motive,
+                methods,
+                scrutinee,
+            } => T::Elim {
+                data: data.clone(),
+                motive: Box::new(r1(motive)),
+                methods: methods.iter().map(&r).collect(),
+                scrutinee: Box::new(r(scrutinee)),
+            },
+            T::Delay(a) => T::Delay(Box::new(r(a))),
+            T::Now(a) => T::Now(Box::new(r(a))),
+            T::Later(a) => T::Later(Box::new(r(a))),
+            T::Force(a) => T::Force(Box::new(r(a))),
+            // Refinement only ever touches simple type/term structure (Pi/Sigma/Data/Con/App over
+            // the index variables); cubical/effect nodes are left structurally untouched here. If a
+            // trailing type contained one, its inner free vars would not be refined — but those are
+            // outside the supported fragment and the kernel/re-checker still adjudicate.
+            other => other.clone(),
+        }
+    }
+    go(t, 0, target, repl)
 }
 
 /// `depth` counts binders crossed since entering the abstraction.

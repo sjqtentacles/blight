@@ -193,7 +193,7 @@ bare REPL.
 ### Building a program
 
 ```
-blight build <file.bl> [-o <bin>] [--recheck] [--target=wasm32]
+blight build <file.bl> [-o <bin>] [--recheck] [--target=wasm32] [--opt=<level>]
 ```
 
 - `<file.bl>` is elaborated and every form is type-checked; its `main` global is compiled, run, and
@@ -207,6 +207,10 @@ blight build <file.bl> [-o <bin>] [--recheck] [--target=wasm32]
   emitting code; a rejection aborts the build as a soundness alarm.
 - `--target=wasm32` emits a WebAssembly module — a linked `.wasm` (exporting `bl_main`) when a
   wasm-capable `clang` + `wasm-ld` are found, else the object only (see caveats). Default is `native`.
+- `--opt=<level>` selects the LLVM IR optimization pipeline: `0`/`none`, `2`/`default` (the default),
+  or `3`/`aggressive`. The pipelines preserve `musttail` tail calls. Note: with no cross-object LTO
+  against the C runtime, higher levels currently cost a little compile time without measurably moving
+  runtime (see [docs/performance.md §2d](docs/performance.md)).
 
 `blight build` requires a binary built `--features llvm`. For example, from a checkout:
 
@@ -241,8 +245,12 @@ cargo run -p blight-repl --features llvm -- build examples/hello_nat.bl -o hello
 - **Cubical paths** — equality is a `Path` type, and the kernel's Kan table implements `transp`,
   `hcomp`, and `comp` (`comp = hcomp + transp`, CCHM) plus `Glue`/`unglue`, conformance-tested
   against Cubical Agda ([crates/blight-kernel/src/kan.rs](crates/blight-kernel/src/kan.rs)).
-  Function extensionality is *provable* in the conformance suite. Full `ua`/univalence transport is
-  not yet wired up (see caveats).
+  Function extensionality and univalence (`ua`) are both provable in the standard library
+  ([std/path.bl](crates/blight-prelude/std/path.bl)): `funext` re-checks, and `ua` is built from a
+  single-face `Glue` line whose `transp` reduces to the equivalence's forward map (the univalence
+  *computation* rule, witnessed by a kernel white-box test and the closed
+  [ua_compute.bl](examples/ua_compute.bl)). The independent re-checker `Declines` `ua`/`Glue`
+  (TCB-disciplined — see caveats).
 - **Traits and modules** — dictionary-passing `Show`/`Ord` and an ML-style `RedBlackTree` functor
   applied to a `Nat` module ([std/tree.bl](crates/blight-prelude/std/tree.bl)).
 - **Effects and grades** — quantitative binders (`0`/`1`/`ω`) drive erasure and region elision;
@@ -257,10 +265,10 @@ cargo run -p blight-repl --features llvm -- build examples/hello_nat.bl -o hello
 
 ## Examples
 
-The [examples/](examples/) directory has a mix of **buildable** programs (a `main` — a `Nat`, or a
-`String` printed as text — that `blight build` compiles, runs, and prints) and **load-only**
-programs (typecheck through the REPL / test corpus, e.g. tactic proofs, functors, and effects the
-re-checker declines). See [examples/README.md](examples/README.md) for the full table with run
+The [examples/](examples/) directory has a mix of **buildable** programs (a `main` — a `Nat`, a
+native `Int`, or a `String` printed as text — that `blight build` compiles, runs, and prints) and
+**load-only** programs (typecheck through the REPL / test corpus, e.g. tactic proofs, functors, and
+effects). See [examples/README.md](examples/README.md) for the full table with run
 commands and expected outputs.
 
 | Example | Kind | What it shows |
@@ -300,8 +308,10 @@ predictable, bounded-stack execution — not peak throughput. The headline trade
 - **Advantages** — two small checkers agreeing is the soundness story; deep recursion runs in bounded
   stack via the `Later`/`Fix` trampoline; `(region …)` arenas reclaim in O(1) and bypass the GC; the
   GC is precise (no leaks mid-run) and `musttail` calls are guaranteed.
-- **Disadvantages** — `Nat` is unary, so arithmetic is O(n) heap allocations; every value is boxed;
-  no LLVM optimization-pass pipeline runs yet (IR is emitted at `Default`); the trampoline allocates
+- **Disadvantages** — `Nat` is unary, so arithmetic is O(n) heap allocations (use the primitive
+  machine `Int` for numeric scale); every value is boxed; LLVM optimization passes are available via
+  `--opt` but buy no measurable runtime gain on the current C-runtime/GC-bound architecture (no
+  cross-object LTO); the trampoline allocates
   a thunk per step; the wasm runtime is bump-only (no GC, no `Later`/effects/regions); the native
   heap is a fixed 64 MiB.
 
@@ -332,20 +342,32 @@ See the [milestone map](docs/implementation.md#7-milestone-map-m0m6) and the
 
 - The *combination* of cubical + grading + effects in one kernel has no published end-to-end
   normalization proof; M0 soundness rests on the component results plus extensive testing (spec §10).
-- The cubical layer ships `transp`/`hcomp`/`comp` and `Glue`/`unglue`, and function extensionality
-  is provable in the conformance suite, but a `ua`/univalence *transport* operation is not yet wired
-  up — `ua` is not defined in the shipped kernel or standard library. Neither `funext` nor `ua` is
-  exported as a named standard-library definition today.
+- The cubical layer ships `transp`/`hcomp`/`comp` and `Glue`/`unglue`. Both `funext` and `ua` are
+  exported from [std/path.bl](crates/blight-prelude/std/path.bl): `funext` re-checks, and `ua` is
+  built from a single-face `Glue` line. The univalence *computation* rule (`transp` over `ua e`
+  reduces to `e`'s forward map) holds definitionally in the kernel and is witnessed by a white-box
+  test plus the closed [ua_compute.bl](examples/ua_compute.bl). What is **deliberately deferred** is
+  a *polymorphic* `ua-computes` lemma proved inside Blight: that would force threading De Bruijn
+  *levels* through the open-Kan API — trusted-surface growth the kernel-size analysis argues
+  against. The independent re-checker `Declines` `ua`/`Glue` (an honest "won't certify", never a
+  rejection). See [docs/metatheory.md](docs/metatheory.md) §1.4–§1.5.
 - `--target=wasm32` emits a WebAssembly object and, when a wasm-capable `clang` + `wasm-ld` are
   available (set `BLIGHT_WASM_CC` / `BLIGHT_WASM_LD` or have them on `PATH`), links a runnable
   `.wasm` module exporting `bl_main` against a minimal freestanding wasm ABI; without that toolchain
   it falls back to emitting the object only.
-- The re-checker covers the core fragment plus multi-parameter / multi-index inductive eliminators
-  and the cubical Kan table (transp/hcomp/comp); it honestly *declines* (rather than rejects)
-  effects/handlers and partiality. Declines are counted and reported, never silently skipped.
+- The re-checker covers the core fragment plus multi-parameter / multi-index inductive eliminators,
+  the cubical Kan table (transp/hcomp/comp), native `Int`, and effects/handlers + partiality
+  *at the type level* (a genuine second opinion, not a blanket decline). It honestly *declines*
+  (rather than rejects) only the genuinely out-of-fragment forms: cubical `Glue`/`ua`/partial
+  elements, `foreign` postulates (trusted FFI), and universe-*level* variables. Declines are counted
+  and reported, never silently skipped.
 - Performance is correctness-first, not throughput-first: `Nat` is unary (arithmetic is O(n)
-  allocations), every value is heap-boxed, no LLVM optimization passes run yet, the trampoline
-  allocates a thunk per step, and the native heap is a fixed 64 MiB that aborts on exhaustion. The
+  allocations — use the primitive machine `Int` for numeric scale; see
+  [docs/benchmarks-game.md](docs/benchmarks-game.md)), every value is heap-boxed, LLVM optimization
+  passes can be enabled with `--opt` but currently buy no measurable runtime gain (the runtime is
+  C-runtime/GC-bound and there is no cross-object LTO; see [docs/performance.md](docs/performance.md)
+  §2d), the trampoline allocates a thunk per step, and the native heap is a fixed 64 MiB that aborts
+  on exhaustion. The
   wasm runtime is a bump allocator only and omits the GC, `Later`/effects, and regions. See
   [docs/performance.md](docs/performance.md) for the full picture.
 

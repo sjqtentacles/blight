@@ -18,7 +18,11 @@ fn reject(msg: impl Into<String>) -> RecheckError {
 
 /// An *honest refusal*: the judgement uses a construct outside the supported core fragment, so the
 /// re-checker neither accepts nor (unsoundly) rejects it. The build treats this as "not re-checked"
-/// rather than a soundness alarm.
+/// rather than a soundness alarm. (Currently no `typecheck` path declines — the higher-order
+/// eliminator motive that previously did is now fully re-verified — but the cubical/level paths in
+/// `term.rs` still construct `Declined` directly; this helper is retained for symmetry with
+/// [`reject`].)
+#[allow(dead_code)]
 fn decline(msg: impl Into<String>) -> RecheckError {
     RecheckError::Declined(msg.into())
 }
@@ -272,9 +276,10 @@ impl<'a> Recheck<'a> {
                     .ok_or_else(|| reject(format!("unknown inductive type {name:?}")))?;
                 Ok((RValue::Univ(decl.level), Usage::zero(n)))
             }
-            RTerm::Lam(_) | RTerm::Pair(_, _) | RTerm::Con(_, _) | RTerm::PLam(_) => Err(reject(
-                format!("term needs a type annotation to be inferred: {term:?}"),
-            )),
+            RTerm::Con(name, args) => self.infer_con(ctx, name, args, sigma),
+            RTerm::Lam(_) | RTerm::Pair(_, _) | RTerm::PLam(_) => Err(reject(format!(
+                "term needs a type annotation to be inferred: {term:?}"
+            ))),
             RTerm::Interval(_) => Err(reject("a bare interval has no type in the term layer")),
 
             // Cubical Kan operations: re-derive the result type independently (the kernel already
@@ -545,6 +550,81 @@ impl<'a> Recheck<'a> {
         }
     }
 
+    /// Infer the type of a *bare* constructor application `Con name args` (no ascription).
+    ///
+    /// This mirrors the kernel's [`Term::Con`] inference rule (`blight-kernel` `check.rs`): a
+    /// constructor of a **non-parameterized** family is inferable — its arguments are checked
+    /// against the constructor's argument shapes, and the family's result indices are recovered by
+    /// evaluating the constructor's `result_indices` against the argument values. A constructor of
+    /// a **parameterized** family is *not* inferable (the parameters cannot be recovered from the
+    /// arguments alone), so it still needs an ascription — exactly the kernel's `CannotInfer` case.
+    ///
+    /// Having this rule keeps the two checkers **symmetric**: previously a bare-`Con` scrutinee of
+    /// a non-parameterized family (e.g. `Bool`/`Nat`) — which the kernel infers fine inside `Elim`
+    /// — was `Rejected` here, a spurious disagreement (caught by the C1 differential harness).
+    fn infer_con(
+        &self,
+        ctx: &Ctx,
+        name: &blight_kernel::ConName,
+        args: &[RTerm],
+        sigma: RGrade,
+    ) -> RResult<(RValue, Usage)> {
+        let (decl, _idx, ctor) = self
+            .sig
+            .data_of_con(name)
+            .ok_or_else(|| reject(format!("unknown constructor {name:?}")))?;
+        let decl = decl.clone();
+        let ctor = ctor.clone();
+        if !decl.params.is_empty() {
+            // Parameterized: parameters are not recoverable from the arguments — needs an
+            // ascription, just like the kernel's `CannotInfer`.
+            return Err(reject(format!(
+                "constructor {name:?} of a parameterized family needs a type annotation to be inferred"
+            )));
+        }
+        if args.len() != ctor.args.len() {
+            return Err(reject(format!(
+                "constructor {name:?} expects {} args, got {}",
+                ctor.args.len(),
+                args.len()
+            )));
+        }
+        // Non-parameterized family: recursive arguments share the (param-free) family head.
+        let rec_ty = RValue::Data(decl.name.clone(), vec![], vec![]);
+        let mut usage = Usage::zero(ctx.len());
+        // `env` evaluates the constructor's result-index terms; for a non-parameterized family it
+        // binds only the (innermost-last) argument values.
+        let mut env = Env::new();
+        for (arg, shape) in args.iter().zip(ctor.args.iter()) {
+            match shape {
+                Arg::Rec(_) => {
+                    let u = self.check(ctx, arg, &rec_ty, sigma)?;
+                    usage = usage.add(&u);
+                }
+                Arg::NonRec(ty) => {
+                    let ty_t = crate::term::from_kernel(ty)?;
+                    // Match the kernel's `Term::Con` *inference* rule: NonRec argument types are
+                    // evaluated in the ambient context env (the family is non-parameterized, so
+                    // there are no params to thread; this keeps kernel<->recheck symmetric).
+                    let ty_val = eval(self.sig, &ctx.env, &ty_t);
+                    let u = self.check(ctx, arg, &ty_val, sigma)?;
+                    usage = usage.add(&u);
+                }
+            }
+            let arg_val = eval(self.sig, &ctx.env, arg);
+            env = env.extend(arg_val);
+        }
+        let result_indices: Vec<RValue> = ctor
+            .result_indices
+            .iter()
+            .map(|t| {
+                let rt = crate::term::from_kernel(t)?;
+                Ok::<RValue, RecheckError>(eval(self.sig, &env, &rt))
+            })
+            .collect::<RResult<_>>()?;
+        Ok((RValue::Data(decl.name, vec![], result_indices), usage))
+    }
+
     /// Check a constructor application against an expected `Data` family (spec §2.7).
     #[allow(clippy::too_many_arguments)]
     fn check_con(
@@ -686,20 +766,16 @@ impl<'a> Recheck<'a> {
                 let ctx_id = ctx_acc.extend(self.sig, dty, RGrade::Omega);
                 match body {
                     RTerm::Lam(inner) => {
-                        // A motive whose conclusion is itself a Π — i.e. the result type is a
-                        // *function* — arises when a binder that is still in scope at the `match`
-                        // (e.g. a second vector matched in a nested `match`) is lifted into the
-                        // motive by the elaborator. In that shape the elaborator emits an
-                        // index-ignoring, higher-order motive that we cannot faithfully refine per
-                        // branch without reconstructing it (which needs the original surface type).
-                        // Rather than raise a spurious soundness alarm, we *decline* this judgement —
-                        // an honest refusal, narrowly scoped to higher-order eliminator motives.
-                        if matches!(inner.as_ref(), RTerm::Pi(..)) {
-                            return Err(decline(
-                                "higher-order (Π-conclusion) eliminator motive: \
-                                 dependent refinement of a post-match binder is unsupported",
-                            ));
-                        }
+                        // The motive's conclusion may itself be a Π — i.e. the result type is a
+                        // *function* — when a binder still in scope at the `match` (e.g. a second
+                        // vector matched in a nested `match`) is lifted into the motive by the
+                        // elaborator (`λ i. λ (_:D ps i). Π(w:…). T`). This is still an ordinary
+                        // motive type: `infer_universe` checks it lives in a universe, and the
+                        // per-branch method check below applies the motive to the scrutinee indices
+                        // exactly as the kernel does, so a Π conclusion needs no special handling —
+                        // the method's type is simply itself a Π. (We previously *declined* this
+                        // shape conservatively; the elaborator now emits a faithfully checkable
+                        // motive, so we re-verify it fully.)
                         self.infer_universe(&ctx_id, inner)?;
                     }
                     other => {

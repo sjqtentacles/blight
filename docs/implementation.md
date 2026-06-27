@@ -151,11 +151,18 @@ engineering treatment:
   implementation rather than only against our own intuition.
 - **`ua` is derived from `Glue`**, not primitive (spec §2.6 notes this is permissible), shrinking
   the irreducible surface.
-- **Heterogeneous cases are implemented**, not stubbed: `transp` over a non-constant Π domain, a
-  dependent Σ first component, and a non-constant `PathP` line, plus `hcomp` over a genuinely varying
-  partial face, all reduce structurally by their CCHM component rules (`crates/blight-kernel/src/kan.rs`),
-  each gated by its own conformance golden. The independent re-checker mirrors the whole table in its
-  value layer, so cubical Kan operations are *Checked* (not `Declined`).
+- **The reachable heterogeneous cases are implemented**, not stubbed: `transp` over a non-constant Π
+  domain, a dependent Σ first component, and a non-constant `PathP` line, plus `hcomp` over a
+  genuinely varying partial face, all reduce structurally by their CCHM component rules
+  (`crates/blight-kernel/src/kan.rs`), each gated by its own conformance golden. The independent
+  re-checker mirrors this table in its value layer, so these cubical Kan operations are *Checked*
+  (not `Declined`). The cells the corpus never reaches (e.g. `hcomp` over `Glue`/`Univ`, `transp`
+  over a non-`ua`-shaped `Glue` line or a non-constant indexed `Data`/`Int`/`Eff` line) are
+  documented unreachable-from-corpus and guarded by **fail-safe panics** — they never silently
+  accept. The one `Glue` line `ua` actually reaches (`transp` over the single-face `i=0` line) is
+  implemented and guarded; `Glue`/`ua` *judgements* are `Declined` by the re-checker (it declines
+  `Glue` at the term-translation boundary, so it never reaches its own Kan-`Glue` path). See
+  [docs/metatheory.md](metatheory.md) §1.5 for the full reachability table and fail-safe discipline.
 
 The critical scheduling note (see §6): the M0 acceptance proof `plus-zero` does **not** exercise
 the Kan table, so the table is driven by its *own* conformance suite, never by the acceptance test.
@@ -319,6 +326,7 @@ current honest coverage:
 | `Elim` over non-indexed data | ✅ checked | motive `λs. M`, method types reconstructed |
 | `Elim` over multi-parameter / multi-index families | ✅ checked | `infer_elim`/`method_type` build the indexed motive (`λ i… s. M`), apply the motive to all indices + the scrutinee, and reconstruct indexed recursive-argument IHs — mirroring the kernel for N parameters and M indices (the ≤1 cap is lifted) |
 | Cubical Kan (`Transp`/`HComp`/`Comp`) | ✅ checked | the re-checker now models the Kan table in its own value layer (`crates/blight-recheck/src/kan.rs`), independently of the kernel |
+| Native `Int` (`IntTy`/`IntLit`/`IntPrim`, M10) | ✅ checked | the re-checker models the primitive integer type and its operations directly (`int+`/`int*`/… are typed `Int → Int → Int`); `std/int.bl` wrappers and `int_arith.bl`/`int_sum.bl`/`calculator.bl` are all re-checker-accepted |
 | `Glue` / `ua` | ⛔ `Declined` (counted) | the univalence machinery is not modeled in the re-checker value layer |
 | Effects/handlers (`Op`/`Handle`/`EffTy`) | ✅ checked (type-level) | the re-checker re-derives the types of `perform`/`handle`/`! E A` from the signature; it does not track effect rows or continuation grades (the kernel's job) — so it offers a genuine second opinion at the type level rather than declining |
 | Partiality (`Delay`/`Now`/`Later`/`Force`) | ✅ checked | a second, independent NbE over the delay layer with `force (now a) ⇝ a` and guarded `later`; the proof-boundary `Partial` discipline stays the kernel's job |

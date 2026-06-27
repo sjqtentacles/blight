@@ -110,6 +110,44 @@ pub enum Surface {
     /// A primitive `Int` operation: `(int+ a b)`, `(int- a b)`, `(int* a b)`, `(int/ a b)`,
     /// `(int= a b)`, `(int< a b)`. Comparisons conclude `Int` (1/0) like the kernel primitive.
     IntPrim(blight_kernel::IntPrimOp, Box<Surface>, Box<Surface>),
+
+    // ---- cubical Kan / Glue layer (spec §2.6; plan A2b) — surface syntax for the univalence
+    // primitives, so `ua`/`Glue` are writable in the tower. `Partial`/`System`/`Glue`/`glue`/
+    // `unglue`/`transp` were core-only before this. Cofibrations are written with the dedicated
+    // forms below (`(ieq0 r)` etc.) so they never clash with ordinary application heads.
+    /// `(Partial φ A)` — the type of partial elements of `A` defined on cofibration `φ`.
+    Partial(Box<Cofibration>, Box<Surface>),
+    /// `(system (φ t) ...)` — a system `[ φᵢ ↦ tᵢ ]`.
+    System(Vec<(Cofibration, Surface)>),
+    /// `(Glue A φ T e)` — the Glue type former: glue the partial type `T` (with equivalence `e` to
+    /// `A` on `φ`) onto the base `A`.
+    Glue(Box<Surface>, Box<Cofibration>, Box<Surface>, Box<Surface>),
+    /// `(glue φ t a)` — Glue introduction: a partial element `t` (on `φ`) over a base `a`.
+    GlueTerm(Box<Cofibration>, Box<Surface>, Box<Surface>),
+    /// `(unglue g)` — Glue elimination: project a glued value back to the base type.
+    Unglue(Box<Surface>),
+    /// `(transp (i. A) φ a0)` — Kan transport of `a0 : A[i0]` to `A[i1]` along the line `i. A`,
+    /// constant on `φ`. The line is written `(plam (i) A)` (a `PLam`).
+    Transp(Box<Surface>, Box<Cofibration>, Box<Surface>),
+}
+
+/// A surface cofibration `φ` (spec §2.6), parsed from the dedicated forms `ctop`/`cbot`/`(ieq0 r)`/
+/// `(ieq1 r)`/`(cand φ ψ)`/`(cor φ ψ)`. Intervals `r` reuse the dimension expression grammar
+/// (`i0`, `i1`, a bound dim, `(~ r)`, `(imin r s)`, `(imax r s)`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Cofibration {
+    /// `ctop` — the total face `⊤`.
+    Top,
+    /// `cbot` — the empty face `⊥`.
+    Bot,
+    /// `(ieq0 r)` — `r = 0`.
+    Eq0(Box<Surface>),
+    /// `(ieq1 r)` — `r = 1`.
+    Eq1(Box<Surface>),
+    /// `(cand φ ψ)` — `φ ∧ ψ`.
+    And(Box<Cofibration>, Box<Cofibration>),
+    /// `(cor φ ψ)` — `φ ∨ ψ`.
+    Or(Box<Cofibration>, Box<Cofibration>),
 }
 
 /// A constructor declaration within a `defdata`: its name, the field telescope, and (for indexed

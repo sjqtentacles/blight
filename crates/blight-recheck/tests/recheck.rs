@@ -139,6 +139,39 @@ fn recheck_declines_foreign() {
     }
 }
 
+/// The univalence layer (`Glue`) is the one cubical Kan hatch the independent re-checker does **not**
+/// duplicate: `std/path.bl`'s `ua` builds a `Glue` type, and re-checking anything mentioning `Glue`
+/// must be honestly **declined** (never silently accepted, never crashed in the re-checker's Kan
+/// table — the decline happens at `from_kernel`, before normalization). This is the A1/A2b guarantee
+/// that the trusted kernel solely owns the Glue computation rule. We form `Glue U₀ (i=0) U₀ e` (the
+/// `ua`-shaped single-face Glue head) and assert the re-check declines.
+#[test]
+fn recheck_declines_glue() {
+    let sig = Signature::new();
+    let u0 = || Term::Univ(blight_kernel::Level::Zero);
+    let glue = Term::Glue {
+        base: Box::new(u0()),
+        cofib: blight_kernel::Cofib::Eq0(blight_kernel::Interval::I0),
+        ty: Box::new(u0()),
+        equiv: Box::new(u0()),
+    };
+    let j = Judgement::HasType {
+        term: glue,
+        ty: Term::Univ(blight_kernel::Level::Suc(Box::new(
+            blight_kernel::Level::Zero,
+        ))),
+    };
+    match recheck_judgement(&sig, &j) {
+        Err(RecheckError::Declined(msg)) => {
+            assert!(
+                msg.to_lowercase().contains("glue"),
+                "decline reason should mention Glue, got: {msg}"
+            );
+        }
+        other => panic!("expected the re-checker to DECLINE the Glue type, got {other:?}"),
+    }
+}
+
 /// RED: β/η parity with the kernel. `(λx. x) Zero` and `Zero` are definitionally equal, so a proof
 /// that the identity-applied value has type `Nat` re-checks; and an η-expanded identity function
 /// `λx. (id x)` re-checks at `Nat -> Nat` just like the bare `id`.

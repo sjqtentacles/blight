@@ -71,12 +71,84 @@ pub fn transp(family: &Closure, cofib: &Cofib, base: &Value) -> Value {
         Value::Sigma(..) => transp_sigma(family, base),
         Value::PathP { .. } => transp_path(family, base),
 
-        // Any other head: only the (already-excluded) constant case is sound, so this is stuck.
+        // Glue: the univalence computation rule (spec §2.6). The only Glue line the corpus reaches
+        // is the one `ua` builds, `i. Glue B φ(i) T(i) e(i)`, whose **base `B` is constant in `i`**
+        // and whose far (`i=1`) face is the identity equivalence. For that line transport of
+        // `a₀ : (line@i0) = Glue B ⊤ A e ≡ A` to `(line@i1) = Glue B ⊤ B id ≡ B` is the forward map
+        // of the source-face equivalence: `transp (ua e) a₀ ≡ (e@i0).fun a₀` (CCHM; the `i=1`
+        // identity face makes the otherwise-present `hcomp` correction the identity). A Glue line
+        // with a *non-constant base* (genuine heterogeneous Glue transport) is out of scope and
+        // documented `unimplemented!` rather than silently mis-reduced.
+        Value::Glue { .. } => transp_glue(family, base),
+
+        // Any other head: only the (already-excluded) constant case is sound. The reachable formers
+        // are all handled above; the residual heads are an *indexed* `Data` (params/indices vary in
+        // `i`), `IntTy`, `EffTy`, etc. None is reachable from the prelude/examples/conformance corpus
+        // — every such line in the corpus is constant in `i` and is caught by the
+        // `family_is_constant` fast path at the top of `transp`. We therefore *fail safe* (panic)
+        // rather than risk a silent mis-reduction: a panic on a hypothetical well-typed term is a
+        // bug to fix by implementing the former, never an unsoundness (it cannot accept a false
+        // judgement). See `docs/metatheory.md §1.3` (open obligation 2) for the deferred general
+        // `transp` over a graded/indexed type line.
         _ => unimplemented!(
-            "transp: heterogeneous transport for this former is out of M0 scope \
-             (Pi/Sigma/PathP/Data/Univ are implemented)"
+            "transp: heterogeneous transport for this former is out of the implemented fragment \
+             (Pi/Sigma/PathP/Data/Univ/Glue are implemented; a non-constant indexed-Data/Int/Eff \
+             line is unreachable from the corpus and deferred — fail-safe, never an acceptance)"
         ),
     }
+}
+
+/// `transp` over the univalence `Glue` line (spec §2.6; plan A2b). See the dispatch comment in
+/// [`transp`]: for the `ua`-shaped line `i. Glue B φ(i) T(i) e(i)` with a base `B` constant in `i`
+/// and an `i=1` identity face, transport reduces to the forward map of the source-face
+/// equivalence applied to the base, i.e. the univalence computation rule
+/// `transp (ua e) a₀ ≡ equiv-fun e a₀`.
+fn transp_glue(family: &Closure, base: &Value) -> Value {
+    // Inspect the *open* line. The only sound, reachable shape is the CCHM `ua` line
+    // `i. Glue B (i=0) A e`: a **single `i=0` face** with a base `B` constant in `i`. On that face
+    // direction the `i=1` end is `Glue B ⊥ A e ≡ B` (the empty-face Glue is just the base — no
+    // residual equiv, hence no `hcomp` correction), so transport is exactly the forward map of the
+    // source equivalence. Any other cofibration (e.g. an `i=1`-glued line, a connection, or a
+    // genuine partial face) is *not* this shape and is left `unimplemented!` rather than
+    // mis-reduced.
+    let open = family.apply_dim(Interval::Dim(0));
+    let (cofib, base_ty, equiv) = match &open {
+        Value::Glue {
+            cofib, base, equiv, ..
+        } => (cofib.clone(), (**base).clone(), (**equiv).clone()),
+        // Unreachable: `transp` only dispatches into `transp_glue` after matching `Value::Glue` on
+        // the *same* `family.apply_dim(Dim 0)`; re-evaluating it here yields the identical value.
+        other => unreachable!("transp_glue: open line is a Glue by dispatch, got {other:?}"),
+    };
+    // Guard the face shape: must be `i=0` for the transport dimension (the fresh open dim, which is
+    // the deepest dimension level). A `Min`/`Max`/`Neg`/`Eq1`/disjunction is a different (out of
+    // scope) line.
+    let is_ua_face = matches!(&cofib, Cofib::Eq0(Interval::Dim(_)));
+    if !is_ua_face {
+        unimplemented!(
+            "transp over a Glue line whose face is not the univalence `i=0` direction is out of \
+             scope (only the CCHM `ua` line `i. Glue B (i=0) A e` is implemented); got cofib \
+             {cofib:?}"
+        );
+    }
+    // The base type line `i. B` must be constant (the `ua` line glues a *fixed* codomain `B`); a
+    // non-constant base is genuine heterogeneous Glue transport, which we do not implement.
+    let base_line = line_closure(family, |g| match g {
+        Value::Glue { base, .. } => (*base).clone(),
+        other => other,
+    });
+    if !family_is_constant(&base_line) {
+        unimplemented!(
+            "transp over a Glue line with a non-constant base (genuine heterogeneous Glue \
+             transport) is out of scope; only the univalence line (constant base `B`) is \
+             implemented"
+        );
+    }
+    let _ = base_ty;
+    // The source-face (`i=0`) equivalence `e : Equiv A B`; its forward map is `fst e`. For the `ua`
+    // line `e` does not depend on `i`, so the open-line equiv is exactly the source equivalence.
+    let forward = crate::normalize::vfst(equiv);
+    crate::normalize::apply(forward, base.clone())
 }
 
 /// Build the line `i. project(A i)` as a [`Closure`] from the family `i. A`, by quoting the
@@ -340,14 +412,19 @@ pub fn hcomp(ty: &Value, cofib: &Cofib, tube: &Closure, base: &Value) -> Value {
                 body: body_val,
             })
         }
-        // Closed inductive / universe / other: the only sound closed reductions are the
+        // Closed inductive / universe / Glue / other: the only sound closed reductions are the
         // empty/total/constant-tube faces handled above. Composition over a genuinely varying face
-        // in a closed inductive needs the partial-element *system* machinery (a stuck `HComp`
-        // value), which the M0 value domain does not represent; it is not reachable for the
-        // compositional formers (Π/Σ/PathP all reduce above) nor for the stdlib/conformance corpus.
+        // in such a former needs the partial-element *system* machinery (a stuck `HComp` value),
+        // which the value domain does not represent. It is **not reachable** from the corpus: the
+        // compositional formers (Π/Σ/PathP) all reduce structurally above, and nothing in the
+        // prelude/examples/conformance suite runs `hcomp` over a `Glue` (the only `Glue` consumer,
+        // `ua`, transports — `transp_glue` — and never composes), a `Univ`, or an indexed `Data`.
+        // We *fail safe* (panic) rather than mis-reduce; a panic here is a bug to fix by extending
+        // the table, never an unsoundness.
         _ => unimplemented!(
-            "hcomp: composition over a varying face in a closed inductive/universe is out of scope \
-             (Π/Σ/PathP compose structurally; empty/total/constant-tube faces reduce directly)"
+            "hcomp: composition over a varying face in a closed inductive/universe/Glue is out of \
+             the implemented fragment (Π/Σ/PathP compose structurally; empty/total/constant-tube \
+             faces reduce directly) and unreachable from the corpus — fail-safe, never an acceptance"
         ),
     }
 }
@@ -495,6 +572,10 @@ mod tests {
 
     fn nat_ty_term() -> Term {
         Term::Data(crate::term::DataName("Nat".into()), vec![], vec![])
+    }
+
+    fn bool_ty_term() -> Term {
+        Term::Data(crate::term::DataName("Bool".into()), vec![], vec![])
     }
 
     /// `transp` along a constant `Nat` line is the identity (closed inductive, spec §2.6).
@@ -702,5 +783,124 @@ mod tests {
             matches!(out, Value::PLam(..) | Value::ReflectedPath { .. }),
             "transp over a PathP line is a path value, got {out:?}"
         );
+    }
+
+    // ---- univalence: transp over the `ua` Glue line (spec §2.6; plan A2b) ----
+
+    /// `transp^i (Glue B (i=0) A e) ⊥ a₀ = (e@i0).fun a₀` for the univalence line. CCHM `ua` uses a
+    /// *single-face* Glue: glue `A` (via `e : Equiv A B`) onto `B` only on the face `i=0`. Then
+    /// `(line@i0) = Glue B ⊤ A e ≡ A` and `(line@i1) = Glue B ⊥ A e ≡ B`, so the line is a path
+    /// `A ⇝ B` and transport is the univalence computation rule `transp (ua e) a ≡ equiv-fun e a`.
+    /// We use closed, *distinct* type endpoints (A=Nat, B=Bool) and a forward map `λ_. true`, so the
+    /// transported result `true` is observably different from the input `zero`.
+    #[test]
+    fn transp_ua_glue_line_applies_forward_map() {
+        // Fully *closed* univalence line so the internal lvl-0 convertibility checks
+        // (`family_is_constant`, etc.) are well-scoped. A = Nat, B = Bool (distinct, so the line is
+        // genuinely non-constant), and a closed equivalence `e : Equiv Nat Bool` whose forward map
+        // `e.fun = λ_. true` makes the transported result `true` — *distinct* from the input `zero`,
+        // so the test fails if transport silently reduced to the identity.
+        let zero = || Value::Con(crate::term::ConName("zero".into()), vec![]);
+        let tru = || Value::Con(crate::term::ConName("true".into()), vec![]);
+        // Equiv value `e = (λ_. true, <proof>)`; the proof component is never inspected by the rule,
+        // so a placeholder closed value (`zero`) suffices for this white-box reduction test.
+        let e = Value::Pair(
+            Box::new(Value::Lam(Closure {
+                env: Env::empty(),
+                body: Term::Con(crate::term::ConName("true".into()), vec![]),
+            })),
+            Box::new(zero()),
+        );
+        // The line `i. Glue Bool (i=0) Nat e`.
+        let glue_body = Term::Glue {
+            base: Box::new(bool_ty_term()),
+            cofib: Cofib::Eq0(Interval::Dim(0)),
+            ty: Box::new(nat_ty_term()),
+            equiv: Box::new(quote_value_at(0, 1, &e)),
+        };
+        let line = Closure {
+            env: Env::empty(),
+            body: glue_body,
+        };
+        // Sanity: the line is genuinely non-constant (Nat at i0, Bool at i1).
+        assert!(
+            !family_is_constant(&line),
+            "the ua line must be non-constant (A=Nat ≠ B=Bool)"
+        );
+        let out = transp(&line, &Cofib::Bot, &zero());
+        // Expected: e.fun zero = true (the forward map ignores its argument).
+        assert!(
+            conv(0, &out, &tru()),
+            "transp over the ua Glue line is the forward map applied (expected `true`), got {:?}",
+            quote_value_at(0, 0, &out)
+        );
+    }
+
+    /// A `Glue` line whose face is *not* the univalence `i=0` direction (here an `i=1` face) is
+    /// outside the implemented fragment. The kernel must **fail safe** (panic) rather than reuse the
+    /// `i=0` forward-map reduction — which would be unsound for this shape. This pins the guard
+    /// boundary of `transp_glue` (A1: only the reachable `ua` line is implemented; the rest is
+    /// documented + fail-safe, never a silent acceptance).
+    #[test]
+    #[should_panic(expected = "not the univalence `i=0` direction")]
+    fn transp_glue_non_ua_face_fails_safe() {
+        let zero = || Value::Con(crate::term::ConName("zero".into()), vec![]);
+        let e = Value::Pair(
+            Box::new(Value::Lam(Closure {
+                env: Env::empty(),
+                body: Term::Con(crate::term::ConName("true".into()), vec![]),
+            })),
+            Box::new(zero()),
+        );
+        // `i. Glue Bool (i=1) Nat e` — an `i=1` face, not the `ua` `i=0` direction.
+        let line = Closure {
+            env: Env::empty(),
+            body: Term::Glue {
+                base: Box::new(bool_ty_term()),
+                cofib: Cofib::Eq1(Interval::Dim(0)),
+                ty: Box::new(nat_ty_term()),
+                equiv: Box::new(quote_value_at(0, 1, &e)),
+            },
+        };
+        let _ = transp(&line, &Cofib::Bot, &zero());
+    }
+
+    /// A `Glue` line with a *non-constant base* (genuine heterogeneous Glue transport) is likewise
+    /// out of the implemented fragment and must fail safe. Here the base varies `Nat ⇝ Bool` while
+    /// the glued type is fixed, so `family_is_constant(base_line)` is false.
+    #[test]
+    #[should_panic(expected = "non-constant base")]
+    fn transp_glue_non_constant_base_fails_safe() {
+        let zero = || Value::Con(crate::term::ConName("zero".into()), vec![]);
+        let e = Value::Pair(
+            Box::new(Value::Lam(Closure {
+                env: Env::empty(),
+                body: Term::Con(crate::term::ConName("true".into()), vec![]),
+            })),
+            Box::new(zero()),
+        );
+        // `i. Glue (Glue-base varies) (i=0) Nat e`: make the *base* a non-constant line by gluing a
+        // base that itself is `i`-dependent. We model a varying base with a path-applied neutral so
+        // the base differs at i0/i1. Simplest concrete varying base: `Glue B' (i=0) Nat e` nested —
+        // but to keep it a value-level base we use a base line `Nat` at i0 and `Bool` at i1 by
+        // swapping base/ty roles via an `i=1`-degenerate inner. Concretely, drive the non-constant
+        // base by making the *base* the `ua`-style varying type and the glued `ty` the fixed one.
+        let line = Closure {
+            env: Env::empty(),
+            body: Term::Glue {
+                // base varies: Nat on i=0 collapses, Bool elsewhere — realized by an inner single
+                // face Glue used as the base so base@i0 ≠ base@i1.
+                base: Box::new(Term::Glue {
+                    base: Box::new(bool_ty_term()),
+                    cofib: Cofib::Eq0(Interval::Dim(0)),
+                    ty: Box::new(nat_ty_term()),
+                    equiv: Box::new(quote_value_at(0, 1, &e)),
+                }),
+                cofib: Cofib::Eq0(Interval::Dim(0)),
+                ty: Box::new(nat_ty_term()),
+                equiv: Box::new(quote_value_at(0, 1, &e)),
+            },
+        };
+        let _ = transp(&line, &Cofib::Bot, &zero());
     }
 }

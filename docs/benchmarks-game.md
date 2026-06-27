@@ -136,6 +136,38 @@ at every node. Sizes are capped where the produced binary's **non-tail structura
 approaches the process stack limit (a skewed tree near `n`≈300 overflows the 8 MiB C stack) — itself
 an honest data point about boxed unary structural recursion.
 
+### Unary `Nat` vs primitive machine `Int` (the cost of *not* having unboxed integers)
+
+Blight's kernel has no primitive numbers — `Nat` is unary `Succ`/`Zero` — but it *does* ship an
+optional primitive `Int` base type (`(int N)` literals + `int+ int- int* int/ int= int<`, reducing
+definitionally and lowering to single hardware instructions; see
+[std/int.bl](../crates/blight-prelude/std/int.bl) for the named wrappers and the deliberate
+"`Int` has no eliminator" TCB note). The same summation workload —
+`sum (1..n)`, a fuel-counted loop accumulating `acc + i` — written once over unary `Nat`
+([bench/games/sum/sum_nat.bl](../bench/games/sum/sum_nat.bl) shape) and once over `Int`
+([bench/games/sum/sum_int.bl](../bench/games/sum/sum_int.bl) shape,
+[examples/int_sum.bl](../examples/int_sum.bl) the `foldr` variant) shows the gap directly. Binary
+wall-clock (hyperfine `-N`, warmup; reference machine), result is `n(n+1)/2`:
+
+| `n` | result | **`Nat`** run | **`Int`** run |
+|---:|---:|---:|---:|
+| 100  | 5 050     | ~4.0 ms | ~2.9 ms |
+| 400  | 80 200    | ~13.2 ms | ~3.2 ms |
+| 1000 | 500 500   | **crashes** (SIGBUS) | ~3.1 ms |
+| 2500 | 3 126 250 | **crashes** (SIGBUS) | ~4.1 ms |
+
+Two honest findings. First, **`Int` is flat** (~3 ms, spawn-dominated) as the accumulator grows from
+5 050 to 3.1 million: each `+` is one O(1) register add on an unboxed 64-bit value, so the magnitude
+of the numbers is free. Second, **unary `Nat` both slows and then hits a hard ceiling**: 100→400 is
+already ×3.3 in run time (it must allocate and later walk an 80 200-deep `Succ` chain), and by
+`n`=1000 the result is a **500 500-deep `Succ` value** whose construction/printing overflows the
+produced binary's C stack (exit 138 / SIGBUS) — the unary representation is not just slower, it
+*cannot represent* a moderately large number without a deep heap chain. This is the precise reason
+`sum_nat.bl`'s own golden caps at `n`=10 while `sum_int.bl` runs to `n`=1000: the unary tower is for
+*proofs and small values*, and `Int` is the escape hatch when you need arithmetic at scale (at the
+cost of growing the trusted kernel by a primitive base type — a tracked TCB decision, see
+[roadmap.md](roadmap.md)).
+
 ### Deep recursion via the delay trampoline
 
 The marquee property — **deep guarded recursion in bounded C stack** — is verified directly at the

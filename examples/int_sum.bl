@@ -1,0 +1,33 @@
+; int_sum.bl — the machine-integer counterpart of examples/bench_sum.bl.
+;
+; bench_sum.bl folds the unary `Nat` `plus` over a list of `n` ones: every `+` step allocates and
+; walks a `Succ` chain, so the work is O(total) in the *magnitude* of the numbers (unary cost). This
+; file does the structurally identical fold, but with the primitive machine `Int` and `int+` (via the
+; std/int.bl `int-add` wrapper): each `+` is a single O(1) hardware add on an unboxed 64-bit value, so
+; the sum of `n` ones is computed in O(n) *steps* with no per-magnitude allocation.
+;
+; The spine is still built by recursion on a unary `Nat` count (the only thing with an eliminator to
+; recurse on — `Int` is a primitive base type, std/int.bl explains why), but the *accumulated values*
+; are `Int`. Result: n = 800, printed instantly as `800`.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/int_sum.bl -o int_sum
+;   ./int_sum      # => 800
+;
+; See docs/benchmarks-game.md for the unary-Nat vs Int comparison this example anchors.
+
+(load "std/list.bl")
+(load "std/int.bl")
+
+; Build a list of `n` Int-ones, counting down on the unary `Nat` `n`.
+(define-rec build-int-ones (Pi ((n Nat)) (List Int))
+  (lam (n) (match n
+    [(Zero) nil]
+    [(Succ k) (cons int-one (build-int-ones k))])))
+
+(define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+(define eighty Nat (mult (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))) ten))
+; n = 80 * 10 = 800.
+(define n800 Nat (mult eighty ten))
+
+; foldr int-add over the list of 800 Int-ones = 800, with O(1) adds (no unary allocation).
+(define main Int (foldr Int Int int-add int-zero (build-int-ones n800)))

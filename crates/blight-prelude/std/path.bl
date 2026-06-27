@@ -1,0 +1,44 @@
+; std/path.bl — path lemmas that need the cubical primitives directly: function extensionality and
+; univalence (`ua`), plus the univalence *computation* rule (spec §7 cubical layer; plan A2b).
+;
+; UNTRUSTED tower code. `funext` and `ua` are ordinary Blight that the host kernel type-checks; they
+; add no axioms. `funext` re-checks through the spore (pure Path/plam machinery). `ua` builds a
+; `Glue` type, which the independent re-checker *declines* (Glue is outside its CCHM fragment — a
+; Decline, never a Rejection; the seed kernel certifies it), so `ua` is trusted-by-the-kernel rather
+; than re-checked. The univalence *computation* rule `transp (ua e) a ≡ equiv-fun e a` holds
+; *definitionally* in the kernel (see `crates/blight-kernel/src/kan.rs::transp_glue`); it is verified
+; as a kernel white-box test and as a closed end-to-end example (`examples/ua_compute.bl`) rather
+; than as a polymorphic in-Blight lemma (see the `ua` comment + docs/metatheory.md for why).
+
+(load "std/equiv.bl")
+
+; `funext A B f g h` — function extensionality: a pointwise family of paths `h : Π x. Path B (f x)
+; (g x)` yields a path `Path (A -> B) f g`. The cubical proof is the one-liner `λ i x. (h x) @ i`:
+; at `i0` it is `λ x. f x ≡ f`, at `i1` it is `λ x. g x ≡ g` (the kernel checks both boundaries
+; definitionally via η).
+(define funext
+  (Pi ((A (Type 0)) (B (Type 0))
+       (f (Pi ((x A)) B)) (g (Pi ((x A)) B))
+       (h (Pi ((x A)) (Path B (f x) (g x)))))
+    (Path (Pi ((x A)) B) f g))
+  (lam (A B f g h)
+    (plam (i) (lam (x) ((h x) @ i)))))
+
+; `ua A B e` — univalence: an equivalence `e : Equiv A B` becomes a path `Path (Type 0) A B`. CCHM
+; builds it from a *single-face* `Glue`: glue `A` (via `e`) onto `B` on the face `i=0`. Then the line
+; `i. Glue B (i=0) A e` has endpoints `Glue B ⊤ A e ≡ A` at `i0` and `Glue B ⊥ A e ≡ B` at `i1`, i.e.
+; a path `A ⇝ B`. Transporting along it computes the forward map: in the kernel,
+;   transp (i. (ua e) @ i) ⊥ a  ≡  equiv-fun e a
+; *definitionally* (the `transp`-over-`Glue` reduction in `crates/blight-kernel/src/kan.rs`). That
+; computation rule is verified directly as a kernel white-box test
+; (`kan.rs::transp_ua_glue_line_applies_forward_map`) and end-to-end on a *closed* instance in
+; `examples/ua_compute.bl`. We deliberately do *not* state the rule as a *polymorphic* in-Blight
+; lemma here: that would force the kernel's Kan operations to reduce `transp` under open binders
+; (free `A B e a`), which the closed-value Kan layer does not support and which would mean threading
+; ambient De Bruijn levels through the whole (trusted) Kan API in both the kernel and the independent
+; re-checker — exactly the kernel-surface growth the project's TCB discipline says to avoid for `ua`.
+; See docs/metatheory.md for the explicit deferral rationale.
+(define ua
+  (Pi ((A (Type 0)) (B (Type 0)) (e (Equiv A B))) (Path (Type 0) A B))
+  (lam (A B e)
+    (plam (i) (Glue B (ieq0 i) A e))))

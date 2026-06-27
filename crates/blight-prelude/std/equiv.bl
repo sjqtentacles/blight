@@ -1,0 +1,73 @@
+; std/equiv.bl — type equivalences `Equiv A B`, the data `ua` (univalence) consumes (spec §7 cubical
+; layer; plan item A2a).
+;
+; UNTRUSTED tower code. Everything here is ordinary Blight that the host kernel type-checks and the
+; spore re-checks (the regression test `std_equiv_loads_in_isolation` asserts the independent
+; re-checker never *rejects* these — `id-equiv`'s connection proof certifies through both checkers);
+; it adds no axioms and grows the TCB by nothing. We use the standard *contractible-fibres*
+; definition of equivalence (Voevodsky's `isEquiv`), the same notion `ua`
+; turns into a path between types: an equivalence is a function each of whose fibres is contractible.
+; This is the univalence-grade notion (not merely "has an inverse"), so a value of `Equiv A B` is
+; exactly what `ua : Equiv A B -> Path (Type 0) A B` needs as input (wired in std/path.bl, A2b).
+;
+; All four layers (`is-contr`, `fiber`, `is-equiv`, `Equiv`) live at `Type 0` for `A B : Type 0`,
+; since `Path` of a `Type 0` family lands in `Type 0` and Σ/Π preserve the level. `Path`/`plam` are
+; kernel primitives, so this module is self-contained (no std dependency).
+
+; `is-contr T` — `T` is contractible: a centre `c : T` together with a proof that every `x : T` is
+; connected to the centre by a path. The propositional "there is exactly one inhabitant".
+;   is-contr T := Σ (c : T). Π (x : T). Path T c x
+(define is-contr (Pi ((T (Type 0))) (Type 0))
+  (lam (T)
+    (Sigma ((c T))
+      (Pi ((x T)) (Path T c x)))))
+
+; `fiber f y` — the fibre of `f : A -> B` over `y : B`: the inputs that `f` sends to `y`, paired with
+; the witnessing path. Its contractibility (for every `y`) is exactly "f is an equivalence".
+;   fiber A B f y := Σ (x : A). Path B (f x) y
+(define fiber
+  (Pi ((A (Type 0)) (B (Type 0)) (f (Pi ((x A)) B)) (y B)) (Type 0))
+  (lam (A B f y)
+    (Sigma ((x A))
+      (Path B (f x) y))))
+
+; `is-equiv A B f` — `f` is an equivalence: each of its fibres is contractible.
+;   is-equiv A B f := Π (y : B). is-contr (fiber A B f y)
+(define is-equiv
+  (Pi ((A (Type 0)) (B (Type 0)) (f (Pi ((x A)) B))) (Type 0))
+  (lam (A B f)
+    (Pi ((y B)) (is-contr (fiber A B f y)))))
+
+; `Equiv A B` — the type of equivalences from `A` to `B`: a function packaged with a proof that it is
+; an equivalence. This is the `ua` input type.
+;   Equiv A B := Σ (f : A -> B). is-equiv A B f
+(define Equiv (Pi ((A (Type 0)) (B (Type 0))) (Type 0))
+  (lam (A B)
+    (Sigma ((f (Pi ((x A)) B)))
+      (is-equiv A B f))))
+
+; `equiv-fun e` — project the underlying function `A -> B` out of an equivalence.
+(define equiv-fun
+  (Pi ((A (Type 0)) (B (Type 0)) (e (Equiv A B))) (Pi ((x A)) B))
+  (lam (A B e) (fst e)))
+
+; `id-equiv A` — the identity equivalence `A ≃ A`. The fibre of `idfun` over `y` is `Σ (x:A). Path A
+; x y`, contractible with centre `(y, refl)`. The centring path from `(y, refl)` (at `i0`) to a
+; fibre `(x, p)` (at `i1`), where `p : Path A x y` (so `p@i0 = x`, `p@i1 = y`), is the standard
+; *singleton contraction* built from a De Morgan connection — no `hcomp` needed:
+;   C i := ( p @ (~ i) , λ j. p @ (imax (~ i) j) )
+; Boundary checks: at `i0` the point is `p@i1 = y` and the path is `λ j. p@(imax i1 j) = λ j. y` =
+; refl, i.e. the centre; at `i1` the point is `p@i0 = x` and the path is `λ j. p@(imax i0 j) = λ j.
+; p@j = p`, i.e. the fibre. The kernel certifies both endpoints definitionally.
+(define id-equiv (Pi ((A (Type 0))) (Equiv A A))
+  (lam (A)
+    (pair
+      (lam (x) x)
+      (lam (y)
+        (pair
+          (pair y (plam (i) y))
+          (lam (fib)
+            (plam (i)
+              (pair
+                ((snd fib) @ (~ i))
+                (plam (j) ((snd fib) @ (imax (~ i) j)))))))))))

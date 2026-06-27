@@ -10,8 +10,22 @@ mod support;
 use support::prelude_resolver;
 
 /// Load one std module, assert every form is accepted, and return the resulting env for further
-/// assertions.
+/// assertions. Runs on an 8 MiB-stack worker thread (matching `examples.rs`/`spore.rs`): several
+/// std modules elaborate/kernel-check deeply-recursive bodies — `char` codepoint chains and the
+/// higher-order (`Π`-conclusion) eliminator motives the kernel now fully certifies — which exceed
+/// the ~2 MiB `cargo test` worker stack but fit comfortably here (the CLI main thread already uses a
+/// large stack).
 fn load_module(module: &str) -> ElabEnv {
+    let module = module.to_string();
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || load_module_inner(&module))
+        .expect("spawn std-module load thread")
+        .join()
+        .expect("std-module load thread panicked (see message above)")
+}
+
+fn load_module_inner(module: &str) -> ElabEnv {
     let mut env = ElabEnv::new();
     let outcomes = {
         let mut prog = Program::with_resolver(&mut env, prelude_resolver);
@@ -257,6 +271,66 @@ fn std_vec_loads_in_isolation() {
     }
 }
 
+/// `std/equiv.bl` defines the univalence-grade `Equiv A B` (contractible-fibres `is-equiv`) plus
+/// `id-equiv`, whose contractibility proof is a De Morgan *connection* term (`p @ (imax (~i) j)`)
+/// under nested `plam`s. Regression guard for the kernel boundary-check dimension-depth fix: these
+/// must re-check through the independent checker without a *Rejection* (a Declined is acceptable for
+/// the out-of-fragment cubical machinery; a Rejection would be a soundness alarm).
+#[test]
+fn std_equiv_loads_in_isolation() {
+    let env = load_module("std/equiv.bl");
+    for f in [
+        "is-contr",
+        "fiber",
+        "is-equiv",
+        "Equiv",
+        "equiv-fun",
+        "id-equiv",
+    ] {
+        assert!(env.global_term(f).is_some(), "std/equiv defines `{f}`");
+    }
+    for f in ["id-equiv", "equiv-fun"] {
+        let ty = env.global_type(f).expect("equiv member type").clone();
+        let term = env.global_term(f).expect("equiv member term").clone();
+        match blight_recheck::recheck_judgement(
+            env.signature(),
+            &blight_kernel::Judgement::HasType { term, ty },
+        ) {
+            Ok(()) | Err(blight_recheck::RecheckError::Declined(_)) => {}
+            Err(blight_recheck::RecheckError::Rejected(m)) => {
+                panic!("re-checker REJECTED std/equiv `{f}` (soundness alarm): {m}")
+            }
+        }
+    }
+}
+
+/// `std/path.bl` defines `funext` (function extensionality, pure Path/plam) and `ua : Equiv A B ->
+/// Path (Type 0) A B` (built from a single-face `Glue`). The host kernel type-checks both; the
+/// independent re-checker is expected to *decline* `ua` (Glue is outside its fragment) but must
+/// never *reject* it, while `funext` should re-check cleanly (no Glue). The univalence *computation*
+/// rule is verified separately (kernel white-box test + `examples/ua_compute.bl`), not as a
+/// polymorphic Blight lemma — see `std/path.bl`/docs/metatheory.md.
+#[test]
+fn std_path_loads_in_isolation() {
+    let env = load_module("std/path.bl");
+    for f in ["funext", "ua"] {
+        assert!(env.global_term(f).is_some(), "std/path defines `{f}`");
+    }
+    for f in ["funext", "ua"] {
+        let ty = env.global_type(f).expect("path member type").clone();
+        let term = env.global_term(f).expect("path member term").clone();
+        match blight_recheck::recheck_judgement(
+            env.signature(),
+            &blight_kernel::Judgement::HasType { term, ty },
+        ) {
+            Ok(()) | Err(blight_recheck::RecheckError::Declined(_)) => {}
+            Err(blight_recheck::RecheckError::Rejected(m)) => {
+                panic!("re-checker REJECTED std/path `{f}` (soundness alarm): {m}")
+            }
+        }
+    }
+}
+
 #[test]
 fn std_tree_loads_in_isolation() {
     let env = load_module("std/tree.bl");
@@ -269,6 +343,46 @@ fn std_tree_loads_in_isolation() {
     let term = env.global_term("NatTree").expect("NatTree term").clone();
     if let Err(e) = blight_kernel::check_top_with(env.signature().clone(), term, ty) {
         panic!("std/tree NatTree re-check failed: {e:?}");
+    }
+}
+
+/// `std/int.bl` wraps the primitive machine-`Int` operations as named, first-class total functions.
+/// Each wrapper is a non-recursive `deftotal` forwarding to a kernel primitive, so the independent
+/// re-checker must *accept* them (`Int`/`IntPrim` are inside its fragment — not declined like Glue),
+/// confirming the wrappers add no out-of-fragment surface.
+#[test]
+fn std_int_loads_in_isolation() {
+    let env = load_module("std/int.bl");
+    for f in [
+        "int-add",
+        "int-sub",
+        "int-mul",
+        "int-div",
+        "int-eq",
+        "int-lt",
+        "int-zero",
+        "int-one",
+        "int-double",
+        "int-succ",
+        "int-pred",
+    ] {
+        assert!(env.global_term(f).is_some(), "std/int defines `{f}`");
+    }
+    for f in ["int-add", "int-mul", "int-double", "int-succ"] {
+        let ty = env.global_type(f).expect("int member type").clone();
+        let term = env.global_term(f).expect("int member term").clone();
+        match blight_recheck::recheck_judgement(
+            env.signature(),
+            &blight_kernel::Judgement::HasType { term, ty },
+        ) {
+            Ok(()) => {}
+            Err(blight_recheck::RecheckError::Declined(m)) => {
+                panic!("std/int `{f}` should re-check (Int is in-fragment), got Declined: {m}")
+            }
+            Err(blight_recheck::RecheckError::Rejected(m)) => {
+                panic!("re-checker REJECTED std/int `{f}` (soundness alarm): {m}")
+            }
+        }
     }
 }
 

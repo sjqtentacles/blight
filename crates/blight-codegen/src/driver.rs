@@ -16,6 +16,25 @@ pub fn build_binary(
     out_bin: &Path,
     work: &Path,
 ) -> Result<(), String> {
+    build_binary_opt(
+        term,
+        ty,
+        sig,
+        out_bin,
+        work,
+        crate::llvm::OptLevel::default(),
+    )
+}
+
+/// Like [`build_binary`] but with an explicit IR optimization level (the `--opt` flag).
+pub fn build_binary_opt(
+    term: &Term,
+    ty: &Term,
+    sig: &Signature,
+    out_bin: &Path,
+    work: &Path,
+    opt: crate::llvm::OptLevel,
+) -> Result<(), String> {
     std::fs::create_dir_all(work).map_err(|e| e.to_string())?;
 
     // The pure-Rust pipeline. Region escape analysis runs on the lowered `Cir` (after `lower`,
@@ -36,7 +55,7 @@ pub fn build_binary(
 
     // Emit the program object.
     let prog_obj = work.join("program.o");
-    crate::llvm::emit_object(&anf, &prog_obj)?;
+    crate::llvm::emit_object_for_target(&anf, &prog_obj, crate::llvm::Target::Native, opt)?;
 
     // Compile the C runtime objects. We author our own `main` (below) so that printing can be
     // result-type-aware (text for a `String`, numeral otherwise), so `prelude_rt.c` is compiled
@@ -178,7 +197,7 @@ pub fn emit_program_object_for_target(
     let prog = mono::monomorphize(&prog);
     let mut anf = anf::normalize(&prog);
     anf.con_tags = anf::con_tags_from_sig(sig);
-    crate::llvm::emit_object_for_target(&anf, out_obj, target)
+    crate::llvm::emit_object_for_target(&anf, out_obj, target, crate::llvm::OptLevel::default())
 }
 
 /// Emit textual LLVM IR for the full pipeline (used by tests to assert on tailcc/musttail).

@@ -1,0 +1,58 @@
+; std/int.bl — named wrappers over the primitive machine-integer operations (spec §7.6 / M11).
+;
+; `Int` is a *primitive* kernel base type (NOT an inductive `Data`): a literal `(int N)` is an
+; unboxed 64-bit machine integer, and the six primitives `int+ int- int* int/ int= int<` reduce
+; definitionally in the kernel and lower to single hardware instructions in the backend. Unlike the
+; unary-`Nat` tower (std/nat.bl), arithmetic here is O(1) rather than O(n) allocation.
+;
+; This file is the thinnest possible *naming* layer: each wrapper is a non-recursive `deftotal`
+; (so the kernel re-checks it through the spore) that forwards to the corresponding primitive. We add
+; no new kernel surface — `Int` and its primitives already live in the trusted base; these are just
+; readable names usable as first-class functions (e.g. as the `f` argument to `foldr`).
+;
+; NOTE on comparisons: `Int` has **no eliminator** (it is not inductive), so there is no `Int -> Bool`
+; bridge and no `if`-on-`Int` in tower code. The kernel primitives `int=`/`int<` therefore conclude
+; `Int` themselves (`1` for true, `0` for false), and these wrappers preserve that — `int-eq`/`int-lt`
+; return an `Int` flag, not a `Bool`. Branching on an integer result is out of scope until/unless an
+; `Int` eliminator is added to the kernel (a deliberate TCB decision, not an oversight).
+;
+; UNTRUSTED tower code; loadable in isolation.
+
+; Addition.
+(deftotal int-add (Pi ((a Int) (b Int)) Int)
+  (lam (a b) (int+ a b)))
+
+; Subtraction.
+(deftotal int-sub (Pi ((a Int) (b Int)) Int)
+  (lam (a b) (int- a b)))
+
+; Multiplication.
+(deftotal int-mul (Pi ((a Int) (b Int)) Int)
+  (lam (a b) (int* a b)))
+
+; Truncating division (kernel semantics: division by zero is the kernel's primitive behavior).
+(deftotal int-div (Pi ((a Int) (b Int)) Int)
+  (lam (a b) (int/ a b)))
+
+; Equality flag: `1` when `a = b`, else `0` (an `Int`, not a `Bool` — see the file header).
+(deftotal int-eq (Pi ((a Int) (b Int)) Int)
+  (lam (a b) (int= a b)))
+
+; Strict-less-than flag: `1` when `a < b`, else `0` (an `Int`, not a `Bool`).
+(deftotal int-lt (Pi ((a Int) (b Int)) Int)
+  (lam (a b) (int< a b)))
+
+; Common literals, for readable accumulators / unit / zero elements.
+(define int-zero Int (int 0))
+(define int-one Int (int 1))
+
+; Double: a tiny derived op, demonstrating wrappers compose like any other function.
+(deftotal int-double (Pi ((a Int)) Int)
+  (lam (a) (int+ a a)))
+
+; Successor / predecessor on machine integers (O(1), unlike unary `Succ`/`pred`).
+(deftotal int-succ (Pi ((a Int)) Int)
+  (lam (a) (int+ a (int 1))))
+
+(deftotal int-pred (Pi ((a Int)) Int)
+  (lam (a) (int- a (int 1))))

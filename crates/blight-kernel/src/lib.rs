@@ -29,4 +29,4 @@ pub use semiring::{Grade, Semiring};
 pub use signature::{
     Arg, Constructor, DataDecl, EffDecl, OpName, OpSig, PathConstructor, Signature,
 };
-pub use term::{Cofib, ConName, DataName, IntPrimOp, Interval, Level, Term};
+pub use term::{Cofib, ConName, DataName, IntPrimOp, Interval, Level, SystemBranch, Term};

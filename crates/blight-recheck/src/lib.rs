@@ -27,7 +27,11 @@
 //! Declined (never silently accepted): the cubical `Glue` operations (`Glue`/`GlueTerm`/`Unglue`)
 //! and cubical partial elements/systems (`Partial`/`System`). The re-checker's own normalizer does
 //! not model these layers, so reaching one yields [`RecheckError::Declined`] — an *honest refusal*
-//! to re-verify, never a pass.
+//! to re-verify, never a pass. In particular `std/path.bl`'s `ua : Equiv A B -> Path (Type 0) A B`
+//! builds a `Glue` type, so re-checking `ua` (and anything that transports along it) is *declined*,
+//! not rejected — the univalence layer is trusted to the seed kernel, whose `transp`-over-`Glue`
+//! computation rule is exercised by a kernel white-box test and the closed `examples/ua_compute.bl`
+//! (the independent re-checker deliberately does not duplicate the Glue Kan engine).
 //!
 //! The intensional **partiality** layer (`Delay`/`now`/`later`/`force`) *is* modeled (a second,
 //! independent NbE over `Delay`/`Now`/`Later`/`Force` values with `force (now a) ⇝ a` and guarded

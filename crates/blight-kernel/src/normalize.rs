@@ -223,12 +223,25 @@ pub fn eval(env: &Env, term: &Term) -> Value {
             cofib,
             ty,
             equiv,
-        } => Value::Glue {
-            base: Box::new(eval(env, base)),
-            cofib: resolve_cofib(env, cofib),
-            ty: Box::new(eval(env, ty)),
-            equiv: Box::new(eval(env, equiv)),
-        },
+        } => {
+            let cofib = resolve_cofib(env, cofib);
+            // CCHM Glue boundary reductions (spec §7): on a total face the Glue *is* its glued type
+            // `T`; on an empty face it *is* its base `B`. Applying these during evaluation is what
+            // makes `(ua e) @ i0 ≡ A` and `(ua e) @ i1 ≡ B` hold definitionally (so path-endpoint
+            // boundary checks on the `ua` line succeed).
+            if crate::kan::is_total(&cofib) {
+                eval(env, ty)
+            } else if crate::kan::is_empty_face(&cofib) {
+                eval(env, base)
+            } else {
+                Value::Glue {
+                    base: Box::new(eval(env, base)),
+                    cofib,
+                    ty: Box::new(eval(env, ty)),
+                    equiv: Box::new(eval(env, equiv)),
+                }
+            }
+        }
         Term::Unglue(g) => do_unglue(&eval(env, g)),
 
         // ---- effects (spec §4): perform builds an effectful-neutral with the identity cont ----
@@ -797,7 +810,14 @@ fn quote_interval(dlvl: usize, r: &Interval) -> Interval {
     match r {
         Interval::I0 => Interval::I0,
         Interval::I1 => Interval::I1,
-        Interval::Dim(k) => Interval::Dim(dlvl - k - 1),
+        Interval::Dim(k) => {
+            debug_assert!(
+                *k < dlvl,
+                "quote_interval: dimension level {k} escaped its binder (dlvl={dlvl}); \
+                 a stuck path application carries a dimension out of scope"
+            );
+            Interval::Dim(dlvl - k - 1)
+        }
         Interval::Min(a, b) => Interval::Min(
             Box::new(quote_interval(dlvl, a)),
             Box::new(quote_interval(dlvl, b)),
@@ -858,6 +878,14 @@ pub fn whnf(value: &Value) -> Value {
 /// a fresh neutral argument; comparing pairs (or a pair and a neutral) compares projections.
 pub fn conv(lvl: usize, a: &Value, b: &Value) -> bool {
     conv_at(lvl, 0, a, b)
+}
+
+/// Definitional equality with an explicit dimension depth `dlvl`, for use when the typing context
+/// already has dimension binders in scope (e.g. boundary checks of a *nested* `PLam`). Comparing the
+/// boundary value against the `PathP`'s `lhs`/`rhs` must reflect those outer dimensions as levels, or
+/// stuck `PApp`s carrying outer dims would quote at the wrong depth (index/level underflow).
+pub fn conv_dim(lvl: usize, dlvl: usize, a: &Value, b: &Value) -> bool {
+    conv_at(lvl, dlvl, a, b)
 }
 
 /// Definitional equality with explicit term-level and dimension-level counters.
@@ -1303,6 +1331,29 @@ mod tests {
         let v = eval(&env, &papp0);
         let point = eval(&env, &Term::Var(0));
         assert!(conv(1, &v, &point), "path β: (λ i. x) @ 0 ≡ x");
+    }
+
+    /// Regression (A2a): a *stuck* path application carrying a **De Morgan connection** under nested
+    /// dimension binders must quote without an index/level underflow. This is the shape the singleton
+    /// contraction in `id-equiv` produces: `λ i. λ j. (p @ (imax (~ i) j))` where `p` is a neutral
+    /// path (a free variable). Quoting / converting the two `PLam` closures introduces fresh dim
+    /// *levels* for `i`,`j`; `quote_interval` must map those levels back to indices using the depth at
+    /// the point of the neutral, not panic. Before the fix it computed `dlvl - k - 1` with `k >= dlvl`
+    /// and overflowed.
+    #[test]
+    fn stuck_papp_connection_under_nested_dims_quotes() {
+        let env = Env::empty().extend(Value::Neutral(crate::value::Neutral::Var(0)));
+        // λ i. λ j. p @ (imax (~ i) j)  — under the j-binder, i is dim index 1, j is dim index 0.
+        let body = Term::PApp(Box::new(Term::Var(0)), imax(neg(dim(1)), dim(0)));
+        let term = Term::PLam(Box::new(Term::PLam(Box::new(body))));
+        let v = eval(&env, &term);
+        let q = quote_at(1, 0, &v);
+        let v2 = eval(&env, &q);
+        assert!(
+            conv(1, &v, &v2),
+            "stuck connection PApp under nested dim binders quotes and round-trips"
+        );
+        assert!(conv(1, &v, &v), "stuck connection PApp is self-convertible");
     }
 
     // ---- M2: the effectful-neutral bubbles through every eliminator (spec §4, opnode-bubble) ----

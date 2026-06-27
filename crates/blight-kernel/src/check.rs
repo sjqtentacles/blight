@@ -6,7 +6,7 @@
 //! `check`/`infer` yields a `Proof` of the corresponding `HasType` judgement.
 
 use crate::context::Context;
-use crate::normalize::{conv, eval, quote, reflect};
+use crate::normalize::{conv, conv_dim, eval, quote, quote_value_at, reflect};
 use crate::proof::{Judgement, Proof};
 use crate::row::Row;
 use crate::semiring::{Grade, Semiring};
@@ -1781,18 +1781,22 @@ impl Checker {
                 let env1 = self.env_for(ctx).extend_dim(crate::term::Interval::I1);
                 let t0 = eval(&env0, body);
                 let t1 = eval(&env1, body);
-                if !conv(ctx.len(), &t0, lhs) {
+                // Boundary conv runs at the *current* dimension depth: outer `PLam`s already put
+                // dimensions in scope (reflected as levels in `lhs`/`rhs` and in `t0`/`t1`), so a
+                // `dlvl` of 0 would mis-quote stuck `PApp`s carrying those outer dims.
+                let dlvl = ctx.dim_len();
+                if !conv_dim(ctx.len(), dlvl, &t0, lhs) {
                     return Err(TypeError::BadCubical(format!(
                         "path lhs boundary mismatch: {:?} ≢ {:?}",
-                        quote(ctx.len(), &t0),
-                        quote(ctx.len(), lhs)
+                        quote_value_at(ctx.len(), dlvl, &t0),
+                        quote_value_at(ctx.len(), dlvl, lhs)
                     )));
                 }
-                if !conv(ctx.len(), &t1, rhs) {
+                if !conv_dim(ctx.len(), dlvl, &t1, rhs) {
                     return Err(TypeError::BadCubical(format!(
                         "path rhs boundary mismatch: {:?} ≢ {:?}",
-                        quote(ctx.len(), &t1),
-                        quote(ctx.len(), rhs)
+                        quote_value_at(ctx.len(), dlvl, &t1),
+                        quote_value_at(ctx.len(), dlvl, rhs)
                     )));
                 }
                 Ok((body_row, body_usage))

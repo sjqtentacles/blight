@@ -13,10 +13,11 @@
 ; *separately implemented* re-checker (the `blight-recheck` crate) independently re-verifies every
 ; judgement before any code is emitted. Matching `v` while the second vector `w` is still in scope
 ; makes the elaborator lift `w` into a *higher-order* eliminator motive (the result is a function
-; `Vec B n -> Vec (Pair A B) n`). The independent re-checker cannot faithfully reconstruct that
-; motive, so it *honestly DECLINES* this one judgement (an explicit "outside my fragment" refusal)
-; rather than raising a false soundness alarm — every other judgement, including the dependent
-; indexed motives of `safe-tail`/`vec-map`, is fully re-verified.
+; `Vec B n -> Vec (Pair A B) n`). The elaborator lowers this so the lifted binder's type is refined
+; per constructor arm (`Vec B n` becomes `Vec B (Succ m)` in the `vcons` arm), producing a core term
+; that BOTH the trusted kernel AND the independent re-checker fully certify — every judgement,
+; including this higher-order indexed motive and the dependent indexed motives of `safe-tail`/
+; `vec-map`, is re-verified.
 
 (load "std/nat.bl")
 (load "std/pair.bl")

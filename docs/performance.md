@@ -31,8 +31,8 @@ parse → elaborate → kernel-check → [--recheck] → lower → region::analy
 - **anf::normalize**: ANF + tail-call→jump + delay-trampoline loop. In this implementation it is the
   **most expensive** pure stage on larger inputs and scales **super-linearly** (see numbers below),
   so it is the first place to look if compile time matters.
-- **LLVM + clang**: IR is emitted at `OptimizationLevel::Default` (no custom optimization pass
-  pipeline), then handed to `clang` to assemble + link against the C runtime objects.
+- **LLVM + clang**: IR is emitted, optionally run through LLVM's new-pass-manager pipeline
+  (`--opt`, see §2d), then handed to `clang` to assemble + link against the C runtime objects.
 
 `--recheck` adds a second, independent verification of every kernel-accepted judgement before emit;
 it roughly doubles the "front" type-checking cost but buys the two-checkers-agree soundness story.
@@ -123,6 +123,32 @@ entirely process spawn, so the differences are within noise. The runtime *signal
 model actually shows up) is the GC-vs-region counter comparison in 2b, not these spawn-dominated
 totals.
 
+### 2d. LLVM optimization pipeline (`--opt`, hyperfine)
+
+`blight build` accepts `--opt <level>` (`0`/`none`, `2`/`default` (the default), `3`/`aggressive`),
+running LLVM's new-pass-manager pipeline (`default<O2>` / `default<O3>`) over the emitted IR before
+object emission. The pipelines preserve `musttail` markers, so tail-call soundness (spec §7.4) is
+unaffected — the `opt_levels_emit_runnable_objects` codegen test pins that every level produces a
+runnable object computing the identical result.
+
+Measured on a fold workload (`foldr plus` over a 10 000-element unary-`Nat` list) on the reference
+machine (hyperfine 1.20, Apple Silicon, macOS):
+
+| level | compile (`blight build`) | run (binary) |
+|---|---:|---:|
+| `--opt 0` | ~322 ms | ~2.9 ms |
+| `--opt 2` | ~332 ms (+3%) | ~2.9 ms |
+| `--opt 3` | ~336 ms (+4%) | ~2.9 ms |
+
+The headline (and deliberately honest) result: **the IR passes cost a few percent of compile time
+and buy no measurable runtime improvement on this workload.** That is an architectural signal, not a
+bug. Blight's generated `program.o` is a thin layer of `tailcc` thunks; the runtime cost lives almost
+entirely in the **separately-compiled C runtime** (GC allocation, boxing, `bl_force`), which the
+module-local pass pipeline cannot reach (there is no cross-object LTO between the Blight object and the
+runtime). The `--opt` flag is therefore wired and correct, but the real runtime levers remain the cost
+model in §3/§4 (unboxing, integer numerics, region discipline) rather than IR-level optimization. LTO
+across the Blight object + runtime is the next lever if IR optimization is to pay off.
+
 ## 3. Advantages
 
 - **Tiny trusted kernel + independent re-checker.** Soundness rests on two small checkers agreeing
@@ -145,8 +171,10 @@ totals.
   programs yet; numerals are cons chains. Fine for proofs and small values, unsuitable for heavy
   numeric work.
 - **Everything is boxed.** No unboxed scalars or flattened records; every value is a heap object.
-- **No LLVM optimization pipeline.** IR is emitted at `OptimizationLevel::Default` with no custom
-  pass pipeline, leaning on `clang` for the rest. There is headroom left on the table.
+- **LLVM IR passes don't move runtime yet (no LTO).** `--opt 2/3` runs the `default<Ox>` pipeline
+  over the Blight object, but it buys no measurable runtime gain (§2d): the cost is in the
+  separately-linked C runtime the module-local passes can't reach. Cross-object LTO is the missing
+  lever; until then `--opt` mainly costs a few percent of compile time.
 - **Per-step thunk allocation in the trampoline.** Bounded *stack*, but O(n) *heap* for an n-deep
   force.
 - **ANF is the pipeline bottleneck** and scales super-linearly on large inputs (table 2a).

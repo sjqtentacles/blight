@@ -116,6 +116,25 @@ fn plus_zero_proof_example_loads() {
     );
 }
 
+/// `ua_compute.bl` witnesses the univalence *computation* rule on a closed instance: transporting
+/// `true` along `ua (id-equiv Bool)` reduces (definitionally, via the kernel's `transp`-over-`Glue`
+/// rule) to `equiv-fun (id-equiv Bool) true = true`, so the reflexivity proof `ua-computes-bool`
+/// type-checks. This is the end-to-end (`ua` + `Glue` formation + `transp`) counterpart to the
+/// kernel white-box test `kan.rs::transp_ua_glue_line_applies_forward_map`.
+#[test]
+fn ua_compute_example_loads() {
+    assert_example_loads("ua_compute.bl");
+    let mut env = ElabEnv::new();
+    {
+        let mut prog = Program::with_resolver(&mut env, prelude_resolver);
+        prog.run(&read_example("ua_compute.bl")).expect("loads");
+    }
+    assert!(
+        env.global_term("ua-computes-bool").is_some(),
+        "the univalence computation rule is witnessed on the closed Bool instance"
+    );
+}
+
 /// Assert an example loads and defines a buildable `main` global.
 fn assert_buildable_main(name: &str) {
     let name = name.to_string();
@@ -374,6 +393,71 @@ fn int_arith_example_loads_and_rechecks() {
     .expect("re-checker ACCEPTS native Int arithmetic (primitive kernel nodes)");
 }
 
+/// `bench_sum.bl`: the unary-`Nat` counterpart of `int_sum.bl` and the Blight side of the
+/// cross-language sum workload (docs/benchmarks-game.md). Right-folds `plus` over a `List Nat` of
+/// 800 ones, so `main : Nat` is `Succ^800 Zero` — each `+` walks a `Succ` chain (the honest unary
+/// cost). Deep, so it runs on an 8 MiB stack; the re-checker ACCEPTS it (`Nat`/`List`/`foldr`).
+#[test]
+fn bench_sum_example_loads_and_rechecks() {
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            assert_buildable_main("bench_sum.bl");
+
+            let mut env = ElabEnv::new();
+            {
+                let mut prog = Program::with_resolver(&mut env, prelude_resolver);
+                prog.run(&read_example("bench_sum.bl")).expect("loads");
+            }
+            let ty = env.global_type("main").expect("main type").clone();
+            let term = env.global_term("main").expect("main term").clone();
+            blight_recheck::recheck_judgement(
+                env.signature(),
+                &blight_kernel::Judgement::HasType { term, ty },
+            )
+            .expect("re-checker ACCEPTS the unary-Nat foldr sum (Nat/List/foldr are in-fragment)");
+        })
+        .expect("spawn bench_sum load thread")
+        .join()
+        .expect("bench_sum load thread panicked (see message above)");
+}
+
+/// `int_sum.bl`: the machine-`Int` counterpart of `bench_sum.bl` — builds a `List Int` of `n` ones
+/// (counting on a unary-`Nat` spine, since `Int` has no eliminator) and `foldr int-add`s them via
+/// the `std/int.bl` wrappers, giving `800` with O(1) adds (no unary allocation). It defines a
+/// buildable `main : Int`; the independent re-checker ACCEPTS it (the only cubical-style decline
+/// would be Glue, which this never uses — `Int`/`List`/`foldr` are all in-fragment).
+#[test]
+fn int_sum_example_loads_and_rechecks() {
+    // `int_sum.bl` builds a 800-long `List Int` whose length lives on a unary-`Nat` spine, so
+    // elaboration/recheck recurses deeply — run on an 8 MiB stack like the other deep loads.
+    std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            assert_buildable_main("int_sum.bl");
+
+            let mut env = ElabEnv::new();
+            {
+                let mut prog = Program::with_resolver(&mut env, prelude_resolver);
+                prog.run(&read_example("int_sum.bl")).expect("loads");
+            }
+            assert!(
+                env.global_term("int-add").is_some(),
+                "int_sum.bl pulls in std/int.bl's `int-add` wrapper"
+            );
+            let ty = env.global_type("main").expect("main type").clone();
+            let term = env.global_term("main").expect("main term").clone();
+            blight_recheck::recheck_judgement(
+                env.signature(),
+                &blight_kernel::Judgement::HasType { term, ty },
+            )
+            .expect("re-checker ACCEPTS the Int foldr sum (Int/List/foldr are in-fragment)");
+        })
+        .expect("spawn int_sum load thread")
+        .join()
+        .expect("int_sum load thread panicked (see message above)");
+}
+
 /// `calculator.bl`: a tiny `Expr` evaluator over native machine `Int` (M11). `eval` is a structural
 /// recursion over the AST lowering each node to an `Int` primitive; like `int_arith.bl`, the
 /// independent re-checker *ACCEPTS* it (`Int`/`IntLit`/`IntPrim` are primitive kernel nodes). It
@@ -511,9 +595,11 @@ fn vec_map_example_loads() {
 
 /// `zip_vec.bl`: `zip-vec : Vec A n -> Vec B n -> Vec (Pair A B) n`. Matching the first vector with
 /// the second still in scope makes the elaborator lift the second vector into a *higher-order*
-/// eliminator motive (`… -> Vec B n -> Vec (Pair A B) n`), which the independent re-checker cannot
-/// faithfully reconstruct. It must therefore *honestly DECLINE* (never `Rejected` — that would be a
-/// soundness alarm). The example still loads and builds (the kernel accepts it).
+/// eliminator motive (`… -> Vec B n -> Vec (Pair A B) n`). As of A3 the elaborator lowers this to a
+/// core term that BOTH the trusted kernel and the independent re-checker fully certify (the per-arm
+/// index refinement of the lifted binder's type is done during lowering), so the re-checker now
+/// *ACCEPTS* it — a `Rejected` would be a soundness alarm, and a `Declined` would mean the
+/// re-verification regressed back to an honest refusal.
 #[test]
 fn zip_vec_example_loads() {
     assert_buildable_main("zip_vec.bl");
@@ -529,7 +615,10 @@ fn zip_vec_example_loads() {
         env.signature(),
         &blight_kernel::Judgement::HasType { term, ty },
     ) {
-        Ok(()) | Err(blight_recheck::RecheckError::Declined(_)) => {}
+        Ok(()) => {}
+        Err(blight_recheck::RecheckError::Declined(m)) => {
+            panic!("re-checker DECLINED `zip-vec` (A3 expects full re-verification): {m}")
+        }
         Err(blight_recheck::RecheckError::Rejected(m)) => {
             panic!("re-checker REJECTED `zip-vec` (soundness alarm): {m}")
         }
