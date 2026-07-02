@@ -15,8 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-BlValue bl_int(int64_t n) { return bl_alloc(BL_INT, 0, (uint64_t)n); }
-int64_t bl_int_val(BlValue v) { return (int64_t)v->header.aux; }
+/* `bl_int`/`bl_int_val` now live in the always-linked numeric.c (M21 unboxing). */
 
 /* Build a 1-arg closure: header.aux = fn ptr, fields[0..n] = captures. */
 static BlValue mkclo(void *fn, BlValue *caps, uint32_t n) {
@@ -82,7 +81,7 @@ static int test_deep_handler_resumes(void) {
   const char *ops[1] = { "ask" };
   BlOpClause clauses[1] = { ask_clause };
   BlValue result = bl_handle(NULL, ask_body, id_ret, 1, ops, clauses);
-  if (result == NULL || result->header.tag != BL_INT || bl_int_val(result) != 42) {
+  if (result == NULL || bl_obj_tag(result) != BL_INT || bl_int_val(result) != 42) {
     fprintf(stderr, "deep_handler_resumes: expected 42, got %s\n",
             result ? "wrong" : "null");
     return 1;
@@ -134,7 +133,7 @@ static int test_state_counter(void) {
   const char *ops[2] = { "get", "put" };
   BlOpClause clauses[2] = { sc_get_clause, sc_put_clause };
   BlValue result = bl_handle(NULL, sc_body, id_ret, 2, ops, clauses);
-  if (result == NULL || result->header.tag != BL_INT || bl_int_val(result) != 1) {
+  if (result == NULL || bl_obj_tag(result) != BL_INT || bl_int_val(result) != 1) {
     fprintf(stderr, "state_counter: expected 1, got %lld\n",
             result ? (long long)bl_int_val(result) : -999);
     return 1;

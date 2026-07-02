@@ -30,18 +30,18 @@ typedef struct BlArenaChunk {
 
 #define BL_ARENA_CHUNK_BYTES (64 * 1024)
 
-static BlArenaChunk *g_top;   /* top of the chunk stack (NULL when no region is open) */
-static uint32_t g_depth;      /* number of chunks currently on the stack */
-static size_t g_alloc_count;  /* total arena allocations (stats) */
+static BL_THREAD_LOCAL BlArenaChunk *g_top;   /* top of the chunk stack (NULL when no region is open) */
+static BL_THREAD_LOCAL uint32_t g_depth;      /* number of chunks currently on the stack */
+static BL_THREAD_LOCAL size_t g_alloc_count;  /* total arena allocations (stats) */
 
 /* Internal stack of region marks: each `bl_arena_enter` snapshots the current frontier; the paired
  * `bl_arena_leave` rewinds to it. Region scopes nest lexically, so this is a simple stack. */
 typedef struct { uint32_t depth; size_t bump; } BlMark;
 #define BL_MAX_REGIONS 4096
-static BlMark g_marks[BL_MAX_REGIONS];
-static size_t g_nmarks;
+static BL_THREAD_LOCAL BlMark g_marks[BL_MAX_REGIONS];
+static BL_THREAD_LOCAL size_t g_nmarks;
 
-static BlArenaChunk *push_chunk(size_t min_bytes) {
+static BL_COLD BlArenaChunk *push_chunk(size_t min_bytes) {
   size_t cap = BL_ARENA_CHUNK_BYTES;
   if (min_bytes > cap) cap = min_bytes; /* oversized object: dedicated chunk */
   BlArenaChunk *c = (BlArenaChunk *)malloc(sizeof(BlArenaChunk));
@@ -78,9 +78,9 @@ void bl_arena_enter(void) {
   g_nmarks++;
 }
 
-BlValue bl_arena_alloc(BlTag tag, uint32_t nfields, uint64_t aux) {
+BL_HOT BlValue bl_arena_alloc(BlTag tag, uint32_t nfields, uint64_t aux) {
   size_t bytes = sizeof(BlHeader) + (size_t)nfields * sizeof(BlValue);
-  if (!g_top || g_top->bump + bytes > g_top->cap) {
+  if (BL_UNLIKELY(!g_top || g_top->bump + bytes > g_top->cap)) {
     push_chunk(bytes);
   }
   BlValue o = (BlValue)(g_top->base + g_top->bump);

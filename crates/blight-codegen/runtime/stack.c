@@ -20,8 +20,8 @@ typedef struct Segment {
   struct Segment *prev;
 } Segment;
 
-static Segment *g_seg;
-static size_t g_seg_default = 1 << 16; /* 64 KiB initial segment */
+static BL_THREAD_LOCAL Segment *g_seg;
+static const size_t g_seg_default = 1 << 16; /* 64 KiB initial segment (shared, never mutated) */
 
 static Segment *new_segment(size_t size, Segment *prev) {
   Segment *s = (Segment *)malloc(sizeof(Segment));

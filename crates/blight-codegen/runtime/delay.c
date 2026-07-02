@@ -10,32 +10,42 @@
 #include "blight_rt.h"
 #include <stdio.h>
 
-/* A BL_LATER's field[0] is a BL_CLOSURE; its header.aux holds the function pointer and its
- * fields[] hold the captured env. Applying it (passing the closure as the env) steps once. */
-typedef BlValue (*BlStep)(BlValue closure);
+/* A BL_LATER's field[0] is a BL_CLOSURE thunk (codegen lowers `later a` to `later (λ_. a)`): its
+ * header.aux holds the lifted function pointer and its fields[] hold the captured env. Stepping it
+ * once means *applying* it through the ordinary closure calling convention — `fn(clo, arg)`, the
+ * same two-argument shape `bl_apply1`/`bl_app_global` use to call compiled closures from C. The
+ * thunk's parameter is the ignored unit binder of `λ_. a`, so the argument is irrelevant; we pass
+ * NULL. (A one-argument call here would mismatch every compiled closure's ABI.) */
+typedef BlValue (*BlStep)(BlValue closure, BlValue arg);
 
 static BlValue step_thunk(BlValue thunk) {
-  /* thunk is a BL_CLOSURE whose header.aux holds the function pointer (as an integer). */
   BlStep fn = (BlStep)(void *)(uintptr_t)thunk->header.aux;
-  return fn(thunk);
+  return fn(thunk, NULL);
 }
 
-BlValue bl_force(BlValue delay) {
+BL_HOT BlValue bl_force(BlValue delay) {
   BlValue cur = delay;
   /* GC root for the in-flight value across collections triggered by stepping. */
   bl_gc_push_root(&cur);
   for (;;) {
-    if (cur == NULL) {
+    if (BL_UNLIKELY(cur == NULL)) {
       fprintf(stderr, "blight: forced a null delay\n");
       bl_gc_pop_roots(1);
       return NULL;
+    }
+    if (bl_is_imm(cur)) {
+      /* A bare immediate value (already-evaluated, e.g. a fast Nat) is its own result. */
+      bl_gc_pop_roots(1);
+      return cur;
     }
     switch (cur->header.tag) {
       case BL_NOW:
         bl_gc_pop_roots(1);
         return cur->fields[0];
       case BL_LATER: {
-        /* Step once; a safepoint poll at this back-edge keeps the heap bounded. */
+        /* Step once; a safepoint poll at this back-edge keeps the heap bounded. This is the hot
+         * back-edge of every `Later`-guarded recursion, so it stays in the loop body (no per-step
+         * C-stack frame — the headline million-deep bounded-stack property). */
         bl_gc_poll();
         cur = step_thunk(cur->fields[0]);
         break;

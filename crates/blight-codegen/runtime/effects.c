@@ -21,17 +21,44 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <time.h>
+#include <sys/time.h>
 
 /* Intern table mapping (effect,op) -> index stored in BL_OPNODE.header.aux. Small and append-only;
- * effect/op name sets are tiny per program. */
+ * effect/op name sets are tiny per program.
+ *
+ * M15 (share-nothing multicore): this table is the one piece of effect state that must stay *shared*
+ * across worker threads — an OpNode interned on one worker carries an index another worker resolves
+ * via `op_name_of` after a message crosses. To make it race-free without a hot-path lock, all ops a
+ * program uses are interned **once at single-threaded startup** (codegen/driver calls
+ * `bl_effect_intern` for every declared op before any worker spawns), then the table is *frozen*:
+ * after `bl_effect_intern_freeze()`, `intern_op` only ever performs read-only lookups, so concurrent
+ * `bl_perform`s never mutate it. A miss after freeze is a program/codegen bug, not a runtime event,
+ * and aborts rather than racily appending. Single-runtime programs that never freeze keep the old
+ * lazy-append behavior, so M0-M14 are unchanged. */
 typedef struct { const char *effect; const char *op; } OpKey;
 #define BL_MAX_OPS 256
 static OpKey g_ops[BL_MAX_OPS];
 static size_t g_nops;
+static int g_ops_frozen; /* set by bl_effect_intern_freeze(); blocks further appends */
+
+/* Intern (effect,op) returning its stable index. Append-only; safe to call repeatedly. Public so the
+ * driver can pre-intern every declared op at single-threaded startup (M15). */
+uint64_t bl_effect_intern(const char *effect, const char *op);
+/* Freeze the intern table after startup pre-interning: subsequent `intern_op` calls must hit an
+ * existing entry (any miss aborts), guaranteeing the shared table is immutable during parallel
+ * execution. Idempotent. */
+void bl_effect_intern_freeze(void);
 
 static uint64_t intern_op(const char *effect, const char *op) {
   for (size_t i = 0; i < g_nops; i++) {
     if (strcmp(g_ops[i].effect, effect) == 0 && strcmp(g_ops[i].op, op) == 0) return i;
+  }
+  if (g_ops_frozen) {
+    /* The shared table is frozen for parallel execution; a miss means an op was not pre-interned at
+     * startup. Appending now would race other workers, so this is a hard error. */
+    fprintf(stderr, "blight: effect op (%s.%s) not pre-interned before freeze\n", effect, op);
+    abort();
   }
   if (g_nops >= BL_MAX_OPS) { fprintf(stderr, "blight: too many effect ops\n"); abort(); }
   g_ops[g_nops].effect = effect;
@@ -39,9 +66,29 @@ static uint64_t intern_op(const char *effect, const char *op) {
   return g_nops++;
 }
 
+uint64_t bl_effect_intern(const char *effect, const char *op) { return intern_op(effect, op); }
+
+void bl_effect_intern_freeze(void) { g_ops_frozen = 1; }
+
 static const char *op_name_of(uint64_t idx) {
   return idx < g_nops ? g_ops[idx].op : "?";
 }
+
+/* Public wrapper (P2, roadmap Wave 10 / graphics FFI): `graphics.c` is a separate translation unit
+ * and needs the exact same op-name lookup `bl_run_console`'s dispatch loop uses — the intern table
+ * itself must stay file-private (it is effects.c's own append/freeze-guarded state), so this is a
+ * thin read-only accessor rather than exposing `g_ops` directly. */
+const char *bl_op_name_of(uint64_t idx) { return op_name_of(idx); }
+
+/* Public wrapper (P5, roadmap Wave 10 / code mobility): `serialize.c`'s mobile serializer needs the
+ * EFFECT half of a `BL_OPNODE`'s (effect, op) pair too — an OpNode's `header.aux` is meaningful only
+ * as a LOCAL, first-use-order index into this process's own `g_ops` (unlike P5's codegen-emitted,
+ * compile-time-fixed function-index table), so the wire format ships the two NAME strings instead of
+ * the index, and the receiving process re-derives its own local index via `bl_effect_intern`. */
+static const char *effect_name_of(uint64_t idx) {
+  return idx < g_nops ? g_ops[idx].effect : "?";
+}
+const char *bl_effect_name_of(uint64_t idx) { return effect_name_of(idx); }
 
 static int is_opnode(BlValue v);
 static BlValue bl_perform_idx(uint64_t opidx, BlValue arg);
@@ -150,7 +197,7 @@ static BlValue make_compose(BlValue old_cont, uint64_t mode, BlValue fixed) {
   return clo;
 }
 
-static int is_opnode(BlValue v) { return v != NULL && v->header.tag == BL_OPNODE; }
+static int is_opnode(BlValue v) { return v != NULL && !bl_is_imm(v) && BL_TAG(v) == BL_OPNODE; }
 
 BlValue bl_app(BlValue f, BlValue a) {
   if (is_opnode(f)) {
@@ -178,6 +225,28 @@ BlValue bl_app(BlValue f, BlValue a) {
   return bl_apply1(f, a);
 }
 
+/* Direct application of a *captureless* top-level function (A3 spine fusion). The compiler proved
+ * the callee captures nothing (it was a `MkClosure(f, [])`), so its lifted code reads no
+ * environment: we invoke it with a NULL env, skipping the per-call closure allocation the un-fused
+ * `MkClosure(f, []) + bl_app` would do. Effect semantics are preserved *exactly*: if the argument is
+ * a suspended effect (an OpNode), we fall back to `bl_app` over a freshly-built closure so the
+ * pending application composes onto the continuation identically to a normal `Call` (mode-0 bubble).
+ * The common pure-argument path is a single indirect call with zero allocation. `fnptr` is the
+ * lifted function pointer (passed as an opaque `ptr` from codegen), not a `BlValue`. */
+typedef BlValue (*BlFn2)(BlValue env, BlValue arg);
+BlValue bl_app_global(void *fnptr, BlValue a) {
+  if (is_opnode(a)) {
+    /* rare: the argument bubbled — rebuild a real captureless closure and defer to the OpNode-aware
+     * path, so composition matches the un-fused call bit-for-bit (only the effectful-arg path pays
+     * the allocation, exactly as the baseline always did). */
+    bl_gc_push_root(&a);
+    BlValue clo = bl_alloc(BL_CLOSURE, 0, (uint64_t)(uintptr_t)fnptr);
+    bl_gc_pop_roots(1);
+    return bl_app(clo, a);
+  }
+  return ((BlFn2)fnptr)(NULL, a);
+}
+
 /* ---- OpNode-aware data construction (spec §4.3). ----
  *
  * A constructor or tuple is *not* an elimination, but under call-by-value an effectful field still
@@ -203,7 +272,15 @@ static BlValue make_rebuild(BlValue old_cont, BlValue obj, uint64_t field_idx) {
 
 BlValue bl_con_bubble(BlValue obj) {
   if (obj == NULL) return obj;
-  uint32_t tag = obj->header.tag;
+  if (bl_is_imm(obj)) return obj; /* an immediate has no fields: nothing to bubble */
+  uint32_t tag = BL_TAG(obj);
+  /* Con/Tuple fields can hold a stuck OpNode: a `let x = perform op … in (C … x …)` builds the
+   * constructor with `x` (the OpNode) as a field. Freezing that OpNode into the value would silently
+   * never resume the effect; bubbling it composes "rebuild this Con with the resumed field" onto the
+   * continuation. (Closures are *not* bubbled here: a closure capture may legitimately be a suspended
+   * effectful computation — e.g. a structural eliminator's induction hypothesis `self k : ! E A` —
+   * and eagerly bubbling it would run the recursion's per-step effects out of order. Construction of
+   * closures is therefore identity; their captures resume when the closure is *applied*.) */
   if (tag != BL_CON && tag != BL_TUPLE) return obj;
   uint32_t n = obj->header.nfields;
   for (uint32_t i = 0; i < n; i++) {
@@ -249,7 +326,7 @@ BlValue bl_handle(BlValue env, BlThunk body, BlReturnClause ret,
   bl_gc_push_root(&comp);
 
   for (;;) {
-    if (comp == NULL || comp->header.tag != BL_OPNODE) {
+    if (!is_opnode(comp)) {
       /* Pure value: run the return clause. */
       BlValue r = ret(env, comp);
       bl_gc_pop_roots(1);
@@ -343,7 +420,7 @@ static BlValue make_cont(BlHandler *h, BlValue kont) {
 
 static BlValue bl_handle_fold(BlHandler *h, BlValue comp) {
   for (;;) {
-    if (comp == NULL || comp->header.tag != BL_OPNODE) {
+    if (!is_opnode(comp)) {
       return bl_apply1(h->ret_clo, comp);
     }
     const char *opn = op_name_of(comp->header.aux);
@@ -361,8 +438,8 @@ static BlValue bl_handle_fold(BlHandler *h, BlValue comp) {
     comp = bl_apply1(partial, k);
 #ifdef BL_EFFECTS_DEBUG
     fprintf(stderr, "[handle] op which=%zu arg_tag=%u partial_tag=%u result_tag=%u\n",
-            which, arg ? arg->header.tag : 999, partial ? partial->header.tag : 999,
-            comp ? comp->header.tag : 999);
+            which, arg ? bl_obj_tag(arg) : 999, partial ? bl_obj_tag(partial) : 999,
+            comp ? bl_obj_tag(comp) : 999);
 #endif
   }
 }
@@ -381,7 +458,7 @@ BlValue bl_handle_clo(BlValue body_clo, BlValue ret_clo,
 
   BlValue comp = bl_apply1(body_clo, NULL);
 #ifdef BL_EFFECTS_DEBUG
-  fprintf(stderr, "[handle] body -> tag=%u n_ops=%zu\n", comp ? comp->header.tag : 999, n_ops);
+  fprintf(stderr, "[handle] body -> tag=%u n_ops=%zu\n", comp ? bl_obj_tag(comp) : 999, n_ops);
 #endif
   BlValue r = bl_handle_fold(h, comp);
   bl_gc_pop_roots(1 + n_ops);
@@ -439,26 +516,265 @@ static BlValue bl_string_of(const unsigned char *buf, size_t len) {
 }
 
 /* Decode a `String` to stdout bytes (no trailing newline). Mirrors prelude_rt.c's `bl_print_string`
- * but without the implicit newline, so `print` is faithful line-by-line output. */
+ * but without the implicit newline, so `print` is faithful line-by-line output. Reads a packed
+ * BL_STRING (A2) directly in O(1)/codepoint, or walks an `empty`/`push` cons-list otherwise —
+ * observationally identical (a packed literal is the same byte sequence as its inductive spine). */
 static void bl_emit_string(BlValue s) {
   BlValue cur = s;
-  while (cur && cur->header.tag == BL_CON && cur->header.aux == 1 && cur->header.nfields == 2) {
-    /* field[0] is a unary Nat codepoint: count Succ depth. */
-    uint64_t cp = 0;
-    BlValue n = cur->fields[0];
-    while (n && n->header.tag == BL_CON && n->header.aux == 1 && n->header.nfields == 1) {
-      cp++;
-      n = n->fields[0];
+  for (;;) {
+    if (cur && !bl_is_imm(cur) && bl_obj_tag(cur) == BL_STRING) {
+      /* A packed BL_STRING (A2) — possibly the whole value or a packed *tail* spliced in by
+       * `string-append` (whose `(empty) t` arm returns the second operand verbatim). Emit it in
+       * O(1)/codepoint, then we are done (a packed string has no further cons tail). */
+      uint64_t n = bl_string_len_of_value(cur);
+      for (uint64_t i = 0; i < n; i++) {
+        putchar((int)(unsigned char)bl_string_codepoint_at(cur, i));
+      }
+      return;
     }
-    putchar((int)(unsigned char)cp);
-    cur = cur->fields[1];
+    if (!(cur && bl_obj_tag(cur) == BL_CON && bl_obj_aux(cur) == 1 && bl_obj_nfields(cur) == 2)) {
+      return;
+    }
+    /* field[0] is a Nat codepoint (a fast immediate Nat, a boxed BL_NAT, or a `Succ` chain). */
+    putchar((int)(unsigned char)bl_nat_of_value(bl_obj_field(cur, 0)));
+    cur = bl_obj_field(cur, 1);
   }
+}
+
+/* ---- FileIO native handler helpers (C1, std/io.bl). ----
+ *
+ * Decode a `String` cons-list to a freshly malloc'd, NUL-terminated byte buffer; `*out_len` gets the
+ * byte length (excluding the NUL). The caller frees. Used to turn a `String` path/contents into the
+ * C string `fopen`/`fwrite` need. Returns NULL only on allocation failure. */
+static char *bl_string_to_cstr(BlValue s, size_t *out_len) {
+  size_t cap = 64, len = 0;
+  char *buf = (char *)malloc(cap);
+  if (!buf) { if (out_len) *out_len = 0; return NULL; }
+  BlValue cur = s;
+  for (;;) {
+    if (cur && !bl_is_imm(cur) && bl_obj_tag(cur) == BL_STRING) {
+      /* A packed BL_STRING (A2), possibly a packed tail spliced in by `string-append`. */
+      uint64_t n = bl_string_len_of_value(cur);
+      for (uint64_t i = 0; i < n; i++) {
+        if (len + 1 >= cap) {
+          cap *= 2;
+          char *grown = (char *)realloc(buf, cap);
+          if (!grown) { free(buf); if (out_len) *out_len = 0; return NULL; }
+          buf = grown;
+        }
+        buf[len++] = (char)(unsigned char)bl_string_codepoint_at(cur, i);
+      }
+      break;
+    }
+    if (!(cur && bl_obj_tag(cur) == BL_CON && bl_obj_aux(cur) == 1 && bl_obj_nfields(cur) == 2)) {
+      break;
+    }
+    if (len + 1 >= cap) {
+      cap *= 2;
+      char *grown = (char *)realloc(buf, cap);
+      if (!grown) { free(buf); if (out_len) *out_len = 0; return NULL; }
+      buf = grown;
+    }
+    buf[len++] = (char)(unsigned char)bl_nat_of_value(bl_obj_field(cur, 0));
+    cur = bl_obj_field(cur, 1);
+  }
+  buf[len] = '\0';
+  if (out_len) *out_len = len;
+  return buf;
+}
+
+/* Read an entire file by `path` (a `String`) into a fresh `String`. A missing/unreadable file or any
+ * read error yields the empty `String` (never a crash) — the handler's job is to fold I/O, not to
+ * surface error codes into pure code (a future `Either`-typed variant could). */
+static BlValue bl_read_whole_file(BlValue path) {
+  size_t plen = 0;
+  char *cpath = bl_string_to_cstr(path, &plen);
+  if (!cpath) return bl_alloc(BL_CON, 0, 0); /* empty */
+  FILE *f = fopen(cpath, "rb");
+  free(cpath);
+  if (!f) return bl_alloc(BL_CON, 0, 0); /* empty on open failure */
+  size_t cap = 4096, len = 0;
+  unsigned char *data = (unsigned char *)malloc(cap);
+  if (!data) { fclose(f); return bl_alloc(BL_CON, 0, 0); }
+  for (;;) {
+    if (len == cap) {
+      cap *= 2;
+      unsigned char *grown = (unsigned char *)realloc(data, cap);
+      if (!grown) { free(data); fclose(f); return bl_alloc(BL_CON, 0, 0); }
+      data = grown;
+    }
+    size_t got = fread(data + len, 1, cap - len, f);
+    len += got;
+    if (got == 0) break;
+  }
+  fclose(f);
+  BlValue s = bl_string_of(data, len);
+  free(data);
+  return s;
+}
+
+/* Write `contents` (a `String`) to the file named by `path` (a `String`), truncating. A `mk-pair`
+ * envelope carries both: field[0] = path, field[1] = contents. Errors print a warning to stderr and
+ * are otherwise a no-op (the op still resumes with `tt`). */
+static void bl_write_whole_file(BlValue pair) {
+  if (!pair || bl_obj_tag(pair) != BL_CON || bl_obj_nfields(pair) != 2) return;
+  BlValue path = bl_obj_field(pair, 0);
+  BlValue contents = bl_obj_field(pair, 1);
+  size_t plen = 0, clen = 0;
+  char *cpath = bl_string_to_cstr(path, &plen);
+  char *cdata = bl_string_to_cstr(contents, &clen);
+  if (cpath && cdata) {
+    FILE *f = fopen(cpath, "wb");
+    if (f) {
+      fwrite(cdata, 1, clen, f);
+      fclose(f);
+    } else {
+      fprintf(stderr, "blight: write-file could not open '%s'\n", cpath);
+    }
+  }
+  free(cpath);
+  free(cdata);
+}
+
+/* ---- Bytes native handler helpers (C2, std/bytes.bl). ----
+ *
+ * A `Bytes` effect gives untrusted `.bl` code a mutable, runtime-backed byte buffer — the substrate a
+ * self-hosted lexer/parser (C3) needs to walk a file's bytes without rebuilding a cons-list on every
+ * step. The *pure* Blight value is just a plain `Int` HANDLE (a trusted, re-checkable kernel type)
+ * indexing this C-side table; the actual mutable storage lives entirely outside the GC graph (like a
+ * file lives in the OS for `FileIO`), so the byte arrays add ZERO new traced object kinds and ZERO
+ * TCB — a program only ever passes an `Int` around. Handles are never recycled (monotonic), so a
+ * stale handle is always detectably out of range rather than aliasing a new buffer.
+ *
+ * The table is thread-local: each native worker (M15 pool) gets its own buffers, matching the
+ * thread-local GC nursery and `g_collections`. Buffers are freed at process exit by the OS; a
+ * long-running embedding could add an explicit free op later (not needed for the batch compiler). */
+typedef struct {
+  unsigned char *data;
+  size_t len;
+} BlByteBuf;
+
+static BL_THREAD_LOCAL BlByteBuf *g_bytes = NULL;
+static BL_THREAD_LOCAL size_t g_bytes_len = 0; /* number of live handles */
+static BL_THREAD_LOCAL size_t g_bytes_cap = 0; /* table capacity */
+
+/* Allocate a zero-filled buffer of `len` bytes, returning its handle (a non-negative table index).
+ * Returns -1 on allocation failure (the op then resumes with `Int -1`, an out-of-range handle every
+ * subsequent get/set rejects, so a failed allocation degrades to no-ops rather than a crash). */
+static int64_t bl_bytes_new(size_t len) {
+  if (g_bytes_len == g_bytes_cap) {
+    size_t ncap = g_bytes_cap == 0 ? 8 : g_bytes_cap * 2;
+    BlByteBuf *grown = (BlByteBuf *)realloc(g_bytes, ncap * sizeof(BlByteBuf));
+    if (!grown) return -1;
+    g_bytes = grown;
+    g_bytes_cap = ncap;
+  }
+  unsigned char *data = (unsigned char *)calloc(len ? len : 1, 1);
+  if (!data) return -1;
+  int64_t h = (int64_t)g_bytes_len;
+  g_bytes[g_bytes_len].data = data;
+  g_bytes[g_bytes_len].len = len;
+  g_bytes_len++;
+  return h;
+}
+
+/* True iff `h` names a live buffer. */
+static int bl_bytes_valid(int64_t h) {
+  return h >= 0 && (size_t)h < g_bytes_len && g_bytes[h].data != NULL;
+}
+
+/* Read byte `i` of buffer `h`; out-of-range handle/index reads as 0 (total, never traps). */
+static uint64_t bl_bytes_get(int64_t h, uint64_t i) {
+  if (!bl_bytes_valid(h) || i >= g_bytes[h].len) return 0;
+  return g_bytes[h].data[i];
+}
+
+/* Write the low 8 bits of `v` to byte `i` of buffer `h`; out-of-range handle/index is a no-op. */
+static void bl_bytes_set(int64_t h, uint64_t i, uint64_t v) {
+  if (!bl_bytes_valid(h) || i >= g_bytes[h].len) return;
+  g_bytes[h].data[i] = (unsigned char)(v & 0xFFu);
+}
+
+/* Length of buffer `h` (0 for an invalid handle). */
+static size_t bl_bytes_length(int64_t h) {
+  return bl_bytes_valid(h) ? g_bytes[h].len : 0;
+}
+
+/* ---- Arrays native handler helpers (A3a, std/array.bl). ----
+ *
+ * A scalar `Int`-valued mutable array: the exact `Bytes` pattern above, except each element is a raw
+ * `int64_t` rather than a byte. Because elements are machine integers (never GC pointers), a
+ * `malloc`'d table of them can never hold a stale/moved pointer, so this is GC-safe with zero tracer
+ * changes — unlike a hypothetical array of boxed `BlValue`s (see A3b, gated). Handles are monotonic
+ * and thread-local, mirroring `g_bytes`. */
+typedef struct {
+  int64_t *data;
+  size_t len;
+} BlIntArray;
+
+static BL_THREAD_LOCAL BlIntArray *g_arrays = NULL;
+static BL_THREAD_LOCAL size_t g_arrays_len = 0; /* number of live handles */
+static BL_THREAD_LOCAL size_t g_arrays_cap = 0; /* table capacity */
+
+/* Allocate a zero-filled array of `len` `Int` elements, returning its handle (a non-negative table
+ * index). Returns -1 on allocation failure (an always-invalid handle, so subsequent ops degrade to
+ * no-ops rather than a crash). */
+static int64_t bl_array_new(size_t len) {
+  if (g_arrays_len == g_arrays_cap) {
+    size_t ncap = g_arrays_cap == 0 ? 8 : g_arrays_cap * 2;
+    BlIntArray *grown = (BlIntArray *)realloc(g_arrays, ncap * sizeof(BlIntArray));
+    if (!grown) return -1;
+    g_arrays = grown;
+    g_arrays_cap = ncap;
+  }
+  int64_t *data = (int64_t *)calloc(len ? len : 1, sizeof(int64_t));
+  if (!data) return -1;
+  int64_t h = (int64_t)g_arrays_len;
+  g_arrays[g_arrays_len].data = data;
+  g_arrays[g_arrays_len].len = len;
+  g_arrays_len++;
+  return h;
+}
+
+/* True iff `h` names a live array. */
+static int bl_array_valid(int64_t h) {
+  return h >= 0 && (size_t)h < g_arrays_len && g_arrays[h].data != NULL;
+}
+
+/* Read element `i` of array `h`; out-of-range handle/index reads as 0 (total, never traps). */
+static int64_t bl_array_get(int64_t h, uint64_t i) {
+  if (!bl_array_valid(h) || i >= g_arrays[h].len) return 0;
+  return g_arrays[h].data[i];
+}
+
+/* Write `v` to element `i` of array `h`; out-of-range handle/index is a no-op. */
+static void bl_array_set(int64_t h, uint64_t i, int64_t v) {
+  if (!bl_array_valid(h) || i >= g_arrays[h].len) return;
+  g_arrays[h].data[i] = v;
+}
+
+/* Length of array `h` (0 for an invalid handle). */
+static size_t bl_array_length(int64_t h) {
+  return bl_array_valid(h) ? g_arrays[h].len : 0;
+}
+
+/* ---- `Clock` effect (Wave 2 / L1, std/time.bl): wall-clock time as a machine `Int` ----------------
+ *
+ * `Clock` is another ordinary user effect folded by the same top-level handler, exactly like
+ * `Bytes`/`Arrays`: a single total op `now : Unit -> Int` with zero mutable state of its own (unlike
+ * `Bytes`/`Arrays` it needs no side table at all — it just reads the OS clock). Milliseconds since the
+ * Unix epoch is used (rather than seconds) so that two `now` calls close together in a test are very
+ * likely to differ, without needing sub-millisecond precision no test here depends on. */
+static int64_t bl_clock_now_ms(void) {
+  struct timeval tv;
+  if (gettimeofday(&tv, NULL) != 0) return 0; /* total: a clock failure reads as epoch 0, never traps */
+  return (int64_t)tv.tv_sec * 1000 + (int64_t)(tv.tv_usec / 1000);
 }
 
 BlValue bl_run_console(BlValue comp) {
   bl_gc_push_root(&comp);
   for (;;) {
-    if (comp == NULL || comp->header.tag != BL_OPNODE) {
+    if (!is_opnode(comp)) {
       bl_gc_pop_roots(1);
       return comp; /* pure result */
     }
@@ -483,6 +799,114 @@ BlValue bl_run_console(BlValue comp) {
       free(line);
       bl_gc_push_root(&s);
       comp = (kont == NULL) ? s : bl_apply1(kont, s);
+      bl_gc_pop_roots(1);
+    } else if (strcmp(opn, "read-file") == 0) {
+      BlValue s = bl_read_whole_file(arg);
+      bl_gc_push_root(&s);
+      comp = (kont == NULL) ? s : bl_apply1(kont, s);
+      bl_gc_pop_roots(1);
+    } else if (strcmp(opn, "write-file") == 0) {
+      bl_write_whole_file(arg);
+      BlValue u = bl_unit();
+      comp = (kont == NULL) ? u : bl_apply1(kont, u);
+    } else if (strcmp(opn, "new-bytes") == 0) {
+      /* arg : Nat (length). Resume with the Int handle (-1 on allocation failure). */
+      int64_t h = bl_bytes_new((size_t)bl_nat_of_value(arg));
+      BlValue r = bl_int(h);
+      bl_gc_push_root(&r);
+      comp = (kont == NULL) ? r : bl_apply1(kont, r);
+      bl_gc_pop_roots(1);
+    } else if (strcmp(opn, "bytes-len") == 0) {
+      /* arg : Int (handle). Resume with the Nat length. */
+      BlValue r = bl_nat_from_u64((uint64_t)bl_bytes_length(bl_int_val(arg)));
+      bl_gc_push_root(&r);
+      comp = (kont == NULL) ? r : bl_apply1(kont, r);
+      bl_gc_pop_roots(1);
+    } else if (strcmp(opn, "get-byte") == 0) {
+      /* arg : (Pair Int Nat) = (handle, index). Resume with the Nat byte (0 if out of range). */
+      int64_t h = bl_int_val(bl_obj_field(arg, 0));
+      uint64_t i = bl_nat_of_value(bl_obj_field(arg, 1));
+      BlValue r = bl_nat_from_u64(bl_bytes_get(h, i));
+      bl_gc_push_root(&r);
+      comp = (kont == NULL) ? r : bl_apply1(kont, r);
+      bl_gc_pop_roots(1);
+    } else if (strcmp(opn, "set-byte") == 0) {
+      /* arg : (Pair Int (Pair Nat Nat)) = (handle, (index, value)). Resume with Unit. */
+      int64_t h = bl_int_val(bl_obj_field(arg, 0));
+      BlValue rest = bl_obj_field(arg, 1);
+      uint64_t i = bl_nat_of_value(bl_obj_field(rest, 0));
+      uint64_t v = bl_nat_of_value(bl_obj_field(rest, 1));
+      bl_bytes_set(h, i, v);
+      BlValue u = bl_unit();
+      comp = (kont == NULL) ? u : bl_apply1(kont, u);
+    } else if (strcmp(opn, "new-array") == 0) {
+      /* arg : Nat (length). Resume with the Int handle (-1 on allocation failure). */
+      int64_t h = bl_array_new((size_t)bl_nat_of_value(arg));
+      BlValue r = bl_int(h);
+      bl_gc_push_root(&r);
+      comp = (kont == NULL) ? r : bl_apply1(kont, r);
+      bl_gc_pop_roots(1);
+    } else if (strcmp(opn, "array-len") == 0) {
+      /* arg : Int (handle). Resume with the Nat length. */
+      BlValue r = bl_nat_from_u64((uint64_t)bl_array_length(bl_int_val(arg)));
+      bl_gc_push_root(&r);
+      comp = (kont == NULL) ? r : bl_apply1(kont, r);
+      bl_gc_pop_roots(1);
+    } else if (strcmp(opn, "get-elem") == 0) {
+      /* arg : (Pair Int Nat) = (handle, index). Resume with the Int element (0 if out of range). */
+      int64_t h = bl_int_val(bl_obj_field(arg, 0));
+      uint64_t i = bl_nat_of_value(bl_obj_field(arg, 1));
+      BlValue r = bl_int(bl_array_get(h, i));
+      bl_gc_push_root(&r);
+      comp = (kont == NULL) ? r : bl_apply1(kont, r);
+      bl_gc_pop_roots(1);
+    } else if (strcmp(opn, "set-elem") == 0) {
+      /* arg : (Pair Int (Pair Nat Int)) = (handle, (index, value)). Resume with Unit. */
+      int64_t h = bl_int_val(bl_obj_field(arg, 0));
+      BlValue rest = bl_obj_field(arg, 1);
+      uint64_t i = bl_nat_of_value(bl_obj_field(rest, 0));
+      int64_t v = bl_int_val(bl_obj_field(rest, 1));
+      bl_array_set(h, i, v);
+      BlValue u = bl_unit();
+      comp = (kont == NULL) ? u : bl_apply1(kont, u);
+    } else if (strcmp(opn, "new-boxed-array") == 0) {
+      /* arg : (Pair Nat A) = (length, initial value). Resume with the Int handle (-1 on failure). */
+      uint64_t len = bl_nat_of_value(bl_obj_field(arg, 0));
+      BlValue init = bl_obj_field(arg, 1);
+      int64_t h = bl_boxed_array_new((size_t)len, init);
+      BlValue r = bl_int(h);
+      bl_gc_push_root(&r);
+      comp = (kont == NULL) ? r : bl_apply1(kont, r);
+      bl_gc_pop_roots(1);
+    } else if (strcmp(opn, "boxed-len") == 0) {
+      /* arg : Int (handle). Resume with the Nat length. */
+      BlValue r = bl_nat_from_u64((uint64_t)bl_boxed_array_length(bl_int_val(arg)));
+      bl_gc_push_root(&r);
+      comp = (kont == NULL) ? r : bl_apply1(kont, r);
+      bl_gc_pop_roots(1);
+    } else if (strcmp(opn, "get-boxed") == 0) {
+      /* arg : (Pair Int Nat) = (handle, index). Resume with the element (a fresh nullary Con if the
+       * handle/index is invalid — see bl_boxed_array_get's header comment for why). */
+      int64_t h = bl_int_val(bl_obj_field(arg, 0));
+      uint64_t i = bl_nat_of_value(bl_obj_field(arg, 1));
+      BlValue r = bl_boxed_array_get(h, i);
+      bl_gc_push_root(&r);
+      comp = (kont == NULL) ? r : bl_apply1(kont, r);
+      bl_gc_pop_roots(1);
+    } else if (strcmp(opn, "set-boxed") == 0) {
+      /* arg : (Pair Int (Pair Nat A)) = (handle, (index, value)). Resume with Unit. */
+      int64_t h = bl_int_val(bl_obj_field(arg, 0));
+      BlValue rest = bl_obj_field(arg, 1);
+      uint64_t i = bl_nat_of_value(bl_obj_field(rest, 0));
+      BlValue v = bl_obj_field(rest, 1);
+      bl_boxed_array_set(h, i, v);
+      BlValue u = bl_unit();
+      comp = (kont == NULL) ? u : bl_apply1(kont, u);
+    } else if (strcmp(opn, "now") == 0) {
+      /* arg : Unit (ignored). Resume with the Int wall-clock time (milliseconds since the epoch). */
+      BlValue r = bl_int(bl_clock_now_ms());
+      bl_gc_push_root(&r);
+      comp = (kont == NULL) ? r : bl_apply1(kont, r);
       bl_gc_pop_roots(1);
     } else {
       /* An operation we do not interpret bubbled to the top: report and stop. */

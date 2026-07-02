@@ -11,11 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-BlValue bl_int(int64_t n) { return bl_alloc(BL_INT, 0, (uint64_t)n); }
-int64_t bl_int_val(BlValue v) { return (int64_t)v->header.aux; }
-BlValue bl_con(uint64_t ctor_index, uint32_t nfields) {
-  return bl_alloc(BL_CON, nfields, ctor_index);
-}
+/* `bl_int`/`bl_int_val`/`bl_con` now live in the always-linked numeric.c (M21 unboxing). */
 
 static int test_enter_alloc_leave_frees(void) {
   if (bl_arena_live_bytes() != 0) {
@@ -79,7 +75,9 @@ static int test_objects_not_evacuated(void) {
   }
 
   bl_gc_push_root(&arena_obj);
-  BlValue child = bl_con(7, 0); /* a GC-heap object */
+  /* A genuine GC-heap child (boxed, not a tagged immediate) so the collector actually has an object
+   * to trace through the arena edge and evacuate. */
+  BlValue child = bl_alloc(BL_CON, 0, 7);
   arena_obj->fields[0] = child;
 
   void *arena_addr_before = (void *)arena_obj;
@@ -112,7 +110,7 @@ static int test_objects_not_evacuated(void) {
   }
   /* Its GC-heap child must have survived (traced through the arena object) and be valid. */
   BlValue traced_child = arena_obj->fields[0];
-  if (traced_child == NULL || traced_child->header.tag != BL_CON || traced_child->header.aux != 7) {
+  if (traced_child == NULL || bl_obj_tag(traced_child) != BL_CON || bl_obj_aux(traced_child) != 7) {
     fprintf(stderr, "arena: GC child reachable only via arena object was lost\n");
     bl_gc_pop_roots(1);
     bl_arena_leave();

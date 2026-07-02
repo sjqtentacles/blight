@@ -1,0 +1,10 @@
+[package]
+name = "blight-net"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# UNTRUSTED, dependency-free distributed transport (M19). No `blight-kernel` dependency on purpose:
+# the kernel (TCB) never sees a socket or a thread, and this crate cannot grow the trust boundary.
+[dependencies]

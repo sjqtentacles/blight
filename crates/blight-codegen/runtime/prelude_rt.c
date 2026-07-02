@@ -13,30 +13,22 @@
  */
 #include "blight_rt.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <inttypes.h>
-
-BlValue bl_int(int64_t n) {
-  BlValue v = bl_alloc(BL_INT, 0, (uint64_t)n);
-  return v;
-}
-
-int64_t bl_int_val(BlValue v) {
-  return (int64_t)v->header.aux;
-}
-
-BlValue bl_con(uint64_t ctor_index, uint32_t nfields) {
-  return bl_alloc(BL_CON, nfields, ctor_index);
-}
 
 /* Decode a unary `Nat` (`Zero`=ctor 0 / `Succ`=ctor 1) to its integer value, counting Succ depth
  * iteratively. Non-Nat or malformed chains return the accumulated count so far. */
 static uint64_t bl_nat_to_u64(BlValue v) {
+  if (v && bl_obj_tag(v) == BL_NAT) return bl_obj_aux(v);
   uint64_t n = 0;
   BlValue cur = v;
-  while (cur && cur->header.tag == BL_CON && cur->header.aux == 1 && cur->header.nfields == 1) {
+  while (cur && bl_obj_tag(cur) == BL_CON && bl_obj_aux(cur) == 1 && bl_obj_nfields(cur) == 1) {
     n++;
-    cur = cur->fields[0];
+    cur = bl_obj_field(cur, 0);
   }
+  /* A recognized `Nat` materializes lazily: `bl_nat_to_con` peels one `Succ` whose predecessor is a
+   * fast `Nat`, so a partially-walked chain can terminate at a fast Nat carrying the rest. */
+  if (cur && bl_obj_tag(cur) == BL_NAT) n += bl_obj_aux(cur);
   return n;
 }
 
@@ -44,39 +36,48 @@ static uint64_t bl_nat_to_u64(BlValue v) {
  * its integer; otherwise the constructor index. Counts Succ depth iteratively. */
 static void bl_print(BlValue v) {
   if (v == NULL) { printf("<null>\n"); return; }
-  switch (v->header.tag) {
+  switch (bl_obj_tag(v)) {
     case BL_INT:
-      printf("%" PRId64 "\n", (int64_t)v->header.aux);
+      printf("%" PRId64 "\n", (int64_t)bl_obj_aux(v));
+      return;
+    case BL_NAT:
+      /* A fast machine-word Nat (numeric.c, M20; immediate or boxed): numeral lives in `aux`. */
+      printf("%" PRIu64 "\n", bl_obj_aux(v));
       return;
     case BL_CON: {
       /* Convention: constructor index 0 = Zero (0 fields), index 1 = Succ (1 field). */
       uint64_t n = 0;
       BlValue cur = v;
-      while (cur->header.tag == BL_CON && cur->header.aux == 1 && cur->header.nfields == 1) {
+      while (bl_obj_tag(cur) == BL_CON && bl_obj_aux(cur) == 1 && bl_obj_nfields(cur) == 1) {
         n++;
-        cur = cur->fields[0];
+        cur = bl_obj_field(cur, 0);
       }
-      if (cur->header.tag == BL_CON && cur->header.aux == 0) {
+      if (bl_obj_tag(cur) == BL_CON && bl_obj_aux(cur) == 0) {
         printf("%" PRIu64 "\n", n);
+      } else if (bl_obj_tag(cur) == BL_NAT) {
+        /* A recognized `Nat`: `bl_nat_to_con` peels one `Succ` whose predecessor is a fast `Nat`,
+         * so the chain can terminate at a fast Nat carrying the remaining count (M20 coherence). */
+        printf("%" PRIu64 "\n", n + bl_obj_aux(cur));
       } else {
-        printf("con#%" PRIu64 "\n", v->header.aux);
+        printf("con#%" PRIu64 "\n", bl_obj_aux(v));
       }
       return;
     }
     case BL_TUPLE: {
       printf("(");
-      for (uint32_t i = 0; i < v->header.nfields; i++) {
+      for (uint32_t i = 0; i < bl_obj_nfields(v); i++) {
         if (i) printf(", ");
-        BlValue f = v->fields[i];
-        if (f && f->header.tag == BL_INT) printf("%" PRId64, (int64_t)f->header.aux);
-        else if (f && f->header.tag == BL_CON) printf("con#%" PRIu64, f->header.aux);
+        BlValue f = bl_obj_field(v, i);
+        if (f && bl_obj_tag(f) == BL_INT) printf("%" PRId64, (int64_t)bl_obj_aux(f));
+        else if (f && bl_obj_tag(f) == BL_NAT) printf("%" PRIu64, bl_obj_aux(f));
+        else if (f && bl_obj_tag(f) == BL_CON) printf("con#%" PRIu64, bl_obj_aux(f));
         else printf("?");
       }
       printf(")\n");
       return;
     }
     default:
-      printf("<value tag %u>\n", v->header.tag);
+      printf("<value tag %u>\n", bl_obj_tag(v));
   }
 }
 
@@ -87,11 +88,24 @@ static void bl_print(BlValue v) {
  * raw bytes (so ASCII renders directly); values >255 are truncated to a byte, which is sufficient
  * for the ASCII fragment the language currently models. */
 void bl_print_string(BlValue s) {
+  /* A packed BL_STRING is read directly from its codepoint buffer (O(1)/codepoint, no spine
+   * materialization); a packed value may also appear as a *tail* spliced in by `string-append`
+   * (whose `(empty) t` arm returns the second operand verbatim), so we re-check each step.
+   * Observationally identical to fully walking the `empty`/`push` cons-list. */
   BlValue cur = s;
-  while (cur && cur->header.tag == BL_CON && cur->header.aux == 1 && cur->header.nfields == 2) {
-    uint64_t cp = bl_nat_to_u64(cur->fields[0]);
-    putchar((int)(unsigned char)cp);
-    cur = cur->fields[1];
+  for (;;) {
+    if (cur && !bl_is_imm(cur) && bl_obj_tag(cur) == BL_STRING) {
+      uint64_t n = bl_string_len_of_value(cur);
+      for (uint64_t i = 0; i < n; i++) {
+        putchar((int)(unsigned char)bl_string_codepoint_at(cur, i));
+      }
+      break;
+    }
+    if (!(cur && bl_obj_tag(cur) == BL_CON && bl_obj_aux(cur) == 1 && bl_obj_nfields(cur) == 2)) {
+      break;
+    }
+    putchar((int)(unsigned char)bl_nat_to_u64(bl_obj_field(cur, 0)));
+    cur = bl_obj_field(cur, 1);
   }
   putchar('\n');
 }
@@ -129,6 +143,18 @@ int main(void) {
   bl_stack_init();
   BlValue result = bl_program_entry();
   bl_print(result);
+  /* Opt-in GC churn signal for the bench harness. Gated behind BL_GC_STATS so it is off by default;
+   * written to stderr so it never contaminates stdout (the correctness golden). */
+  if (getenv("BL_GC_STATS")) {
+    fprintf(stderr,
+            "BL_GC_STATS collections=%zu minor=%zu major=%zu grows=%zu promoted_bytes=%zu "
+            "bytes_allocated=%zu compacting=%d shrinks=%zu old_capacity=%zu old_live=%zu "
+            "peak_old_reserved=%zu\n",
+            bl_gc_collections(), bl_gc_minor(), bl_gc_major(), bl_gc_grows(),
+            bl_gc_promoted_bytes(), bl_gc_bytes_allocated(), bl_gc_oldgen_compacting(),
+            bl_gc_old_shrinks(), bl_gc_old_capacity(), bl_gc_old_live_bytes(),
+            bl_gc_peak_old_reserved_bytes());
+  }
   return 0;
 }
 #endif /* BL_NO_MAIN */

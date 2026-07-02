@@ -12,13 +12,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/* Local copies of the primitive constructors (normally in prelude_rt.c, which also defines `main`
- * and the program entry; the harness brings its own `main`, so we avoid linking that file). */
-BlValue bl_int(int64_t n) { return bl_alloc(BL_INT, 0, (uint64_t)n); }
-int64_t bl_int_val(BlValue v) { return (int64_t)v->header.aux; }
-BlValue bl_con(uint64_t ctor_index, uint32_t nfields) {
-  return bl_alloc(BL_CON, nfields, ctor_index);
-}
+/* `bl_int`/`bl_int_val`/`bl_con` now live in the always-linked numeric.c (M21 unboxing), so the
+ * harness no longer supplies local stubs. */
 
 /* ---- a countdown Delay built from LATER thunks ----
  *
@@ -27,8 +22,11 @@ BlValue bl_con(uint64_t ctor_index, uint32_t nfields) {
  *   count  > 0  ->  later(next step)     [a BL_LATER holding the next step closure]
  *
  * `bl_force` drives this without growing the C stack, regardless of `count`.
- */
-static BlValue countdown_step(BlValue self);
+ *
+ * The step closure follows the ordinary closure calling convention `fn(clo, arg)` (the thunk's
+ * unit parameter is ignored), matching how `step_thunk` applies a `BL_LATER`'s thunk and how the
+ * compiler lowers `later (λ_. …)`. */
+static BlValue countdown_step(BlValue self, BlValue arg);
 
 static BlValue make_step(int64_t count) {
   /* closure: header.aux = fn ptr, fields[0] = boxed count */
@@ -39,7 +37,8 @@ static BlValue make_step(int64_t count) {
   return clo;
 }
 
-static BlValue countdown_step(BlValue self) {
+static BlValue countdown_step(BlValue self, BlValue arg) {
+  (void)arg;
   int64_t count = bl_int_val(self->fields[0]);
   if (count <= 0) {
     BlValue now = bl_alloc(BL_NOW, 1, 0);
@@ -59,7 +58,7 @@ static int test_million_deep(void) {
   start->fields[0] = make_step(1000000);
   BlValue result = bl_force(start);
   bl_gc_pop_roots(1);
-  if (result == NULL || result->header.tag != BL_INT || bl_int_val(result) != 0) {
+  if (result == NULL || bl_obj_tag(result) != BL_INT || bl_int_val(result) != 0) {
     fprintf(stderr, "million_deep: wrong result\n");
     return 1;
   }
@@ -67,8 +66,9 @@ static int test_million_deep(void) {
 }
 
 static int test_gc_pressure(void) {
-  /* A live root we will verify survives collection. */
-  BlValue keep = bl_con(7, 0);
+  /* A live root we will verify survives collection. A boxed heap object (not a tagged immediate) so
+   * the collector must actually forward it across collections. */
+  BlValue keep = bl_alloc(BL_CON, 0, 7);
   bl_gc_push_root(&keep);
 
   /* Allocate a large amount of garbage to force many collections. The heap is small (set by the
@@ -86,7 +86,7 @@ static int test_gc_pressure(void) {
     return 1;
   }
   /* `keep` must have survived (and been forwarded) intact. */
-  if (keep == NULL || keep->header.tag != BL_CON || keep->header.aux != 7) {
+  if (keep == NULL || bl_obj_tag(keep) != BL_CON || bl_obj_aux(keep) != 7) {
     fprintf(stderr, "gc_pressure: live root corrupted across %zu collections\n", collections);
     bl_gc_pop_roots(1);
     return 1;
