@@ -17,6 +17,7 @@
 use crate::diagnostic::Diagnostic;
 use crate::elab::{elaborate, parse_decl, ElabEnv, ElabError};
 use crate::macros::MacroEnv;
+use crate::scope::narrow_span;
 use crate::sexpr::{read_all, read_all_spanned, Sexpr};
 use crate::spores::PackageManifest;
 use crate::surface::Decl;
@@ -103,6 +104,42 @@ impl<'a> Program<'a> {
         }
     }
 
+    /// A driver backed by a [`PackageManifest`] *and* a fallback resolver for `(load …)`: the
+    /// manifest is tried first (so a pinned dependency always wins over anything else of the same
+    /// name — the manifest is the source of truth once a project opts into one), and only a path
+    /// the manifest doesn't know about falls through to `fallback`. This is what
+    /// [`Self::with_package`] is missing: that constructor's `(load …)` resolver is
+    /// manifest-*only*, so e.g. the CLI's embedded-prelude fallback (`(load "std/nat.bl")` with no
+    /// source checkout) silently stops working the moment a project adds a `spore.toml` — this
+    /// constructor is how the CLI keeps both working together.
+    ///
+    /// `(import "pkg/mod")` is unaffected by `fallback`: it always resolves strictly against the
+    /// manifest (see `run_import`), since an import is inherently "one of my declared
+    /// dependencies", not an arbitrary loadable path.
+    pub fn with_package_and_fallback(
+        env: &'a mut ElabEnv,
+        manifest: PackageManifest,
+        fallback: impl Fn(&str) -> Result<String, ElabError> + 'a,
+    ) -> Self {
+        let resolver_manifest = manifest.clone();
+        Program {
+            env,
+            resolver: Box::new(move |path: &str| match resolver_manifest.resolve(path) {
+                Ok(src) => Ok(src),
+                Err(manifest_err) => fallback(path).map_err(|fallback_err| {
+                    ElabError::BadForm(format!(
+                        "cannot load {path:?}: not found via the package manifest ({manifest_err}) \
+                         or the fallback resolver ({fallback_err})"
+                    ))
+                }),
+            }),
+            macros: MacroEnv::new(),
+            package: Some(manifest),
+            imported: HashSet::new(),
+            importing: Vec::new(),
+        }
+    }
+
     /// Process every form in `src`, returning the outcome of each. Stops at the first error.
     pub fn run(&mut self, src: &str) -> Result<Vec<Outcome>, ElabError> {
         let forms = read_all(src).map_err(|e| ElabError::BadForm(e.msg))?;
@@ -115,8 +152,10 @@ impl<'a> Program<'a> {
     }
 
     /// Span-aware sibling of [`run`](Self::run): parse with the span-aware reader and, on the first
-    /// error, return a [`Diagnostic`] carrying the offending top-level form's source span so the
-    /// caller can render a caret-underlined message. A reader error carries its own (finer) span.
+    /// error, return a [`Diagnostic`] carrying a source span so the caller can render a
+    /// caret-underlined message — the *offending sub-expression*'s span when one can be
+    /// recovered (currently: an unbound name, via [`narrow_span`]), else the whole top-level
+    /// form's span. A reader error carries its own (finer) span.
     pub fn run_with_diagnostics(&mut self, src: &str) -> Result<Vec<Outcome>, Diagnostic> {
         let forms = read_all_spanned(src).map_err(|e| Diagnostic {
             message: e.msg,
@@ -127,10 +166,52 @@ impl<'a> Program<'a> {
             let plain = form.strip();
             let mut produced = self
                 .run_form(&plain)
-                .map_err(|e| Diagnostic::at(e.to_string(), form.span))?;
+                .map_err(|e| Diagnostic::at(e.to_string(), narrow_span(form, &e)))?;
             outcomes.append(&mut produced);
         }
         Ok(outcomes)
+    }
+
+    /// Process every form in `src`, collecting a [`Diagnostic`] for **every** failing top-level
+    /// form rather than stopping at the first (unlike [`run`](Self::run) and
+    /// [`run_with_diagnostics`](Self::run_with_diagnostics)). This is the API an editor/LSP needs:
+    /// a buffer with three unrelated typos should report three errors in one pass.
+    ///
+    /// Forms are not independent: several declaration forms mutate `ElabEnv` incrementally *before*
+    /// they are known to succeed (e.g. `(defdata …)` registers each constructor as it elaborates
+    /// that constructor's fields, but only declares the datatype itself in the signature at the
+    /// very end — see `declare_effect`/`declare_data` in `elab.rs`). So "catch the error and keep
+    /// going" would be unsound on its own: a form that fails partway through could leave behind a
+    /// constructor registered for a datatype that was never declared, corrupting what later,
+    /// unrelated forms observe. To stay sound, every form's mutable state (`ElabEnv`, the macro
+    /// table, and the import bookkeeping) is snapshotted before it runs and is restored verbatim if
+    /// the form fails, so a rolled-back form leaves *no* trace.
+    pub fn check_all_diagnostics(&mut self, src: &str) -> Vec<Diagnostic> {
+        let forms = match read_all_spanned(src) {
+            Ok(forms) => forms,
+            Err(e) => {
+                return vec![Diagnostic {
+                    message: e.msg,
+                    span: e.span,
+                }]
+            }
+        };
+        let mut diagnostics = Vec::new();
+        for form in &forms {
+            let plain = form.strip();
+            let env_snapshot = self.env.clone();
+            let macros_snapshot = self.macros.clone();
+            let imported_snapshot = self.imported.clone();
+            let importing_snapshot = self.importing.clone();
+            if let Err(e) = self.run_form(&plain) {
+                diagnostics.push(Diagnostic::at(e.to_string(), narrow_span(form, &e)));
+                *self.env = env_snapshot;
+                self.macros = macros_snapshot;
+                self.imported = imported_snapshot;
+                self.importing = importing_snapshot;
+            }
+        }
+        diagnostics
     }
 
     /// Process a single top-level form. A `(load …)` expands to the outcomes of the loaded file;
@@ -166,6 +247,22 @@ impl<'a> Program<'a> {
                 if kw == "define-macro" {
                     self.macros.define(form).map_err(ElabError::BadForm)?;
                     return Ok(vec![Outcome::Declared]);
+                }
+                // `(mutual …)` / `(define-recs …)` / `(deftotals …)` — mutual recursion. Desugar to a
+                // generated tag datatype + one merged recursive function + per-member projections
+                // (crate::mutual), then process each emitted form in place. Zero kernel growth.
+                if kw == "mutual" || kw == "define-recs" || kw == "deftotals" {
+                    let forms = if kw == "mutual" {
+                        crate::mutual::desugar_mutual(items)?
+                    } else {
+                        crate::mutual::desugar_block(kw, items)?
+                    };
+                    let mut outcomes = Vec::new();
+                    for f in &forms {
+                        let mut produced = self.run_form(f)?;
+                        outcomes.append(&mut produced);
+                    }
+                    return Ok(outcomes);
                 }
             }
         }
@@ -442,6 +539,89 @@ mod tests {
         );
     }
 
+    /// `with_package_and_fallback`: a `(load …)` path the manifest doesn't know about still
+    /// resolves via the fallback resolver — the CLI's embedded-prelude-under-a-manifest-project
+    /// regression this constructor exists to fix.
+    #[test]
+    fn with_package_and_fallback_falls_through_for_unknown_paths() {
+        let manifest = PackageManifest::parse(
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+            std::path::Path::new("/proj"),
+        )
+        .expect("manifest parses");
+        let mut env = ElabEnv::new();
+        let outcomes = {
+            let mut prog = Program::with_package_and_fallback(&mut env, manifest, |path| {
+                if path == "std/nat.bl" {
+                    Ok("(defdata Nat () (Zero) (Succ (n Nat)))".into())
+                } else {
+                    Err(ElabError::BadForm(format!(
+                        "no such fallback file {path:?}"
+                    )))
+                }
+            });
+            prog.run("(load \"std/nat.bl\")\n(the Nat Zero)")
+                .expect("falls back and checks")
+        };
+        assert!(matches!(outcomes.last(), Some(Outcome::Checked(_))));
+    }
+
+    /// `with_package_and_fallback`: when *both* the manifest and the fallback could resolve a
+    /// path, the manifest wins — a pinned dependency is never silently shadowed by whatever the
+    /// fallback would have produced.
+    #[test]
+    fn with_package_and_fallback_prefers_the_manifest() {
+        let dir = std::env::temp_dir().join(format!(
+            "blight_program_manifest_precedence_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("main.bl"),
+            "(defdata FromManifest () (FromManifestCtor))",
+        )
+        .unwrap();
+        let manifest =
+            PackageManifest::parse("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n", &dir)
+                .expect("manifest parses");
+        let mut env = ElabEnv::new();
+        {
+            let mut prog = Program::with_package_and_fallback(&mut env, manifest, |_path| {
+                Ok("(defdata FromFallback () (FromFallbackCtor))".into())
+            });
+            prog.run("(load \"demo/main\")").expect("manifest resolves");
+        }
+        assert!(
+            env.data_constructors("FromManifest").is_some(),
+            "the manifest's source won, not the fallback's"
+        );
+        assert!(env.data_constructors("FromFallback").is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// When neither the manifest nor the fallback can resolve a path, the error mentions both
+    /// attempts (so a user isn't left guessing which resolution path was supposed to work).
+    #[test]
+    fn with_package_and_fallback_reports_both_failures() {
+        let manifest = PackageManifest::parse(
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+            std::path::Path::new("/proj"),
+        )
+        .expect("manifest parses");
+        let mut env = ElabEnv::new();
+        let mut prog = Program::with_package_and_fallback(&mut env, manifest, |path| {
+            Err(ElabError::BadForm(format!("fallback also has no {path:?}")))
+        });
+        let r = prog.run("(load \"nope.bl\")");
+        match r {
+            Err(ElabError::BadForm(msg)) => {
+                assert!(msg.contains("package manifest"), "{msg}");
+                assert!(msg.contains("fallback"), "{msg}");
+            }
+            other => panic!("expected a BadForm error, got {other:?}"),
+        }
+    }
+
     /// `(load "name")` splices another file's forms; the resolver supplies the source.
     #[test]
     fn load_form_pulls_in_file() {
@@ -640,5 +820,138 @@ mod tests {
             matches!(r, Err(ElabError::BadForm(ref m)) if m.contains("overlapping")),
             "overlapping instance is rejected: {r:?}"
         );
+    }
+
+    // ---- `check_all_diagnostics` (Wave 1 / A1a: LSP-oriented multi-error collection) ----------
+
+    /// Two independent bad top-level forms in one buffer both surface as diagnostics — an editor
+    /// wants every error in the buffer, not just the first (unlike `run`/`run_with_diagnostics`,
+    /// which stop at the first failure).
+    #[test]
+    fn collects_a_diagnostic_per_failing_form() {
+        let mut env = ElabEnv::new();
+        let diags = {
+            let mut prog = Program::new(&mut env);
+            prog.check_all_diagnostics(
+                "(defdata Nat () (Zero) (Succ (n Nat)))\n\
+                 (the Nat undefined-one)\n\
+                 (the Nat undefined-two)",
+            )
+        };
+        assert_eq!(
+            diags.len(),
+            2,
+            "both independent bad forms are reported: {diags:?}"
+        );
+        assert!(diags[0].span.is_some(), "each diagnostic carries a span");
+        assert!(diags[1].span.is_some(), "each diagnostic carries a span");
+    }
+
+    /// A valid form standing between two bad forms still elaborates and is visible afterwards —
+    /// `check_all_diagnostics` does not abandon the rest of the buffer after an error.
+    #[test]
+    fn valid_form_between_errors_still_commits() {
+        let mut env = ElabEnv::new();
+        let diags = {
+            let mut prog = Program::new(&mut env);
+            prog.check_all_diagnostics(
+                "(defdata Nat () (Zero) (Succ (n Nat)))\n\
+                 (the Nat undefined-one)\n\
+                 (define one (the Nat (Succ Zero)))\n\
+                 (the Nat undefined-two)",
+            )
+        };
+        assert_eq!(diags.len(), 2, "the two bad forms are reported: {diags:?}");
+        assert!(
+            env.global_term("one").is_some(),
+            "the good form in between still committed"
+        );
+    }
+
+    /// The core rollback gotcha: `(defdata ...)` registers constructors into `ElabEnv` one at a
+    /// time as it elaborates each field (elab.rs ~340-390), *before* the datatype itself is
+    /// declared in the signature. A `defdata` whose second constructor is ill-typed must not leave
+    /// the first constructor's registration behind — otherwise a later, unrelated form could
+    /// observe a constructor that belongs to no declared datatype.
+    #[test]
+    fn failed_defdata_does_not_leak_partial_constructor_state() {
+        let mut env = ElabEnv::new();
+        let diags = {
+            let mut prog = Program::new(&mut env);
+            prog.check_all_diagnostics(
+                "(defdata Bad () (Ok1) (Bad2 (x NoSuchType)))\n\
+                 (the Bad (Ok1))",
+            )
+        };
+        // Both the bad `defdata` and the now-meaningless reference to `Bad`/`Ok1` are errors.
+        assert_eq!(diags.len(), 2, "{diags:?}");
+        assert!(
+            env.constructor_rec_flags("Ok1").is_none(),
+            "the first constructor of the failed defdata must not remain registered"
+        );
+        assert!(
+            env.data_constructors("Bad").is_none(),
+            "the datatype itself must not be registered either"
+        );
+    }
+
+    /// A whole-buffer reader (parse) error is reported as a single diagnostic, matching
+    /// `run_with_diagnostics`'s existing behavior for malformed s-expressions.
+    #[test]
+    fn unbalanced_parens_is_a_single_reader_diagnostic() {
+        let mut env = ElabEnv::new();
+        let diags = {
+            let mut prog = Program::new(&mut env);
+            prog.check_all_diagnostics("(defdata Nat () (Zero)")
+        };
+        assert_eq!(diags.len(), 1, "{diags:?}");
+    }
+
+    /// Wave 9 / T1 (LSP v2): an unbound name deep inside a top-level form is underlined at the
+    /// *sub-expression* itself, not the whole enclosing form — the deferred "inline sub-expression
+    /// diagnostics" half of the A1 plan's Gotcha 3, delivered via [`crate::scope::narrow_span`]
+    /// rather than a full `Surface`/`ElabError` span-threading refactor.
+    #[test]
+    fn diagnostic_points_at_subexpression_span() {
+        let mut env = ElabEnv::new();
+        let src = "(defdata Nat () (Zero) (Succ (n Nat)))\n\
+                   (the Nat (lam (x) (Succ undefined-thing)))";
+        let diags = {
+            let mut prog = Program::new(&mut env);
+            prog.check_all_diagnostics(src)
+        };
+        assert_eq!(diags.len(), 1, "{diags:?}");
+        let span = diags[0].span.expect("carries a span");
+        assert_eq!(
+            &src[span.start..span.end],
+            "undefined-thing",
+            "the span underlines the offending identifier, not the whole `(the ...)` form"
+        );
+    }
+
+    /// `run_with_diagnostics` gets the same sub-expression narrowing as `check_all_diagnostics`.
+    #[test]
+    fn run_with_diagnostics_also_narrows_the_span() {
+        let mut env = ElabEnv::new();
+        let src = "(defdata Nat () (Zero))\n(the Nat undefined-thing)";
+        let mut prog = Program::new(&mut env);
+        let err = prog.run_with_diagnostics(src).unwrap_err();
+        let span = err.span.expect("carries a span");
+        assert_eq!(&src[span.start..span.end], "undefined-thing");
+    }
+
+    /// No errors at all yields no diagnostics, and every form commits normally.
+    #[test]
+    fn clean_buffer_yields_no_diagnostics() {
+        let mut env = ElabEnv::new();
+        let diags = {
+            let mut prog = Program::new(&mut env);
+            prog.check_all_diagnostics(
+                "(defdata Nat () (Zero) (Succ (n Nat)))\n\
+                 (define one (the Nat (Succ Zero)))",
+            )
+        };
+        assert!(diags.is_empty(), "{diags:?}");
+        assert!(env.global_term("one").is_some());
     }
 }

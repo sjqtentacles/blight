@@ -9,3 +9,13 @@ rust-version.workspace = true
 [dependencies]
 blight-kernel = { path = "../blight-kernel" }
 toml = "0.8"
+# Registry v1 (Wave 2 / A5) tarball extraction. Pure-Rust (`flate2`'s default `miniz_oxide` backend
+# needs no system zlib; `tar` has no compression dependency of its own), and no async/TLS stack —
+# see `registry.rs`'s module doc for why remote HTTP(S) transport is deliberately out of scope for
+# this pass (an intentionally small dependency addition, same spirit as A1's `lsp-server` choice).
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+tar = "0.4"
+ureq = { version = "3.3.0", default-features = false, features = ["rustls"] }
+
+[dev-dependencies]
+proptest = "1.11.0"

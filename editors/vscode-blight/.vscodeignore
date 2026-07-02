@@ -1,4 +1,10 @@
 .vscode/**
 .gitignore
 *.vsix
-node_modules/**
+src/**
+tsconfig.json
+*.map
+# NOTE: node_modules/** is intentionally NOT excluded — vscode-languageclient is a runtime
+# dependency the compiled extension.js requires. Run `npm install --production` (or `vsce
+# package`, which does this itself) before packaging so devDependencies (typescript, @types/*)
+# are stripped out but vscode-languageclient stays.

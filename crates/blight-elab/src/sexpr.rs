@@ -96,9 +96,16 @@ impl std::fmt::Display for ReadError {
     }
 }
 
+/// The maximum s-expression nesting depth the reader accepts. Past this, recursion is refused with a
+/// [`ReadError`] rather than overflowing the stack — adversarial input like `((((((…` (found by the
+/// `reader`/`elab`/`kernel` fuzz targets) is rejected gracefully. Far above any plausible hand- or
+/// machine-written program. Kept well below the point where the reader's own (mutually recursive)
+/// descent would exhaust a small thread stack.
+pub const MAX_DEPTH: usize = 256;
+
 /// Parse a single s-expression from the front of `input`, returning it and the unconsumed rest.
 pub fn read_one(input: &str) -> Result<(Sexpr, &str), ReadError> {
-    let (s, rest) = read_one_spanned_at(input, 0)?;
+    let (s, rest) = read_one_spanned_at(input, 0, 0)?;
     Ok((s.strip(), rest))
 }
 
@@ -113,7 +120,7 @@ pub fn read_all_spanned(input: &str) -> Result<Vec<Spanned<SpannedSexpr>>, ReadE
     let mut out = Vec::new();
     let mut abs = skip_ws_at(input, 0);
     while abs < input.len() {
-        let (s, after) = read_one_spanned_at(&input[abs..], abs)?;
+        let (s, after) = read_one_spanned_at(&input[abs..], abs, 0)?;
         out.push(s);
         abs = skip_ws_at(input, after_offset(input, abs, after));
     }
@@ -131,15 +138,22 @@ fn after_offset(input: &str, _abs: usize, rest: &str) -> usize {
 fn read_one_spanned_at(
     input: &str,
     base: usize,
+    depth: usize,
 ) -> Result<(Spanned<SpannedSexpr>, &str), ReadError> {
     let trimmed = skip_ws(input);
     let lead = input.len() - trimmed.len();
     let start = base + lead;
     let rest = trimmed;
+    if depth > MAX_DEPTH {
+        return Err(ReadError::at(
+            format!("s-expression nesting too deep (limit {MAX_DEPTH})"),
+            Span::new(start, start + 1),
+        ));
+    }
     match rest.chars().next() {
         None => Err(ReadError::new("unexpected end of input")),
-        Some('(') | Some('[') => read_list_spanned(rest, start),
-        Some('{') => read_brace_spanned(rest, start),
+        Some('(') | Some('[') => read_list_spanned(rest, start, depth),
+        Some('{') => read_brace_spanned(rest, start, depth),
         Some('"') => {
             let (atom, after) = read_string(rest)?;
             let end = start + (rest.len() - after.len());
@@ -174,6 +188,7 @@ fn read_one_spanned_at(
 fn read_list_spanned(
     input: &str,
     start: usize,
+    depth: usize,
 ) -> Result<(Spanned<SpannedSexpr>, &str), ReadError> {
     let open = input.chars().next().unwrap();
     let close = if open == '(' { ')' } else { ']' };
@@ -200,7 +215,7 @@ fn read_list_spanned(
                 ));
             }
             Some(_) => {
-                let (item, after) = read_one_spanned_at(rest, cursor)?;
+                let (item, after) = read_one_spanned_at(rest, cursor, depth + 1)?;
                 let consumed = rest.len() - after.len();
                 cursor += consumed;
                 rest = after;
@@ -213,6 +228,7 @@ fn read_list_spanned(
 fn read_brace_spanned(
     input: &str,
     start: usize,
+    depth: usize,
 ) -> Result<(Spanned<SpannedSexpr>, &str), ReadError> {
     let mut rest = &input['{'.len_utf8()..];
     let mut cursor = start + '{'.len_utf8();
@@ -245,7 +261,7 @@ fn read_brace_spanned(
                 ));
             }
             Some(_) => {
-                let (item, after) = read_one_spanned_at(rest, cursor)?;
+                let (item, after) = read_one_spanned_at(rest, cursor, depth + 1)?;
                 cursor += rest.len() - after.len();
                 rest = after;
                 items.push(item);
@@ -433,5 +449,22 @@ mod tests {
         let src = "(Succ (n Nat))";
         let spanned = read_all_spanned(src).unwrap();
         assert_eq!(spanned[0].strip(), read_one(src).unwrap().0);
+    }
+
+    #[test]
+    fn deeply_nested_input_is_rejected_not_overflowed() {
+        // Pathologically deep nesting (found by the fuzz targets) must return a `ReadError`, not
+        // overflow the stack. Use well past `MAX_DEPTH` open parens.
+        let src = "(".repeat(MAX_DEPTH + 50);
+        let err = read_all(&src).unwrap_err();
+        assert!(
+            err.msg.contains("too deep"),
+            "expected a depth-limit error, got: {}",
+            err.msg
+        );
+        // A merely-deep-but-legal nesting still parses.
+        let ok_depth = 100;
+        let nested = format!("{}x{}", "(".repeat(ok_depth), ")".repeat(ok_depth));
+        assert!(read_all(&nested).is_ok());
     }
 }

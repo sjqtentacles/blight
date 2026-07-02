@@ -69,7 +69,10 @@ pub enum Surface {
     /// diverge, so it carries the built-in `Partial` effect (it cannot inhabit a proof).
     Force(Box<Surface>),
     /// `(perform op arg)` — perform an algebraic operation (spec §4.2); elaborates to `Term::Op`.
-    Perform(String, Box<Surface>),
+    /// `(perform op (T ...) arg)` — Wave 7/E2: `perform` at a *parameterized* effect's operation,
+    /// explicitly supplying the effect's type-argument instantiation (e.g. `Ref`'s `A`).  Empty
+    /// for a non-parameterized operation (the overwhelmingly common, pre-E2 case).
+    Perform(String, Vec<Surface>, Box<Surface>),
     /// `(handle body (return x r) (op x k e) ...)` — an effect handler (spec §4.3); elaborates to
     /// `Term::Handle`. The first clause is the `return` clause; the rest are operation clauses.
     Handle {
@@ -129,6 +132,17 @@ pub enum Surface {
     /// `(transp (i. A) φ a0)` — Kan transport of `a0 : A[i0]` to `A[i1]` along the line `i. A`,
     /// constant on `φ`. The line is written `(plam (i) A)` (a `PLam`).
     Transp(Box<Surface>, Box<Cofibration>, Box<Surface>),
+    /// `(hcomp A φ (plam (j) u) a0)` — Kan homogeneous composition (spec §2.6): fill the open box of
+    /// shape `A` on cofibration `φ` whose lid is the line `j. u` and whose floor is `a0`. The `trans`
+    /// tactic (Track M2a) is the motivating client: `A` is degenerate/constant here (the surface
+    /// form does not itself write a dimension-varying carrier), matching every current use.
+    HComp(Box<Surface>, Box<Cofibration>, Box<Surface>, Box<Surface>),
+    /// `(comp (plam (i) A) φ (plam (j) u) a0)` — general Kan composition along the (possibly
+    /// varying) line `i. A`, derived as `hcomp` at `A[i1]` over `transp (i. A) ⊥ a0` (CCHM). Added
+    /// alongside `hcomp` for symmetry with the kernel's `Term::Comp`; not required by `trans` (which
+    /// needs only the constant-family `hcomp` case) but kept available for future non-constant-line
+    /// proofs.
+    Comp(Box<Surface>, Box<Cofibration>, Box<Surface>, Box<Surface>),
 }
 
 /// A surface cofibration `φ` (spec §2.6), parsed from the dedicated forms `ctop`/`cbot`/`(ieq0 r)`/
@@ -180,8 +194,12 @@ pub enum Decl {
     DefTotal { name: String, body: Surface },
     /// `(effect E (op param-ty result-ty) ...)` — declare an algebraic effect and its operations
     /// (spec §4.2). Each operation is `(name A B)` with parameter type `A` and result type `B`.
+    /// `(effect E (params...) (op param-ty result-ty) ...)` — Wave 7/E2: a *parameterized* effect,
+    /// whose own type-parameter telescope (e.g. `Ref`'s `(A (Type 0))`) each op's `A`/`B` may
+    /// reference by name. Empty `params` for an ordinary (pre-E2) effect.
     DefEffect {
         name: String,
+        params: Vec<Binder>,
         ops: Vec<(String, Surface, Surface)>,
     },
     /// `(define name body)` — a non-recursive definition.

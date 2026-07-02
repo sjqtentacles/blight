@@ -27,10 +27,15 @@ fn read_example(name: &str) -> String {
 fn assert_example_loads(name: &str) {
     // Some examples (notably the string ones) desugar literals into deep unary-`Nat` codepoint
     // chains, so elaboration/type-checking recurses deeply. `cargo test` worker threads use a small
-    // (~2 MiB) stack, so run the load on a thread with an 8 MiB stack to match the CLI's main thread.
+    // (~2 MiB) stack, so run the load on a thread with a generous stack. 16 MiB (double the CLI
+    // main thread's typical 8 MiB default) gives headroom beyond the deepest example on file today
+    // (`regex_scratch.bl`'s hand-rolled parser combinators, at the time of writing) plus margin for
+    // the kernel's `Term`/`Value` enums to keep growing (each new variant, e.g. Wave 7/E4's `PCon`,
+    // marginally enlarges every recursive `check`/`eval`/`quote` stack frame) without silently
+    // reopening this same overflow on some other borderline example.
     let name = name.to_string();
     std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
+        .stack_size(16 * 1024 * 1024)
         .spawn(move || assert_example_loads_inner(&name))
         .expect("spawn load thread")
         .join()
@@ -51,6 +56,50 @@ fn assert_example_loads_inner(name: &str) {
             .all(|o| matches!(o, Outcome::Declared | Outcome::Checked(_))),
         "every form in {name} is accepted (declared or kernel-checked); got {outcomes:?}"
     );
+}
+
+/// Recursively collect every `*.bl` under `examples/`, returning paths relative to `examples/`
+/// (e.g. `game/guess.bl`). The `package/` subtree is excluded: those modules are `(import …)`d
+/// through a `spore.toml` manifest, not loaded standalone (see `package_example_imports_and_checks`).
+fn all_example_sources() -> Vec<String> {
+    fn walk(dir: &std::path::Path, base: &std::path::Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {dir:?}: {e}")) {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|n| n == "package") {
+                    continue;
+                }
+                walk(&path, base, out);
+            } else if path.extension().is_some_and(|e| e == "bl") {
+                let rel = path.strip_prefix(base).expect("under examples/");
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    let base = examples_dir();
+    let mut out = Vec::new();
+    walk(&base, &base, &mut out);
+    out.sort();
+    out
+}
+
+/// Coverage guard: **every** standalone `examples/**/*.bl` must load and type-check through the
+/// `Program` driver. The dedicated per-example tests below additionally pin each example's buildable
+/// `main`/re-check behaviour; this directory walk is the safety net that a newly added example (or
+/// one only referenced from docs) cannot silently rot — it fails here until the example loads.
+#[test]
+fn every_example_loads() {
+    let sources = all_example_sources();
+    assert!(
+        sources.len() >= 40,
+        "expected the full examples corpus on disk, found only {}: {sources:?}",
+        sources.len()
+    );
+    // A couple of examples have historically had no dedicated test (e.g. `flat_pair.bl`,
+    // `mutual_even_odd.bl`); this walk is what keeps them — and any future addition — honest.
+    for rel in &sources {
+        assert_example_loads(rel);
+    }
 }
 
 #[test]
@@ -83,6 +132,45 @@ fn traits_example_loads() {
 #[test]
 fn redblacktree_example_loads() {
     assert_example_loads("redblacktree.bl");
+}
+
+/// `clock_scratch.bl` (Wave 2 / L1, std/time.bl): the smallest `Clock`-effect program. Loads,
+/// type-checks, and defines a buildable `main`; `example_clock_scratch_builds_and_runs` (llvm-gated,
+/// `crates/blight-repl/src/main.rs`) compiles and runs it against the real OS clock.
+#[test]
+fn clock_scratch_example_loads() {
+    assert_buildable_main("clock_scratch.bl");
+}
+
+/// `map_scratch.bl` (Wave 2 / L1): dogfoods `std/test.bl` against `std/map.bl`'s `TreeMap`/`TreeSet`
+/// API (insert/overwrite/lookup/size/ascending traversal). `main : Bool` is the suite's
+/// `suite-all-passed` verdict. Loading + type-checking is asserted here; the naive kernel evaluator
+/// is far too slow to normalize a multi-case `TestSuite` (the same "large intermediate structure"
+/// exclusion `oracle.rs` documents for e.g. `gcd`/`collatz`), so the actual behavioral proof that the
+/// suite reduces to `true` is `example_map_scratch_builds_and_runs` (llvm-gated,
+/// `crates/blight-repl/src/main.rs`), which compiles and runs it natively instead.
+#[test]
+fn map_scratch_example_loads() {
+    assert_example_loads("map_scratch.bl");
+}
+
+/// `json_scratch.bl` (Wave 2 / L1): dogfoods `std/test.bl` against `std/json.bl`'s `json-encode`
+/// (every `BJson` shape, string escaping, nesting) and `nat-to-string`. Same shape as
+/// `map_scratch_example_loads`: loading is asserted here, the `true`-verdict is proved by
+/// `example_json_scratch_builds_and_runs`.
+#[test]
+fn json_scratch_example_loads() {
+    assert_example_loads("json_scratch.bl");
+}
+
+/// `regex_scratch.bl` (Wave 2 / L1): dogfoods `std/test.bl` against `std/regex.bl`'s Brzozowski-
+/// derivative matcher — every `Regex` former, including the `r-star`-matches-empty and
+/// fullmatch-rejects-proper-prefix edges the algorithm is meant to get right for free. Same shape as
+/// `map_scratch_example_loads`: loading is asserted here, the `true`-verdict is proved by
+/// `example_regex_scratch_builds_and_runs`.
+#[test]
+fn regex_scratch_example_loads() {
+    assert_example_loads("regex_scratch.bl");
 }
 
 #[test]
@@ -124,22 +212,67 @@ fn plus_zero_proof_example_loads() {
 #[test]
 fn ua_compute_example_loads() {
     assert_example_loads("ua_compute.bl");
-    let mut env = ElabEnv::new();
-    {
-        let mut prog = Program::with_resolver(&mut env, prelude_resolver);
-        prog.run(&read_example("ua_compute.bl")).expect("loads");
-    }
-    assert!(
-        env.global_term("ua-computes-bool").is_some(),
-        "the univalence computation rule is witnessed on the closed Bool instance"
-    );
+    // Like `ua_compute_reverse_example_loads` below, re-running the program to probe the global
+    // must happen on a large-stack thread — the default `cargo test` worker thread's small
+    // (~2 MiB) stack can overflow evaluating the `vfst`/`apply` chain, especially under a full
+    // parallel test run where the kernel's checker (larger now, Wave 7/E4's HIT support) uses
+    // deeper per-frame stack.
+    std::thread::Builder::new()
+        .stack_size(14 * 1024 * 1024)
+        .spawn(|| {
+            let mut env = ElabEnv::new();
+            {
+                let mut prog = Program::with_resolver(&mut env, prelude_resolver);
+                prog.run(&read_example("ua_compute.bl")).expect("loads");
+            }
+            assert!(
+                env.global_term("ua-computes-bool").is_some(),
+                "the univalence computation rule is witnessed on the closed Bool instance"
+            );
+        })
+        .expect("spawn probe thread")
+        .join()
+        .expect("probe thread panicked (see message above)");
+}
+
+/// `ua_compute_reverse.bl` witnesses the *reverse* univalence computation rule on a closed
+/// instance: transporting `true` along `sym (ua (id-equiv Bool))` reduces (definitionally, via the
+/// kernel's generalized `transp`-over-`Glue` rule, Wave 7/E3) to `true`, so the reflexivity proof
+/// `ua-computes-bool-reverse` type-checks. This is the end-to-end (`sym` + `ua` + `Glue` formation
+/// + `transp`) counterpart to the kernel white-box test
+/// `kan.rs::transp_ua_glue_line_negated_dim_reverse_face_applies_inverse_map`.
+#[test]
+fn ua_compute_reverse_example_loads() {
+    assert_example_loads("ua_compute_reverse.bl");
+    // Unlike `ua_compute_example_loads`'s forward-direction counterpart, the reverse computation
+    // rule's boundary check evaluates a deeper chain (`vsnd`/`fiber`/`vfst`-of-`vfst` through
+    // `id-equiv`'s contractibility proof, rather than a single `vfst`/`apply`), so re-running the
+    // program to probe the global must also happen on a large-stack thread — the default
+    // `cargo test` worker thread's small (~2 MiB) stack overflows otherwise.
+    std::thread::Builder::new()
+        .stack_size(14 * 1024 * 1024)
+        .spawn(|| {
+            let mut env = ElabEnv::new();
+            {
+                let mut prog = Program::with_resolver(&mut env, prelude_resolver);
+                prog.run(&read_example("ua_compute_reverse.bl"))
+                    .expect("loads");
+            }
+            assert!(
+                env.global_term("ua-computes-bool-reverse").is_some(),
+                "the reverse univalence computation rule is witnessed on the closed Bool instance"
+            );
+        })
+        .expect("spawn probe thread")
+        .join()
+        .expect("probe thread panicked (see message above)");
 }
 
 /// Assert an example loads and defines a buildable `main` global.
 fn assert_buildable_main(name: &str) {
     let name = name.to_string();
     std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
+        .stack_size(14 * 1024 * 1024)
         .spawn(move || {
             assert_example_loads_inner(&name);
             let mut env = ElabEnv::new();
@@ -292,15 +425,16 @@ fn functor_example_loads() {
 
 #[test]
 fn effects_demo_example_loads() {
-    // Effects are out of the re-checker's fragment (it *declines*, not rejects), but the example
-    // still elaborates and type-checks through the seed kernel.
+    // Effects are now MODELED at the type level by the independent re-checker (not declined; see
+    // `recheck_agrees_on_surface_effect_program` in blight-recheck), and the example elaborates and
+    // type-checks through the seed kernel.
     assert_example_loads("effects_demo.bl");
 }
 
 #[test]
 fn state_handler_example_loads() {
-    // A compiled deep handler (tail-resumptive fragment). Like `effects_demo`, effects are out of
-    // the re-checker's fragment so it *declines*, but the seed kernel type-checks it; the matching
+    // A compiled deep handler (tail-resumptive fragment). Like `effects_demo`, effects are now
+    // re-checked at the type level (not declined), and the seed kernel type-checks it; the matching
     // `example_state_handler_builds_and_runs` test compiles and runs it (prints `3`).
     assert_example_loads("state_handler.bl");
 }
@@ -308,24 +442,113 @@ fn state_handler_example_loads() {
 #[test]
 fn effect_nontail_example_loads() {
     // A *general* (non-tail) deep handler: the performed effects are sub-expressions, so the
-    // continuation is captured across applications/constructions at runtime. Effects are out of the
-    // re-checker's fragment so it *declines*; the seed kernel type-checks it and the matching
+    // continuation is captured across applications/constructions at runtime. Effects are re-checked
+    // at the type level (not declined); the seed kernel type-checks it and the matching
     // `example_effect_nontail_builds_and_runs` compiles and runs it (prints `4`).
     assert_example_loads("effect_nontail.bl");
 }
 
 #[test]
 fn echo_example_loads() {
-    // `Console`-effect program (std/io.bl). Effects are out of the re-checker's fragment so it
-    // *declines*; the seed kernel type-checks it. `example_echo_builds_and_runs` compiles and runs
+    // `Console`-effect program (std/io.bl). Effects are re-checked at the type level (not declined);
+    // the seed kernel type-checks it. `example_echo_builds_and_runs` compiles and runs
     // it through the native top-level Console handler.
     assert_example_loads("echo.bl");
 }
 
 #[test]
+fn file_roundtrip_example_loads() {
+    // `FileIO`-effect program (C1, std/io.bl): `write-file` then `read-file` over a temp path,
+    // returning the file's contents. Effects are re-checked at the type level (not declined);
+    // the seed kernel type-checks it and it defines a buildable `main`.
+    // `example_file_roundtrip_builds_and_runs` compiles + runs it through the native top-level
+    // handler, which folds the `FileIO` ops against the real filesystem.
+    assert_buildable_main("file_roundtrip.bl");
+}
+
+#[test]
+fn bytes_scratch_example_loads() {
+    // `Bytes`-effect program (C2, std/bytes.bl): allocate a runtime byte buffer, `set-byte` then
+    // `get-byte` a value back. Effects are re-checked at the type level (not declined); the
+    // seed kernel type-checks it and it defines a buildable `main`.
+    // `example_bytes_scratch_builds_and_runs` compiles + runs it through the native handler, which
+    // folds the `Bytes` ops against the C-side mutable buffer table.
+    assert_buildable_main("bytes_scratch.bl");
+}
+
+#[test]
+fn array_scratch_example_loads() {
+    // `Arrays`-effect program (A3a, std/array.bl): allocate a runtime int array, `set-elem` then
+    // `get-elem` a value back. Effects are re-checked at the type level (not declined); the seed
+    // kernel type-checks it and it defines a buildable `main`.
+    // `example_array_scratch_builds_and_runs` compiles + runs it through the native handler, which
+    // folds the `Arrays` ops against the C-side mutable int-array table.
+    assert_buildable_main("array_scratch.bl");
+}
+
+#[test]
+fn boxed_array_scratch_example_loads() {
+    // The generic/boxed `Array A` effect (A3b, roadmap Wave 10 / P1, std/array.bl): allocate a
+    // runtime array of `Nat`s, `set-boxed` then `get-boxed` a value back. Effects (including the
+    // parameterized `Array` effect's explicit `(perform op (T) arg)` instantiation) are re-checked
+    // at the type level (not declined); the seed kernel type-checks it and it defines a buildable
+    // `main`. `example_boxed_array_scratch_builds_and_runs` compiles + runs it through the native
+    // handler, which folds the boxed-array ops against `runtime/boxed_array.c`'s rooted handle table.
+    assert_buildable_main("boxed_array_scratch.bl");
+}
+
+#[test]
+fn graphics_scratch_example_loads() {
+    // Layer 2 of P2's four-layer TDD (roadmap Wave 10 / P2, docs/design-wave4-gobars.md §5): the
+    // `Graphics` effect (std/graphics.bl) is re-checked at the type level (not declined) exactly like
+    // every prior native-handler effect, so the seed kernel type-checks this program and it defines a
+    // buildable `main : (! Graphics Int)`. This assertion runs unconditionally (no SDL2 needed to
+    // type-check); `example_graphics_scratch_builds_and_runs` (`crates/blight-repl/src/main.rs`,
+    // gated behind the `graphics` cargo feature) compiles + runs it through the native
+    // `bl_run_graphics` handler under a headless `SDL_VIDEODRIVER=dummy`.
+    assert_buildable_main("graphics_scratch.bl");
+}
+
+#[test]
+fn paren_depth_example_loads() {
+    // C3 self-hosting: a byte scanner written entirely in `.bl` (std/lexer.bl) over the C2 `Bytes`
+    // substrate. `max-paren-depth` copies a `String` into a runtime buffer (`string->bytes`, a
+    // structural-recursion fill that descends on the string spine while the write index rides along
+    // as a trailing accumulator) then scans it with O(1) `get-byte` index reads, recursing on a
+    // structural `Nat` fuel. Effects are re-checked at the type level (not declined); the seed
+    // kernel type-checks it and it defines a buildable `main`. `example_paren_depth_builds_and_runs`
+    // compiles + runs it (prints `3`, the max nesting depth of `"(()(()))()"`).
+    assert_buildable_main("paren_depth.bl");
+}
+
+#[test]
+fn parse_demo_example_loads() {
+    // Grand Arc SH1 self-hosting: a tokenizer + s-expression parser written entirely in `.bl`
+    // (std/parser.bl) over the C3 `Bytes` byte scanner. `parse-string` copies a `String` into a
+    // runtime buffer, tokenizes it (effectful, structural-on-fuel like `scan-depth`), and parses the
+    // tokens with a PURE total stack machine (structural on the token spine) into a surface `BSexp`
+    // AST; `count-atoms` reads off the atom count. Effects are re-checked at the type level (not
+    // declined), so `--recheck` agrees on the tokenizer too; the pure parser core needs no effect
+    // row at all (see `parser_self_host_loads`); the seed kernel type-checks the whole `main`.
+    // `example_parse_demo_builds_and_runs` compiles + runs it (prints `4`, the atom count of
+    // `"(a (b c) d)"`).
+    assert_buildable_main("parse_demo.bl");
+}
+
+#[test]
+fn actor_pingpong_example_loads() {
+    // The M16 actor/CSP surface (std/actor.bl): an `Actor`-effect program — spawn/send/yield/receive
+    // performed under an inline cooperative single-core scheduler handler. Effects are re-checked at
+    // the type level (not declined); the seed kernel type-checks it.
+    // `example_actor_pingpong_builds_and_runs` compiles and runs it (prints `5`).
+    assert_example_loads("actor_pingpong.bl");
+}
+
+#[test]
 fn greet_example_loads() {
-    // A sequenced-`Console` interactive program (std/io.bl); declined by the re-checker (effects),
-    // type-checked by the seed kernel. `example_greet_builds_and_runs` compiles and runs it.
+    // A sequenced-`Console` interactive program (std/io.bl); effects are re-checked at the type
+    // level (not declined), type-checked by the seed kernel. `example_greet_builds_and_runs`
+    // compiles and runs it.
     assert_example_loads("greet.bl");
 }
 
@@ -333,7 +556,7 @@ fn greet_example_loads() {
 fn guess_game_example_loads() {
     // The interactive turn-based game (examples/game/guess.bl): a fuel-bounded `Console` frame loop
     // (`define-rec play` over a `Nat` attempt budget) that reads a guess each turn and branches on
-    // `string-eq`. Effects are out of the re-checker's fragment so it *declines*; the seed kernel
+    // `string-eq`. Effects are re-checked at the type level (not declined); the seed kernel
     // type-checks it and `example_guess_game_builds_and_runs` compiles + runs it against scripted
     // stdin.
     assert_example_loads("game/guess.bl");
@@ -371,6 +594,36 @@ fn foreign_answer_example_loads() {
     }
 }
 
+#[test]
+fn f64_scratch_example_loads() {
+    // Wave 2 / L2: the UNVERIFIED IEEE-754 `F64` hatch (std/f64.bl) dogfooded end-to-end — every
+    // arithmetic op plus `f64-round` back to a checked `Int`. It defines a buildable `main`;
+    // `example_f64_scratch_builds_and_runs` compiles + links + runs it (prints -4).
+    assert_buildable_main("f64_scratch.bl");
+
+    // Crucially, exactly like `foreign_answer.bl`: the independent re-checker must *DECLINE* (not
+    // accept, not reject) `main`, because its type/term chain touches the `F64` `foreign` postulate.
+    let mut env = ElabEnv::new();
+    {
+        let mut prog = Program::with_resolver(&mut env, prelude_resolver);
+        prog.run(&read_example("f64_scratch.bl")).expect("loads");
+    }
+    let ty = env.global_type("main").expect("main type").clone();
+    let term = env.global_term("main").expect("main term").clone();
+    match blight_recheck::recheck_judgement(
+        env.signature(),
+        &blight_kernel::Judgement::HasType { term, ty },
+    ) {
+        Err(blight_recheck::RecheckError::Declined(msg)) => {
+            assert!(
+                msg.contains("foreign"),
+                "decline reason should name the foreign postulate, got: {msg}"
+            );
+        }
+        other => panic!("re-checker must DECLINE an F64-using `main`, got: {other:?}"),
+    }
+}
+
 /// `int_arith.bl`: native machine `Int` (M11). `(int* (int 100000) (int 100000))` type-checks at
 /// `Int` and — unlike the unary-`Nat` tower — the re-checker *ACCEPTS* it: `Int`/`IntLit`/`IntPrim`
 /// are primitive kernel nodes the independent re-checker models directly. It defines a buildable
@@ -393,6 +646,34 @@ fn int_arith_example_loads_and_rechecks() {
     .expect("re-checker ACCEPTS native Int arithmetic (primitive kernel nodes)");
 }
 
+/// `float_arith.bl`: the UNTRUSTED fixed-point `Float` library type (M23). `Float` is ordinary
+/// inductive `Data` (`(mkfloat (mantissa Int))`, value scaled by 10^6), built entirely from the
+/// trusted `Int` base — so the re-checker *ACCEPTS* it: a `Float` value and every `float-*` wrapper
+/// is in-fragment (plain `Data`/`Int`/`IntPrim`), nothing new to trust. This is the zero-TCB-growth
+/// proof at the example level; `example_float_arith_builds_and_runs` compiles it (the backend then
+/// rewrites the wrappers to O(1) `bl_float_*` helpers) and asserts it prints the scaled mantissa.
+#[test]
+fn float_arith_example_loads_and_rechecks() {
+    assert_buildable_main("float_arith.bl");
+
+    let mut env = ElabEnv::new();
+    {
+        let mut prog = Program::with_resolver(&mut env, prelude_resolver);
+        prog.run(&read_example("float_arith.bl")).expect("loads");
+    }
+    assert!(
+        env.global_term("float-add").is_some(),
+        "float_arith.bl pulls in std/float.bl's `float-add` wrapper"
+    );
+    let ty = env.global_type("main").expect("main type").clone();
+    let term = env.global_term("main").expect("main term").clone();
+    blight_recheck::recheck_judgement(
+        env.signature(),
+        &blight_kernel::Judgement::HasType { term, ty },
+    )
+    .expect("re-checker ACCEPTS the fixed-point Float program (plain Int/Data, zero TCB growth)");
+}
+
 /// `bench_sum.bl`: the unary-`Nat` counterpart of `int_sum.bl` and the Blight side of the
 /// cross-language sum workload (docs/benchmarks-game.md). Right-folds `plus` over a `List Nat` of
 /// 800 ones, so `main : Nat` is `Succ^800 Zero` — each `+` walks a `Succ` chain (the honest unary
@@ -400,7 +681,7 @@ fn int_arith_example_loads_and_rechecks() {
 #[test]
 fn bench_sum_example_loads_and_rechecks() {
     std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
+        .stack_size(14 * 1024 * 1024)
         .spawn(|| {
             assert_buildable_main("bench_sum.bl");
 
@@ -432,7 +713,7 @@ fn int_sum_example_loads_and_rechecks() {
     // `int_sum.bl` builds a 800-long `List Int` whose length lives on a unary-`Nat` spine, so
     // elaboration/recheck recurses deeply — run on an 8 MiB stack like the other deep loads.
     std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
+        .stack_size(14 * 1024 * 1024)
         .spawn(|| {
             assert_buildable_main("int_sum.bl");
 
@@ -648,7 +929,7 @@ fn safe_head_rejects_empty_vector() {
 
     // Run on an 8 MiB stack to match the other example loaders.
     std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
+        .stack_size(14 * 1024 * 1024)
         .spawn(move || {
             // Good call: accepted by the kernel.
             {

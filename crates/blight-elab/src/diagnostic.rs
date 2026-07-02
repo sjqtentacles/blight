@@ -44,6 +44,14 @@ impl Diagnostic {
     }
 }
 
+/// The 1-based `(line, column)` of byte offset `off` in `source`. Public so callers outside this
+/// module (e.g. an LSP server mapping a `Span` to an editor position) can reuse the exact same
+/// offset accounting `render` uses, rather than re-implementing line/column arithmetic.
+pub fn line_col(source: &str, off: usize) -> (usize, usize) {
+    let (line, col, _range) = locate(source, off);
+    (line, col)
+}
+
 /// The 1-based `(line, column)` of byte offset `off` in `source`, plus the byte range of the line
 /// that contains it.
 fn locate(source: &str, off: usize) -> (usize, usize, std::ops::Range<usize>) {

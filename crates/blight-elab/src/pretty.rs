@@ -161,6 +161,14 @@ impl Printer {
                     format!("({})", parts.join(" "))
                 }
             }
+            Term::PCon {
+                name, args, dim, ..
+            } => {
+                let mut parts = vec![Self::con_name(name).to_string()];
+                parts.extend(args.iter().map(|a| self.term(a)));
+                parts.push(format!("@{}", self.interval(dim)));
+                format!("({})", parts.join(" "))
+            }
             Term::Elim {
                 data,
                 motive,
@@ -207,8 +215,24 @@ impl Printer {
             }
             Term::GlueTerm { base, .. } => format!("(glue {})", self.term(base)),
             Term::Unglue(t) => format!("(unglue {})", self.term(t)),
-            Term::Op { effect, op, arg } => {
-                format!("(perform {} {} {})", effect.0, op, self.term(arg))
+            Term::Op {
+                effect,
+                op,
+                type_args,
+                arg,
+            } => {
+                if type_args.is_empty() {
+                    format!("(perform {} {} {})", effect.0, op, self.term(arg))
+                } else {
+                    let tas: Vec<String> = type_args.iter().map(|t| self.term(t)).collect();
+                    format!(
+                        "(perform {} {} ({}) {})",
+                        effect.0,
+                        op,
+                        tas.join(" "),
+                        self.term(arg)
+                    )
+                }
             }
             Term::Handle { body, .. } => format!("(handle {} ...)", self.term(body)),
             Term::EffTy(_, a) => format!("(! E {})", self.term(a)),

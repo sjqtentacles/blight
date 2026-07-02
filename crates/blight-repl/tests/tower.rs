@@ -27,12 +27,15 @@ fn show_ord_trait_typechecks() {
         )
         .expect("traits.bl loads and the trait uses typecheck")
     };
-    // The four ascribed uses are all kernel-checked.
-    let checked = outcomes
-        .iter()
-        .filter(|o| matches!(o, Outcome::Checked(_)))
-        .count();
-    assert_eq!(checked, 4, "all four trait uses are checked by the spore");
+    // The four ascribed uses (the last four forms passed to `prog.run` above) are all kernel-checked.
+    // `traits.bl` transitively loads `std/nat.bl`, whose own Wave 5/N4 `compute`/`decide` dogfood
+    // lemmas are *also* `Outcome::Checked` — so the total count is no longer exactly four; instead
+    // check specifically the trailing four outcomes, which are these forms in call order.
+    let last_four = &outcomes[outcomes.len() - 4..];
+    assert!(
+        last_four.iter().all(|o| matches!(o, Outcome::Checked(_))),
+        "all four trait uses are checked by the spore: {last_four:?}"
+    );
 }
 
 /// Isolate `tree-if`: the non-recursive Bool selector with trailing-binder generalization.

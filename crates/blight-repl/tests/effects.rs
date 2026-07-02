@@ -73,6 +73,7 @@ fn state_sig() -> Signature {
     });
     let state = EffDecl {
         name: EffName::new("State"),
+        params: vec![],
         ops: vec![
             OpSig {
                 name: "get".into(),
@@ -97,6 +98,7 @@ fn perform(op: &str, arg: Term) -> Term {
     Term::Op {
         effect: EffName::new("State"),
         op: op.into(),
+        type_args: vec![],
         arg: Box::new(arg),
     }
 }

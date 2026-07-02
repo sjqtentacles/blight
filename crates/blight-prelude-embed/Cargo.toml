@@ -1,0 +1,12 @@
+[package]
+name = "blight-prelude-embed"
+description = "The std/tower prelude sources embedded at compile time, shared by the CLI and the LSP server."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

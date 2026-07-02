@@ -1,15 +1,19 @@
 {
   "name": "blight",
   "displayName": "Blight",
-  "description": "Syntax highlighting for the Blight (.bl) language.",
-  "version": "0.1.1",
+  "description": "Syntax highlighting and Language Server support (diagnostics, hover, go-to-definition) for the Blight (.bl) language.",
+  "version": "0.2.0",
   "publisher": "local",
   "license": "MIT",
   "engines": {
-    "vscode": "^1.0.0"
+    "vscode": "^1.75.0"
   },
   "categories": [
     "Programming Languages"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:blight"
   ],
   "contributes": {
     "languages": [
@@ -31,6 +35,35 @@
         "scopeName": "source.blight",
         "path": "./syntaxes/blight.tmLanguage.json"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Blight",
+      "properties": {
+        "blight.serverPath": {
+          "type": "string",
+          "default": "blight-lsp",
+          "description": "Path to the blight-lsp executable (built via `cargo build -p blight-lsp`). Defaults to looking it up on PATH."
+        },
+        "blight.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Trace LSP communication between the extension and blight-lsp, shown in the 'Blight Language Server' output channel."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -w -p ./",
+    "vscode:prepublish": "npm run compile"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.4.0"
   }
 }

@@ -1,0 +1,18 @@
+[package]
+name = "blight-lsp"
+description = "A minimal Language Server Protocol server for Blight: reuses the in-process elaboration pipeline (blight-elab) for diagnostics, hover, and go-to-definition. UNTRUSTED tooling; never touches the kernel/re-checker trust boundary."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "blight-lsp"
+path = "src/main.rs"
+
+[dependencies]
+blight-elab = { path = "../blight-elab" }
+blight-prelude-embed = { path = "../blight-prelude-embed" }
+lsp-server = "0.8.0"
+lsp-types = "0.97.0"
+serde_json = "1.0.150"

@@ -15,9 +15,13 @@ blight-kernel = { path = "../blight-kernel" }
 blight-elab = { path = "../blight-elab" }
 blight-codegen = { path = "../blight-codegen" }
 blight-recheck = { path = "../blight-recheck" }
+blight-prelude-embed = { path = "../blight-prelude-embed" }
 
 [features]
 default = []
 # Enable the native `blight build` subcommand (requires a system LLVM 18 + clang; see
 # blight-codegen). Without this feature the binary is the REPL/checker only.
 llvm = ["blight-codegen/llvm"]
+# See blight-codegen's `graphics` feature (docs/design-wave4-gobars.md §5): requires `llvm` + a
+# system SDL2. `cargo run -p blight-repl --features llvm,graphics -- build foo.bl`.
+graphics = ["llvm", "blight-codegen/graphics"]

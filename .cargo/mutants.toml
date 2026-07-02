@@ -1,0 +1,28 @@
+# cargo-mutants configuration (Track D — mutation testing of the trusted base).
+#
+# Mutation testing injects small bugs ("mutants") into the source and re-runs the test suite; a
+# mutant that no test catches is a *surviving* mutant — a hole in the suite. We point it squarely at
+# Blight's soundness-critical code: the trusted kernel and the independent re-checker. A surviving
+# mutant in either of those is a gap in the very tests that justify "two checkers agree", so the
+# nightly `mutants` workflow treats it as a failure.
+#
+# Scope (examine_globs): the kernel + re-checker source only. Everything else (codegen, elaborator,
+# REPL, net) is untrusted and out of scope for this gate.
+examine_globs = [
+    "crates/blight-kernel/src/**/*.rs",
+    "crates/blight-recheck/src/**/*.rs",
+]
+
+# Exclusions: nothing yet. Add inherently-untestable spots here (or a `#[mutants::skip]` attribute on
+# the offending function) with a comment justifying why the mutant is not meaningful, rather than
+# silently lowering the bar.
+exclude_globs = []
+
+# The whole workspace test suite is the oracle (kernel + recheck unit/integration/property/
+# differential/negative corpus), so a kernel mutant can be caught by any independent checker's tests.
+test_workspace = true
+
+# Mutants that hang (e.g. a flipped loop bound) should fail, not wedge CI: give a generous multiple
+# of the baseline test time, with a floor for the fast suites.
+timeout_multiplier = 5.0
+minimum_test_timeout = 60

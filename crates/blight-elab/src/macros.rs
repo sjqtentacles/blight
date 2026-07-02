@@ -38,7 +38,7 @@ pub struct MacroDef {
 }
 
 /// The macro table plus a monotonically-increasing mark counter for hygiene.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct MacroEnv {
     macros: HashMap<String, MacroDef>,
     next_mark: u64,

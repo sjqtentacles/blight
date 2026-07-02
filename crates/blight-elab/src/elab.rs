@@ -66,6 +66,14 @@ pub struct ElabEnv {
     classes: std::collections::HashSet<String>,
     /// Registered instances: `(class, head-type-symbol) → dictionary term` (spec §6.4).
     instances: std::collections::HashMap<(String, String), Term>,
+    /// Per-global **relevant-parameter summary**: for each leading lambda parameter of a top-level
+    /// definition, whether its value can reach the function's *result* (a sound over-approximation;
+    /// see [`compute_relevance`]). Computed in definition order from earlier summaries, so a caller
+    /// can tell which of a callee's arguments actually flow to the result. Consumed by the structural
+    /// recursion check ([`elaborate_rec`]) to decide whether a self-call's *varying leading argument*
+    /// may be soundly dropped (only when the corresponding parameter is irrelevant — e.g. an erased
+    /// index threaded through index-ignoring helpers like `bvar-index`, vs a real accumulator).
+    relevant_params: std::collections::HashMap<String, Vec<bool>>,
 }
 
 /// How the elaborator fills one leading implicit binder at a use site (spec §6.4).
@@ -245,6 +253,8 @@ impl ElabEnv {
                 constructors,
             } => self.declare_data(name, params, indices, constructors),
             Decl::Define { name, body } => {
+                let rel = compute_relevance(name, body, &self.relevant_params);
+                self.relevant_params.insert(name.clone(), rel);
                 let term = match ty {
                     Some(t) => elaborate_against(self, body, t)?,
                     None => elaborate(self, body)?,
@@ -259,6 +269,8 @@ impl ElabEnv {
                 let t = ty.ok_or_else(|| {
                     ElabError::BadForm(format!("`define-rec {name}` requires a declared type"))
                 })?;
+                let rel = compute_relevance(name, body, &self.relevant_params);
+                self.relevant_params.insert(name.clone(), rel);
                 let term = elaborate_rec(self, name, body, t, false)?;
                 self.kernel_check_def(name, &term, t)?;
                 self.define_global(name.clone(), term, Some(t.clone()));
@@ -268,12 +280,14 @@ impl ElabEnv {
                 let t = ty.ok_or_else(|| {
                     ElabError::BadForm(format!("`deftotal {name}` requires a declared type"))
                 })?;
+                let rel = compute_relevance(name, body, &self.relevant_params);
+                self.relevant_params.insert(name.clone(), rel);
                 let term = elaborate_rec(self, name, body, t, true)?;
                 self.kernel_check_def(name, &term, t)?;
                 self.define_global(name.clone(), term, Some(t.clone()));
                 Ok(())
             }
-            Decl::DefEffect { name, ops } => self.declare_effect(name, ops),
+            Decl::DefEffect { name, params, ops } => self.declare_effect(name, params, ops),
             Decl::Foreign {
                 name,
                 ty: surface_ty,
@@ -296,6 +310,24 @@ impl ElabEnv {
         }
     }
 
+    /// Elaborate a parameter telescope: each param's type is checked in the scope of the
+    /// *preceding* params (so a later param's type may mention an earlier one), and the
+    /// resulting scope has every param bound, outermost-first — ready to elaborate whatever comes
+    /// next in that scope (a data family's indices/constructors, or an effect's operation
+    /// signatures). Shared by [`ElabEnv::declare_data`] and [`ElabEnv::declare_effect`] so their
+    /// identical telescope-instantiation convention (spec §2.7's own `DataDecl::params`, mirrored
+    /// by [`blight_kernel::EffDecl::params`] for Wave 7/E2) cannot drift between the two.
+    fn elab_param_telescope(&self, params: &[Binder]) -> Result<(Scope, Vec<Term>), ElabError> {
+        let mut scope = Scope::new();
+        let mut terms = Vec::with_capacity(params.len());
+        for p in params {
+            let ty = elab(self, &scope, &p.ty, None)?;
+            terms.push(ty);
+            scope = scope.push_var(&p.name);
+        }
+        Ok((scope, terms))
+    }
+
     fn declare_data(
         &mut self,
         name: &str,
@@ -305,16 +337,10 @@ impl ElabEnv {
     ) -> Result<(), ElabError> {
         use blight_kernel::{Arg, ConName, Constructor, DataDecl, DataName};
         let data_name = DataName(name.to_string());
-        // Elaborate the parameter telescope. Each param type is checked in the scope of the
-        // preceding params. The params become the *outermost* binders of every constructor's
-        // argument scope (kernel convention: arg/index terms see `[preceding_args, params]`).
-        let mut param_scope = Scope::new();
-        let mut param_terms = Vec::new();
-        for p in params {
-            let ty = elab(self, &param_scope, &p.ty, None)?;
-            param_terms.push(ty);
-            param_scope = param_scope.push_var(&p.name);
-        }
+        // Elaborate the parameter telescope. The params become the *outermost* binders of every
+        // constructor's argument scope (kernel convention: arg/index terms see
+        // `[preceding_args, params]`).
+        let (param_scope, param_terms) = self.elab_param_telescope(params)?;
         // Index telescope, in scope of the params.
         let mut index_scope = param_scope.clone();
         let mut index_terms = Vec::new();
@@ -390,18 +416,33 @@ impl ElabEnv {
     /// type to a core term and register the `EffDecl` in the kernel signature after a
     /// well-formedness check. Operation continuation-multiplicity defaults to `ω` (multi-shot) at
     /// the surface; a finer grade is a kernel-level concern (see [`blight_kernel::OpSig`]).
+    ///
+    /// Wave 7/E2 (parameterized effects): `params` is the effect's own type-parameter telescope
+    /// (e.g. `Ref`'s single `(A (Type 0))`), scoped exactly like [`ElabEnv::declare_data`]'s
+    /// `params` — each param type is elaborated in the scope of the *preceding* params, then
+    /// pushed as a bound name so every operation's `param_ty`/`result_ty` may reference it. Empty
+    /// for an ordinary (non-parameterized) effect, in which case this is unchanged from before E2.
     fn declare_effect(
         &mut self,
         name: &str,
+        params: &[Binder],
         ops: &[(String, Surface, Surface)],
     ) -> Result<(), ElabError> {
         use blight_kernel::{EffDecl, EffName, Grade, OpSig};
+        let (param_scope, param_terms) = self.elab_param_telescope(params)?;
         let mut op_sigs = Vec::with_capacity(ops.len());
         for (op_name, param_ty, result_ty) in ops {
-            let param_ty = elaborate(self, param_ty)?;
-            // The kernel's `result_ty` lives in the scope `x:A`; surface ops are non-dependent in
-            // M2, so the elaborated (closed) result type is valid there unchanged.
-            let result_ty = elaborate(self, result_ty)?;
+            let param_ty = elab(self, &param_scope, param_ty, None)?;
+            // The kernel's `result_ty` lives in the scope `[effect params…, x:A]` (`x`, the op's own
+            // value argument, is bound *innermost*, at index 0); surface ops are non-dependent on
+            // `x` in M2 (only on the effect's own type parameters), so `result_ty` is elaborated in
+            // `param_scope` (no binder for `x`) and then *weakened* by one binder to shift every
+            // reference to a parameter up past the `x` slot it doesn't itself mention (Wave 7/E2:
+            // this matters as soon as `param_scope` is non-empty and `result_ty` actually
+            // references a parameter, e.g. `Ref`'s `get : Unit -> A`; before E2 `param_scope` was
+            // always empty here, so this weakening was a no-op and the bug was latent).
+            let result_ty = elab(self, &param_scope, result_ty, None)?;
+            let result_ty = weaken(&result_ty, 1);
             op_sigs.push(OpSig {
                 name: op_name.clone(),
                 param_ty,
@@ -411,6 +452,7 @@ impl ElabEnv {
         }
         let decl = EffDecl {
             name: EffName::new(name),
+            params: param_terms,
             ops: op_sigs,
         };
         self.signature
@@ -685,6 +727,30 @@ fn parse_list(items: &[Sexpr]) -> Result<Surface, ElabError> {
                     Box::new(parse_surface(&items[3])?),
                 ));
             }
+            "hcomp" => {
+                if items.len() != 5 {
+                    return Err(ElabError::BadForm("(hcomp A φ (plam (j) u) a0)".into()));
+                }
+                return Ok(Surface::HComp(
+                    Box::new(parse_surface(&items[1])?),
+                    Box::new(parse_cofib(&items[2])?),
+                    Box::new(parse_surface(&items[3])?),
+                    Box::new(parse_surface(&items[4])?),
+                ));
+            }
+            "comp" => {
+                if items.len() != 5 {
+                    return Err(ElabError::BadForm(
+                        "(comp (plam (i) A) φ (plam (j) u) a0)".into(),
+                    ));
+                }
+                return Ok(Surface::Comp(
+                    Box::new(parse_surface(&items[1])?),
+                    Box::new(parse_cofib(&items[2])?),
+                    Box::new(parse_surface(&items[3])?),
+                    Box::new(parse_surface(&items[4])?),
+                ));
+            }
             // ---- primitive machine integers (M11) ----
             "int" => {
                 // `(int 42)` — an `Int` literal. The numeral is parsed as a real `i64` (not a unary
@@ -716,11 +782,46 @@ fn parse_list(items: &[Sexpr]) -> Result<Surface, ElabError> {
                 return Ok(Surface::IntPrim(op, Box::new(a), Box::new(b)));
             }
             "perform" => {
-                if items.len() != 3 {
-                    return Err(ElabError::BadForm("(perform op arg)".into()));
+                // `(perform op arg)`, or `(perform op (T ...) arg)` for a parameterized effect's
+                // operation (Wave 7/E2): the explicit type-argument instantiation is a *list* in
+                // the second position, so the two forms are unambiguous by arity.
+                match items.len() {
+                    3 => {
+                        let op = sym(&items[1])?;
+                        return Ok(Surface::Perform(
+                            op,
+                            Vec::new(),
+                            Box::new(parse_surface(&items[2])?),
+                        ));
+                    }
+                    4 => {
+                        let op = sym(&items[1])?;
+                        let type_arg_items = match &items[2] {
+                            Sexpr::List(ta) => ta,
+                            _ => {
+                                return Err(ElabError::BadForm(
+                                    "(perform op (T ...) arg): type arguments must be a list"
+                                        .into(),
+                                ))
+                            }
+                        };
+                        let type_args = type_arg_items.iter().map(parse_surface).collect::<Result<
+                            Vec<_>,
+                            _,
+                        >>(
+                        )?;
+                        return Ok(Surface::Perform(
+                            op,
+                            type_args,
+                            Box::new(parse_surface(&items[3])?),
+                        ));
+                    }
+                    _ => {
+                        return Err(ElabError::BadForm(
+                            "(perform op arg) or (perform op (T ...) arg)".into(),
+                        ))
+                    }
                 }
-                let op = sym(&items[1])?;
-                return Ok(Surface::Perform(op, Box::new(parse_surface(&items[2])?)));
             }
             "handle" => {
                 // (handle body (return x r) (op x k e) ...)
@@ -1149,13 +1250,22 @@ pub fn parse_decl(s: &Sexpr) -> Result<Decl, ElabError> {
             })
         }
         "effect" => {
-            // (effect E (op A B) ...)
+            // (effect E (op A B) ...), or the parameterized form (Wave 7/E2)
+            // (effect E (params...) (op A B) ...). An operation is always the 3-element list
+            // `(name A B)`; a parameter telescope is a list of 2-element binders `(x T)`, so
+            // `is_binder_list` (as for `defdata`'s index telescope) tells the two apart: an op's
+            // head is a bare symbol, a param telescope's head (if any) is itself a list.
             if items.len() < 2 {
                 return Err(ElabError::BadForm("(effect E (op A B) ...)".into()));
             }
             let name = sym(&items[1])?;
+            let (params, op_start) = if items.len() >= 3 && is_binder_list(&items[2]) {
+                (parse_binders(&items[2])?, 3)
+            } else {
+                (Vec::new(), 2)
+            };
             let mut ops = Vec::new();
-            for op in &items[2..] {
+            for op in &items[op_start..] {
                 let parts = match op {
                     Sexpr::List(p) => p,
                     _ => return Err(ElabError::BadForm("effect op must be (name A B)".into())),
@@ -1169,7 +1279,7 @@ pub fn parse_decl(s: &Sexpr) -> Result<Decl, ElabError> {
                     parse_surface(&parts[2])?,
                 ));
             }
-            Ok(Decl::DefEffect { name, ops })
+            Ok(Decl::DefEffect { name, params, ops })
         }
         "define" => {
             if items.len() != 3 {
@@ -1256,6 +1366,42 @@ struct RecCtx {
     /// remaining `trailing` arguments are applied to the IH. Empty ⟹ unknown layout (fall back to
     /// the first-argument-is-the-scrutinee rule).
     leading: Vec<String>,
+    /// `true` when the function's declared conclusion is an *effectful* computation (`! E A`, non-
+    /// empty row). A structural `Elim` *fixes* the leading parameters and evaluates each induction
+    /// hypothesis (`self field`) eagerly; for an effectful body that both **reorders** the per-step
+    /// effects (the eager IH runs before the method's own `perform`) and, when a leading parameter is
+    /// silently varied (e.g. an accumulator `(Succ i)`), drops the change — a miscompile that the
+    /// kernel's *type* re-check cannot catch (effect order is not in the type). So for an effectful
+    /// recursor we require the leading arguments to be the leading parameters *verbatim*; a varying
+    /// leading argument falls through to the sound partial (`later`-guarded) step. Pure/total indexed
+    /// families (e.g. `vec-map`, where a leading *index* legitimately varies and the IH's specialized
+    /// type subsumes it) keep the lenient recognition.
+    effectful: bool,
+    /// Scope depth of the function's *parameters*, recorded lazily at the outermost `match`. Only a
+    /// match whose scrutinee is a function parameter (absolute scope position `< param_depth`) may
+    /// establish structural induction hypotheses for self-calls. A scrutinee bound by a *nested*
+    /// match (a constructor field, position `>= param_depth`) is **not** the recursion variable: its
+    /// IH belongs to that inner eliminator, not to `self`. Offering it to a self-call is unsound — it
+    /// is exactly the `fib (n-2)` / Ackermann course-of-values boundary the language deliberately
+    /// rejects (`deftotal` errors; `define-rec` guards under `later`). Without this gate the
+    /// elaborator silently bound such a call to the inner IH and miscompiled (e.g. `fib 5 = 65`).
+    param_depth: Option<usize>,
+    /// This function's own **relevant-parameter summary** (see [`compute_relevance`]): for each
+    /// leading lambda parameter (by position), whether its value can reach the result. Shared (`Rc`)
+    /// so the frequent `RecCtx` clones stay cheap.
+    ///
+    /// Why: a structural `Elim` *fixes* the leading parameters at their outer values and supplies the
+    /// induction hypothesis `self field` for the scrutinee, so binding a self-call to that IH
+    /// **drops** the call's own leading arguments. That is sound only when a varying leading argument
+    /// cannot influence the result — i.e. when that parameter is *irrelevant* here. A varied leading
+    /// argument at an irrelevant position (e.g. the index `g`/`a` in `btm-size`/`berase`, threaded
+    /// only through index-ignoring helpers, or the erased length `n` in `vec-length`) is dropped
+    /// exactly; a varied one at a *relevant* position is a real **accumulator** (e.g. `acc` in
+    /// `sum-acc`/`foldl`, returned in a base case) whose dropped change would silently reuse the stale
+    /// value — a meaning bug the kernel's *type* re-check cannot see (both are `Nat`). So a
+    /// non-verbatim leading argument is accepted only at an irrelevant position; otherwise the call
+    /// falls through (a `deftotal` error / a `define-rec` `later`-guard).
+    relevance: std::rc::Rc<Vec<bool>>,
 }
 
 impl Scope {
@@ -1351,6 +1497,244 @@ fn elab_cofib(scope: &Scope, cofib: &Cofibration) -> Result<blight_kernel::Cofib
     }
 }
 
+// ---- Wave 7 / E1: row polymorphism (tower-first) ---------------------------------------------
+//
+// `crate::row::Row` (blight-kernel) already carries an optional open tail (`RowVar`) for
+// Koka-style row unification, but nothing ever constructs one: `Row::union`/`leq` document it as
+// "a forward-compatible stub, not a correctness hazard *here*" because every row the kernel ever
+// actually sees is closed. Growing that kernel algebra is exactly what the roadmap says to do
+// *only if unavoidable* — and it is not: the closed-row kernel representation is already exactly
+// what a resolved row polymorphic signature needs. So row polymorphism lives *entirely* in this
+// elaborator as a small, sound unification device: a surface pattern `(L1 L2 ... | r)` names an
+// open tail `r`; `RowVarScope::unify` resolves `r` against a real computation's actual (already
+// kernel-computed, via `Checker::infer_g`) row, and the elaborator only ever emits a closed
+// `Term::EffTy` afterward. The kernel's `RowVar`/open-tail plumbing stays completely dormant.
+
+/// A row-polymorphic effect-row pattern as written in surface syntax, `(L1 L2 ... | r)`: explicit
+/// labels the row is asserted to carry, plus an optional named tail variable standing for
+/// "whatever else" the row may additionally carry. Purely elaborator-side scaffolding — never
+/// reaches the kernel as such.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RowPattern {
+    labels: Vec<blight_kernel::EffName>,
+    tail: Option<String>,
+}
+
+impl RowPattern {
+    /// The pattern as a plain closed row (0, 1, or more labels, each at grade `ω` — matching the
+    /// pre-E1 single-label convention), or `None` if it names an open tail that still needs
+    /// resolving against a real computation's row.
+    fn closed_row(&self) -> Option<blight_kernel::Row> {
+        if self.tail.is_some() {
+            return None;
+        }
+        let mut row = blight_kernel::Row::empty();
+        for l in &self.labels {
+            row = row.union(&blight_kernel::Row::single(
+                l.clone(),
+                blight_kernel::Grade::Omega,
+            ));
+        }
+        Some(row)
+    }
+}
+
+/// Parse the `E` position of a surface `(! E A)` into a [`RowPattern`]. Accepts: `pure` (the empty
+/// row); a single effect name (pre-E1 surface); a parenthesized list of effect names
+/// `(L1 L2 ...)` (a closed, multi-label row — new in Wave 7/E1); or a list ending `... | r`,
+/// naming an open row-variable tail `r` (Wave 7/E1 row polymorphism).
+fn parse_row_pattern(eff: &Surface) -> Result<RowPattern, ElabError> {
+    use blight_kernel::EffName;
+    fn name_of(s: &Surface) -> Result<String, ElabError> {
+        match s {
+            Surface::Var(n) => Ok(n.clone()),
+            _ => Err(ElabError::BadForm(
+                "(! (L1 L2 ... | r) A): each effect must be a plain name".into(),
+            )),
+        }
+    }
+    match eff {
+        Surface::Var(name) if name == "pure" => Ok(RowPattern {
+            labels: vec![],
+            tail: None,
+        }),
+        Surface::Var(name) => Ok(RowPattern {
+            labels: vec![EffName::new(name.clone())],
+            tail: None,
+        }),
+        Surface::App(head, args) => {
+            let mut spine: Vec<&Surface> = vec![head.as_ref()];
+            spine.extend(args.iter());
+            let bar = spine
+                .iter()
+                .position(|s| matches!(s, Surface::Var(n) if n == "|"));
+            match bar {
+                None => {
+                    let mut labels = Vec::with_capacity(spine.len());
+                    for s in &spine {
+                        labels.push(EffName::new(name_of(s)?));
+                    }
+                    Ok(RowPattern { labels, tail: None })
+                }
+                Some(i) => {
+                    if i + 2 != spine.len() {
+                        return Err(ElabError::BadForm(
+                            "(! (L1 L2 ... | r) A): exactly one row variable must follow `|`"
+                                .into(),
+                        ));
+                    }
+                    let mut labels = Vec::with_capacity(i);
+                    for s in &spine[..i] {
+                        labels.push(EffName::new(name_of(s)?));
+                    }
+                    let tail = name_of(spine[i + 1])?;
+                    Ok(RowPattern {
+                        labels,
+                        tail: Some(tail),
+                    })
+                }
+            }
+        }
+        _ => Err(ElabError::BadForm(
+            "(! E A): E must be `pure`, a single effect name, a list of effect names, \
+             or `(L1 L2 ... | r)`"
+                .into(),
+        )),
+    }
+}
+
+/// Row-variable bindings resolved so far within one elaboration scope. A fresh scope is created
+/// per ascription (row variables are never shared across unrelated top-level forms).
+#[derive(Debug, Clone, Default)]
+struct RowVarScope(std::collections::BTreeMap<String, blight_kernel::Row>);
+
+impl RowVarScope {
+    fn new() -> Self {
+        RowVarScope::default()
+    }
+
+    /// Unify `pattern` against the `concrete` row a real computation was inferred to have (spec
+    /// Wave 7/E1). Every explicit label in `pattern` must actually be present in `concrete`; what
+    /// remains after discharging them all — the row's *extension* — is what the pattern's tail
+    /// variable stands for. A tail variable already bound in this scope must resolve to the exact
+    /// same extension a second time: two incompatible resolutions are a clean [`ElabError`], never
+    /// a kernel panic (row unification is entirely tower-side; the kernel only ever sees the
+    /// final, closed `concrete` row). Returns `concrete` unchanged on success.
+    fn unify(
+        &mut self,
+        pattern: &RowPattern,
+        concrete: &blight_kernel::Row,
+    ) -> Result<blight_kernel::Row, ElabError> {
+        for label in &pattern.labels {
+            if !concrete.contains(label) {
+                return Err(ElabError::BadForm(format!(
+                    "row mismatch: declared effect `{}` is not present in the actual row {concrete:?}",
+                    label.0
+                )));
+            }
+        }
+        let mut extension = concrete.clone();
+        for label in &pattern.labels {
+            extension = extension.discharge(label);
+        }
+        if let Some(name) = &pattern.tail {
+            match self.0.get(name) {
+                Some(existing) if existing != &extension => {
+                    return Err(ElabError::BadForm(format!(
+                        "row variable `{name}` unifies with two incompatible tails \
+                         ({existing:?} vs {extension:?})"
+                    )));
+                }
+                Some(_) => {}
+                None => {
+                    self.0.insert(name.clone(), extension);
+                }
+            }
+        }
+        Ok(concrete.clone())
+    }
+}
+
+/// Elaborate the shared body of a `(handle body (return x r) (op x k e) ...)` surface form to a
+/// `Term::Handle`. Factored out so the ordinary [`Surface::Handle`] arm and the row-polymorphic
+/// ascription path ([`try_elab_row_polymorphic_handle`]) share one implementation.
+fn elab_handle(
+    env: &ElabEnv,
+    scope: &Scope,
+    body: &Surface,
+    return_clause: &(String, Box<Surface>),
+    op_clauses: &[(String, String, String, Surface)],
+) -> Result<Term, ElabError> {
+    let body_c = elab(env, scope, body, None)?;
+    // `return x. r`: one binder `x` (de Bruijn 0 in `r`).
+    let (ret_name, ret_body) = return_clause;
+    let ret_scope = scope.push_var(ret_name);
+    let return_c = elab(env, &ret_scope, ret_body, None)?;
+    // Each `op x k e`: two binders — `x` then `k`, so in `e` `k` is de Bruijn 0, `x` is 1.
+    let mut op_clauses_c = Vec::with_capacity(op_clauses.len());
+    for (op, x_name, k_name, clause_body) in op_clauses {
+        let clause_scope = scope.push_var(x_name).push_var(k_name);
+        let clause_c = elab(env, &clause_scope, clause_body, None)?;
+        op_clauses_c.push((op.clone(), Box::new(clause_c)));
+    }
+    Ok(Term::Handle {
+        body: Box::new(body_c),
+        return_clause: Box::new(return_c),
+        op_clauses: op_clauses_c,
+    })
+}
+
+/// `(the (! (L1 .. | r) A) (handle body clauses...))` — a row-polymorphic handler ascription
+/// (spec Wave 7/E1). When the declared type names an open row tail and the ascribed term is
+/// directly a `Handle`, resolve the tail by inferring the handle's actual (already-discharged)
+/// row through the trusted kernel checker (`Checker::infer_g`, the same rule `check_top_with`
+/// uses) and unifying the declared pattern against it, then re-ascribe with the concrete, closed
+/// result — the kernel never sees an open tail. Returns `Ok(None)` when this shape does not apply
+/// (an ordinary ascription, or an open tail used somewhere other than directly ascribing a
+/// `handle`), so the caller falls back to plain elaboration — which itself gives a clear
+/// `ElabError` for a tail that never gets resolved, rather than silently accepting or dropping it.
+fn try_elab_row_polymorphic_handle(
+    env: &ElabEnv,
+    scope: &Scope,
+    ty: &Surface,
+    e: &Surface,
+) -> Result<Option<Term>, ElabError> {
+    let Surface::Bang(eff, a) = ty else {
+        return Ok(None);
+    };
+    let pattern = parse_row_pattern(eff)?;
+    if pattern.tail.is_none() {
+        return Ok(None);
+    }
+    let Surface::Handle {
+        body,
+        return_clause,
+        op_clauses,
+    } = e
+    else {
+        return Ok(None);
+    };
+    let handle_term = elab_handle(env, scope, body, return_clause, op_clauses)?;
+    let a_c = elab(env, scope, a, None)?;
+    let checker = blight_kernel::Checker::new(std::rc::Rc::new(env.signature().clone()));
+    let ctx = blight_kernel::Context::empty();
+    let (_result_ty, result_row, _usage) = checker
+        .infer_g(&ctx, &handle_term, blight_kernel::Grade::Omega)
+        .map_err(|err| {
+            ElabError::BadForm(format!(
+                "row-polymorphic handler ascription: kernel could not infer the handled \
+                 computation's row: {err}"
+            ))
+        })?;
+    let mut row_vars = RowVarScope::new();
+    let resolved = row_vars.unify(&pattern, &result_row)?;
+    let ty_resolved = Term::EffTy(resolved, Box::new(a_c));
+    Ok(Some(Term::Ann(
+        Box::new(handle_term),
+        Box::new(ty_resolved),
+    )))
+}
+
 fn elab(
     env: &ElabEnv,
     scope: &Scope,
@@ -1415,6 +1799,12 @@ fn elab(
         }
 
         Surface::The(ty, e) => {
+            // Row-polymorphic handler ascription (Wave 7/E1): `(the (! (.. | r) A) (handle ..))`
+            // resolves `r` by unifying against the handle's actual, kernel-inferred row instead of
+            // going through the ordinary check-against-declared-type path below.
+            if let Some(term) = try_elab_row_polymorphic_handle(env, scope, ty, e)? {
+                return Ok(term);
+            }
             let ty_c = elab(env, scope, ty, None)?;
             let e_c = elab(env, scope, e, Some(&ty_c))?;
             Ok(Term::Ann(Box::new(e_c), Box::new(ty_c)))
@@ -1552,6 +1942,59 @@ fn elab(
             })
         }
 
+        Surface::HComp(ty, cofib, tube, base) => {
+            let ty_c = elab(env, scope, ty, None)?;
+            let c = elab_cofib(scope, cofib)?;
+            // The tube line is `(plam (j) u)`; unwrap to the bare dimension-binding body so the
+            // kernel's `HComp { tube, .. }` sees it directly, mirroring `Transp`'s `family` handling.
+            let tube_c = elab(env, scope, tube, None)?;
+            let tube_body = match tube_c {
+                Term::PLam(body) => *body,
+                other => {
+                    return Err(ElabError::BadForm(format!(
+                        "(hcomp A φ line a0): line must be `(plam (j) u)`, got {other:?}"
+                    )))
+                }
+            };
+            let base_c = elab(env, scope, base, None)?;
+            Ok(Term::HComp {
+                ty: Box::new(ty_c),
+                cofib: c,
+                tube: Box::new(tube_body),
+                base: Box::new(base_c),
+            })
+        }
+
+        Surface::Comp(family, cofib, tube, base) => {
+            let sc_dim = scope.push_dim("_");
+            let family_c = elab(env, &sc_dim, family, None)?;
+            let family_body = match family_c {
+                Term::PLam(body) => *body,
+                other => {
+                    return Err(ElabError::BadForm(format!(
+                        "(comp line φ tube a0): line must be `(plam (i) A)`, got {other:?}"
+                    )))
+                }
+            };
+            let c = elab_cofib(scope, cofib)?;
+            let tube_c = elab(env, scope, tube, None)?;
+            let tube_body = match tube_c {
+                Term::PLam(body) => *body,
+                other => {
+                    return Err(ElabError::BadForm(format!(
+                        "(comp line φ tube a0): tube must be `(plam (j) u)`, got {other:?}"
+                    )))
+                }
+            };
+            let base_c = elab(env, scope, base, None)?;
+            Ok(Term::Comp {
+                family: Box::new(family_body),
+                cofib: c,
+                tube: Box::new(tube_body),
+                base: Box::new(base_c),
+            })
+        }
+
         Surface::Match(scruts, clauses) => {
             use crate::surface::Pattern;
             // The primitive case: a single variable scrutinee whose clauses are already flat
@@ -1625,17 +2068,34 @@ fn elab(
         }
 
         // ---- effects (spec §4.2, §4.3) ----
-        Surface::Perform(op, arg) => {
+        Surface::Perform(op, type_args, arg) => {
             // Resolve which effect declares this operation from the signature.
             let (eff, _sig) = env
                 .signature()
                 .op_of(op)
                 .ok_or_else(|| ElabError::Unbound(format!("operation `{op}`")))?;
             let effect = eff.name.clone();
+            // Wave 7/E2: a parameterized effect's `perform` site must supply exactly one type
+            // argument per entry in the effect's declared telescope. Caught here (a clean
+            // `ElabError`) rather than only at the kernel's `infer_g`, matching this elaborator's
+            // convention of surfacing arity mismatches before they reach the kernel.
+            if type_args.len() != eff.params.len() {
+                return Err(ElabError::BadForm(format!(
+                    "operation `{op}` of effect {:?} expects {} type argument(s), got {}",
+                    eff.name,
+                    eff.params.len(),
+                    type_args.len()
+                )));
+            }
+            let type_args_c = type_args
+                .iter()
+                .map(|ta| elab(env, scope, ta, None))
+                .collect::<Result<Vec<_>, _>>()?;
             let arg_c = elab(env, scope, arg, None)?;
             Ok(Term::Op {
                 effect,
                 op: op.clone(),
+                type_args: type_args_c,
                 arg: Box::new(arg_c),
             })
         }
@@ -1643,38 +2103,22 @@ fn elab(
             body,
             return_clause,
             op_clauses,
-        } => {
-            let body_c = elab(env, scope, body, None)?;
-            // `return x. r`: one binder `x` (de Bruijn 0 in `r`).
-            let (ret_name, ret_body) = return_clause;
-            let ret_scope = scope.push_var(ret_name);
-            let return_c = elab(env, &ret_scope, ret_body, None)?;
-            // Each `op x k e`: two binders — `x` then `k`, so in `e` `k` is de Bruijn 0, `x` is 1.
-            let mut op_clauses_c = Vec::with_capacity(op_clauses.len());
-            for (op, x_name, k_name, clause_body) in op_clauses {
-                let clause_scope = scope.push_var(x_name).push_var(k_name);
-                let clause_c = elab(env, &clause_scope, clause_body, None)?;
-                op_clauses_c.push((op.clone(), Box::new(clause_c)));
-            }
-            Ok(Term::Handle {
-                body: Box::new(body_c),
-                return_clause: Box::new(return_c),
-                op_clauses: op_clauses_c,
-            })
-        }
+        } => elab_handle(env, scope, body, return_clause, op_clauses),
         Surface::Bang(eff, a) => {
-            use blight_kernel::{EffName, Grade, Row};
-            // `E` is either `()`/`pure` (the empty row) or a single declared effect name.
-            let row = match eff.as_ref() {
-                Surface::Var(name) if name == "pure" => Row::empty(),
-                Surface::Var(name) => Row::single(EffName::new(name.clone()), Grade::Omega),
-                // `(! () A)` parses `()` as an empty application, i.e. nothing; treat as pure.
-                _ => {
-                    return Err(ElabError::BadForm(
-                        "(! E A): E must be a single effect name or `pure`".into(),
-                    ))
-                }
-            };
+            // `E` is `pure`, a single effect name, a closed multi-label list, or `(L.. | r)` — see
+            // `parse_row_pattern`. An open tail can only be elaborated here if it was already
+            // resolved by `try_elab_row_polymorphic_handle` (which never calls back into this
+            // generic path with the same unresolved pattern); reaching here with a still-open tail
+            // is a clear, honest `ElabError` rather than a silently dropped or invented row.
+            let pattern = parse_row_pattern(eff)?;
+            let row = pattern.closed_row().ok_or_else(|| {
+                let name = pattern.tail.clone().unwrap_or_default();
+                ElabError::BadForm(format!(
+                    "(! (.. | {name}) A): an open row-variable tail can only be resolved by \
+                     directly ascribing a `handle` expression, e.g. \
+                     `(the (! (.. | {name}) A) (handle ...))`"
+                ))
+            })?;
             let a_c = elab(env, scope, a, None)?;
             Ok(Term::EffTy(row, Box::new(a_c)))
         }
@@ -1707,7 +2151,14 @@ fn elab(
             let e_c = elab(env, scope, e, None)?;
             let e_ty = synth_type(env, scope, &e_c);
             let sc = scope.push_var_ty(x, e_ty.clone());
-            let body_c = elab(env, &sc, body, expected)?;
+            // `expected` lives in `scope` (size n); `sc` has one extra binder (the let-bound `x`),
+            // so any free variables in `expected` referring to outer-scope binders must be shifted
+            // up by 1 to remain valid indices in `sc` — the same weakening `cod` below performs.
+            // Passing `expected` unweakened here mixes de Bruijn baselines and was rejected only
+            // deep inside the kernel (a `Pi`/`compare`-typed value leaking in where a universe or
+            // the true expected type was wanted) whenever `expected` mentioned an outer variable.
+            let expected_in_sc = expected.map(|c| weaken(c, 1));
+            let body_c = elab(env, &sc, body, expected_in_sc.as_ref())?;
             let lam = Term::Lam(Box::new(body_c.clone()));
             // The codomain: the expected result if known, else the body's synthesized type
             // (strengthened back past the `x` binder so it is valid in the outer scope).
@@ -1734,7 +2185,10 @@ fn elab(
             let rgn_ty = region_handle_type(env)?;
             let tok = region_token(env)?;
             let sc = scope.push_var_ty(r, Some(rgn_ty.clone()));
-            let body_c = elab(env, &sc, body, expected)?;
+            // See the `Surface::Let` case above: `expected` lives in `scope`, but `sc` has one
+            // extra binder, so it must be weakened by 1 before checking `body` against it.
+            let expected_in_sc = expected.map(|c| weaken(c, 1));
+            let body_c = elab(env, &sc, body, expected_in_sc.as_ref())?;
             // Codomain: the expected result if known (strengthened back past the `r` binder), else
             // the synthesized body type. The token must not escape *in the type* — an opaque `Rgn`
             // appearing in the region's result type means the capability leaked past its scope.
@@ -2289,15 +2743,48 @@ fn elab_app_head(
                     if args.len() > k {
                         if let Surface::Var(sub) = &args[k] {
                             if let Some(ih_name) = rec.ih.get(sub) {
-                                if let Some(idx) = scope.var_index(ih_name) {
-                                    let mut head = Term::Var(idx);
-                                    for a in &args[k + 1..] {
-                                        head = Term::App(
-                                            Box::new(head),
-                                            Box::new(elab(env, scope, a, None)?),
-                                        );
+                                // Binding a self-call to the scrutinee's induction hypothesis *drops*
+                                // the call's leading arguments (the `Elim` fixes the leading params at
+                                // their outer values). That is sound only when every leading argument
+                                // that *varies* from its parameter is irrelevant to the runtime value:
+                                //
+                                //   * an erased (grade-0) **index** — e.g. the length `m` in
+                                //     `vec-length A m xs` — leaves no runtime trace, and the IH already
+                                //     carries the specialized result type, so dropping it is exact; but
+                                //   * a grade-1 **accumulator** — e.g. `sum-acc (Succ acc) m` — *does*
+                                //     determine the value, so dropping `(Succ acc)` silently reuses the
+                                //     stale `acc` (a meaning bug the kernel's type re-check can't see:
+                                //     both are `Nat`).
+                                //
+                                // We therefore require each leading argument to be EITHER the leading
+                                // parameter verbatim OR at an erased position. (An effectful recursor
+                                // additionally reorders the eager per-step `perform`s, so it keeps the
+                                // strict verbatim rule.) A varying runtime leading argument falls
+                                // through: `deftotal` errors, `define-rec` takes the `later`-guard.
+                                let leading_ok = (0..k).all(|j| {
+                                    let verbatim = matches!(
+                                        &args[j], Surface::Var(v) if *v == rec.leading[j]
+                                    );
+                                    // A non-verbatim (varying) leading argument may be dropped only
+                                    // when its parameter is *irrelevant* to the result (so the IH's
+                                    // value is unaffected). An effectful recursor additionally
+                                    // reorders the eager per-step `perform`s, so it keeps the strict
+                                    // verbatim rule. An unknown/missing summary entry defaults to
+                                    // relevant (not droppable) — the safe direction.
+                                    let irrelevant = !rec.relevance.get(j).copied().unwrap_or(true);
+                                    verbatim || (!rec.effectful && irrelevant)
+                                });
+                                if leading_ok {
+                                    if let Some(idx) = scope.var_index(ih_name) {
+                                        let mut head = Term::Var(idx);
+                                        for a in &args[k + 1..] {
+                                            head = Term::App(
+                                                Box::new(head),
+                                                Box::new(elab(env, scope, a, None)?),
+                                            );
+                                        }
+                                        return Ok(Some(head));
                                     }
-                                    return Ok(Some(head));
                                 }
                             }
                         }
@@ -2363,6 +2850,205 @@ fn is_pure_total_conclusion(ty: &Term) -> bool {
     }
 }
 
+/// Whether `ty`'s conclusion (after peeling `Pi` binders) is an *effectful* computation type
+/// `! E A` with a non-empty effect row. Used by [`elaborate_rec`] to require verbatim leading
+/// arguments for effectful structural recursors (where eager induction-hypothesis evaluation would
+/// reorder/drop per-step effects), while leaving pure indexed families on the lenient recognition.
+fn has_effectful_conclusion(ty: &Term) -> bool {
+    let mut t = ty;
+    loop {
+        match t {
+            Term::Pi(_, _, cod) => t = cod,
+            Term::EffTy(row, inner) => {
+                if !row.is_empty() {
+                    return true;
+                }
+                t = inner;
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// Collect every parameter name whose value can reach the function's *result* — used by
+/// [`compute_relevance`]. Scans `s` for `Surface::Var` occurrences, but skips the argument positions
+/// that provably never reach the result:
+///
+///   * the first `k` (leading) arguments of a **self-call** `(self a0 … a_{k-1} scrut trailing…)`,
+///     which the structural `Elim` drops (it fixes the leading parameters at their outer values); and
+///   * the *irrelevant* argument positions of a call to a **known callee** (per its already-computed
+///     summary in `callees`) — e.g. the index args of `bvar-index`, which that function never lets
+///     reach its own result, so they cannot reach this one through it either.
+///
+/// Every other occurrence — base-case returns, trailing self-call arguments (applied to the
+/// induction hypothesis), constructor arguments, arguments at relevant callee positions, type
+/// positions, and *all* arguments of an unknown head (a local, a constructor, a partial application)
+/// — is counted. Skipping only provably-dropped/-ignored positions guarantees we never undercount an
+/// escape, so the criterion built on this set is sound (worst case: over-rejection, never a silent
+/// miscompile).
+fn collect_escaping_vars(
+    s: &Surface,
+    self_name: &str,
+    k: usize,
+    callees: &std::collections::HashMap<String, Vec<bool>>,
+    out: &mut std::collections::HashSet<String>,
+) {
+    use Surface::*;
+    let go = |x: &Surface, out: &mut std::collections::HashSet<String>| {
+        collect_escaping_vars(x, self_name, k, callees, out)
+    };
+    match s {
+        Var(name) => {
+            out.insert(name.clone());
+        }
+        App(f, args) => {
+            go(f, out);
+            // Decide, per argument position, whether it can reach this application's result (and so
+            // the function's result). A self-call drops its leading args; a known callee drops its
+            // own irrelevant positions; anything else (constructor, local, partial app) keeps all.
+            let summary: Option<&Vec<bool>> = match &**f {
+                Var(h) if h == self_name => None, // self-call: handled by `k` below
+                Var(h) => callees.get(h),
+                _ => None,
+            };
+            let is_self = matches!(&**f, Var(h) if h == self_name);
+            for (i, a) in args.iter().enumerate() {
+                let reaches_result = if is_self {
+                    i >= k
+                } else {
+                    // Known callee: only relevant positions reach the result. Positions beyond the
+                    // summary (e.g. over-application) are treated as reaching it (conservative).
+                    summary
+                        .map(|s| s.get(i).copied().unwrap_or(true))
+                        .unwrap_or(true)
+                };
+                if reaches_result {
+                    go(a, out);
+                }
+            }
+        }
+        The(a, b) | PApp(a, b) | Bang(a, b) | Pair(a, b) | IntPrim(_, a, b) => {
+            go(a, out);
+            go(b, out);
+        }
+        Lam(_, b)
+        | PLam(_, b)
+        | Delay(b)
+        | Now(b)
+        | Later(b)
+        | Force(b)
+        | Fst(b)
+        | Snd(b)
+        | Region(_, b)
+        | Unglue(b)
+        | Partial(_, b) => go(b, out),
+        Perform(_, type_args, b) => {
+            for t in type_args {
+                go(t, out);
+            }
+            go(b, out);
+        }
+        Pi(binders, cod) | Sigma(binders, cod) => {
+            for b in binders {
+                go(&b.ty, out);
+            }
+            go(cod, out);
+        }
+        Path(a, b, c) | Glue(a, _, b, c) => {
+            go(a, out);
+            go(b, out);
+            go(c, out);
+        }
+        GlueTerm(_, t, e) | Transp(t, _, e) => {
+            go(t, out);
+            go(e, out);
+        }
+        // Conservative: every operand can reach the result (the Kan layer has no dedicated
+        // relevance analysis, so all of `ty`/`tube`/`base` — and `family` for `Comp` — count).
+        HComp(a, _, b, c) | Comp(a, _, b, c) => {
+            go(a, out);
+            go(b, out);
+            go(c, out);
+        }
+        Match(scruts, clauses) => {
+            for sc in scruts {
+                go(sc, out);
+            }
+            for c in clauses {
+                go(&c.body, out);
+            }
+        }
+        Handle {
+            body,
+            return_clause,
+            op_clauses,
+        } => {
+            go(body, out);
+            go(&return_clause.1, out);
+            for (_, _, _, e) in op_clauses {
+                go(e, out);
+            }
+        }
+        Let(_, e, b) => {
+            go(e, out);
+            go(b, out);
+        }
+        System(arms) => {
+            for (_, e) in arms {
+                go(e, out);
+            }
+        }
+        // Leaves with no variable sub-terms.
+        Univ(_) | IntTy | IntLit(_) => {}
+    }
+}
+
+/// Peel the leading lambda parameters of a definition body, in source order.
+fn peel_lam_params(body: &Surface) -> Vec<String> {
+    let mut params = Vec::new();
+    let mut t = body;
+    while let Surface::Lam(binders, inner) = t {
+        params.extend(binders.iter().cloned());
+        t = inner;
+    }
+    params
+}
+
+/// The number of *leading* parameters before the structural recursion variable: the position of the
+/// outermost `match`'s (first) scrutinee among the peeled lambda parameters. Returns `0` when the
+/// shape is not the recognized `λ params. (match param …)` (so a self-call drops nothing — the safe,
+/// over-approximating direction). This is the same `k` the structural `Elim` lowering uses; computing
+/// it syntactically here lets the relevance summary be a pure function of the surface definition.
+fn syntactic_leading_k(body: &Surface, params: &[String]) -> usize {
+    let mut t = body;
+    while let Surface::Lam(_, inner) = t {
+        t = inner;
+    }
+    if let Surface::Match(scruts, _) = t {
+        if let Some(Surface::Var(s)) = scruts.first() {
+            if let Some(pos) = params.iter().position(|p| p == s) {
+                return pos;
+            }
+        }
+    }
+    0
+}
+
+/// Compute the relevant-parameter summary of a definition: for each leading lambda parameter, whether
+/// its value can reach the result. `callees` holds the summaries of earlier definitions (used to see
+/// through index-ignoring helpers). See [`collect_escaping_vars`] for the soundness argument.
+fn compute_relevance(
+    name: &str,
+    body: &Surface,
+    callees: &std::collections::HashMap<String, Vec<bool>>,
+) -> Vec<bool> {
+    let params = peel_lam_params(body);
+    let k = syntactic_leading_k(body, &params);
+    let mut esc = std::collections::HashSet::new();
+    collect_escaping_vars(body, name, k, callees, &mut esc);
+    params.iter().map(|p| esc.contains(p)).collect()
+}
+
 /// Whether the kernel gate ([`ElabEnv::kernel_check_def`]) should *route this definition through the
 /// kernel at all*. Beyond purity/totality ([`is_pure_total_conclusion`]), the gate is restricted to
 /// definitions whose verification is bounded by the term's *structure* — **functions** (a `Pi` head,
@@ -2415,6 +3101,9 @@ fn elaborate_rec(
             ih: std::collections::HashMap::new(),
             total: true,
             leading: Vec::new(),
+            effectful: has_effectful_conclusion(ty),
+            param_depth: None,
+            relevance: std::rc::Rc::new(env.relevant_params.get(name).cloned().unwrap_or_default()),
         });
         elab(env, &scope, body, Some(ty))
     };
@@ -2436,6 +3125,11 @@ fn elaborate_rec(
                 ih: std::collections::HashMap::new(),
                 total: false,
                 leading: Vec::new(),
+                effectful: has_effectful_conclusion(ty),
+                param_depth: None,
+                relevance: std::rc::Rc::new(
+                    env.relevant_params.get(name).cloned().unwrap_or_default(),
+                ),
             });
             // `body` is checked against `ty` under the extra `self` binder; `ty` mentions no
             // bound vars (it is closed), so no shifting is needed for it.
@@ -2881,11 +3575,18 @@ fn elab_flat_match(
     let mut all_typed = true;
     for i in 0..scrut_idx {
         let pos = n_vars - 1 - i; // absolute position in `vars`
+                                  // An IH binder is deliberately excluded from trailing generalization even though it now
+                                  // carries a real type (for `synth_type`'s sake — see the IH-typing note above): reusing it
+                                  // here would eagerly wrap unrelated inner matches in a Pi-telescope over the (function-
+                                  // typed) induction hypothesis, a behavior change unrelated to giving self-calls an
+                                  // inferable type. Treat it exactly as the untyped case: bail out to `m = 0`, matching the
+                                  // pre-existing behavior for any match nested below an IH binder.
+        let is_ih_binder = scope.vars[pos].ends_with("#ih");
         match scope.var_types[pos].clone() {
             // The stored type lives in a scope of size `pos`; lift it into the full scope (size
             // `n_vars`) by shifting its free variables up by `n_vars - pos`.
-            Some(ty) => trailing.push(weaken(&ty, n_vars - pos)),
-            None => {
+            Some(ty) if !is_ih_binder => trailing.push(weaken(&ty, n_vars - pos)),
+            _ => {
                 all_typed = false;
                 break;
             }
@@ -2971,6 +3672,22 @@ fn elab_flat_match(
             _ => None,
         });
 
+    // The scrutinee's actual type parameters `p0 .. p_{k-1}` (from its type `D p0..p_{k-1}
+    // i1..im`), rebased into the full current scope exactly like `index_vars` above. A
+    // constructor's declared field types are expressed relative to the family's OWN param
+    // telescope (e.g. `just : Pi (x a) (Maybe a)`'s field type is the bare param variable `a`), so
+    // reading a field's type in the *caller's* scope for a parametric — not just param-free —
+    // family requires substituting these concrete values in first (see `field_ty` below).
+    let scrut_params: Option<Vec<Term>> = scope
+        .var_types
+        .get(scrut_pos)
+        .and_then(|o| o.as_ref())
+        .map(|ty| weaken(ty, n_vars - scrut_pos))
+        .and_then(|ty| match whnf_head(&ty) {
+            Term::Data(d, ps, is) if d.0 == data_name && is.len() == decl_nindices => Some(ps),
+            _ => None,
+        });
+
     // For per-method *index refinement* of the re-introduced trailing binders: when this match's
     // scrutinee `s : D ps i1..im` has variable indices `ivars`, each constructor's arm refines those
     // index variables to the constructor's result-index expressions (e.g. matching `v : Vec A n`
@@ -3029,6 +3746,17 @@ fn elab_flat_match(
         .map(|i| scope.vars[scope.vars.len() - 1 - i].clone())
         .collect();
 
+    // Is this match on a *function parameter* (the recursion variable) or on a field exposed by a
+    // *nested* match? Only the former may establish structural induction hypotheses for self-calls
+    // (see `RecCtx::param_depth`). The parameter depth is the scope size at the outermost match; a
+    // scrutinee whose absolute scope position is below it is a parameter. The outermost match itself
+    // (no `param_depth` recorded yet) is, by definition, on a parameter.
+    let scrut_abs = scope.vars.len() - 1 - scrut_idx;
+    let scrutinee_is_param = match scope.rec.as_ref().and_then(|r| r.param_depth) {
+        Some(pd) => scrut_abs < pd,
+        None => true,
+    };
+
     // Build methods in declaration order.
     let mut methods = Vec::with_capacity(ctor_order.len());
     for cname in &ctor_order {
@@ -3050,20 +3778,24 @@ fn elab_flat_match(
 
         // Method scope: add one binder per constructor arg, with an IH binder after each recursive
         // arg, then re-introduce the trailing binders. Field binders are given their *types* from
-        // the kernel constructor signature when readable (param-free families), so nested matches
-        // and `let`-aliases over the bound fields can synthesize types.
+        // the kernel constructor signature when readable — any index-free family, parametric or
+        // not, whose scrutinee's actual parameter values we could read off above (`scrut_params`) —
+        // so nested matches and `let`-aliases over the bound fields can synthesize types. (Indexed
+        // families are excluded: substituting their field types would additionally need the
+        // per-method index *refinement* this function already computes separately below, and mixing
+        // the two is more machinery than any current stdlib use needs.)
         let kernel_con = env
             .signature()
             .data_of_con(&blight_kernel::ConName(cname.clone()))
-            .map(|(decl, _, con)| {
-                (
-                    decl.params.is_empty() && decl.indices.is_empty(),
-                    con.clone(),
-                )
-            });
+            .map(|(decl, _, con)| (decl.params.len(), decl.indices.is_empty(), con.clone()));
         let mut sc = scope.clone();
         let mut rec = sc.rec.clone();
         if let Some(r) = rec.as_mut() {
+            // Record the parameter depth at the outermost match so nested matches can tell their
+            // (field) scrutinees apart from the recursion variable.
+            if r.param_depth.is_none() {
+                r.param_depth = Some(scope.vars.len());
+            }
             // Only the *outermost* match of a recursive function establishes the leading-parameter
             // layout; nested matches inherit it (overwriting would describe the inner scrutinee's
             // context, breaking recursive-call recognition in the inner body).
@@ -3073,27 +3805,76 @@ fn elab_flat_match(
         }
         let mut n_con_binders = 0usize;
         for (i, (arg_name, &is_rec)) in clause.binders.iter().zip(&info.rec_flags).enumerate() {
-            // The field's type, if cheaply known (only for param/index-free families).
-            let field_ty = match &kernel_con {
-                Some((true, con)) => match con.args.get(i) {
-                    Some(blight_kernel::Arg::NonRec(t)) => Some(t.clone()),
-                    Some(blight_kernel::Arg::Rec(_)) => Some(Term::Data(
-                        blight_kernel::DataName(data_name.clone()),
-                        vec![],
-                        vec![],
-                    )),
-                    None => None,
-                },
-                _ => None,
-            };
+            // The field's type, if cheaply known: an index-free family (params substituted in via
+            // `scrut_params`, empty for a param-free family) whose declared arg type we can read.
+            let field_ty = kernel_con
+                .as_ref()
+                .and_then(|(nparams, indices_empty, con)| {
+                    if !*indices_empty {
+                        return None;
+                    }
+                    let ps: Vec<Term> = if *nparams == 0 {
+                        vec![]
+                    } else {
+                        scrut_params.clone()?
+                    };
+                    match con.args.get(i) {
+                        Some(blight_kernel::Arg::NonRec(t)) => {
+                            // The declared field type lives in a scope of exactly `nparams` param
+                            // binders (param 0 outermost, so at index `nparams-1`; the last-declared
+                            // param innermost, at index 0). Substitute innermost-first so each
+                            // `subst0_closed` call always targets the current `Var(0)`.
+                            let mut ft = t.clone();
+                            for p in ps.iter().rev() {
+                                ft = subst0_closed(&ft, p);
+                            }
+                            Some(ft)
+                        }
+                        Some(blight_kernel::Arg::Rec(_)) => Some(Term::Data(
+                            blight_kernel::DataName(data_name.clone()),
+                            ps,
+                            vec![],
+                        )),
+                        None => None,
+                    }
+                });
             sc = sc.push_var_ty(arg_name, field_ty);
             n_con_binders += 1;
             if is_rec {
                 let ih_name = format!("{arg_name}#ih");
-                sc = sc.push_var(&ih_name);
+                // Give the IH binder a real type when we can, rather than leaving it opaque to
+                // `synth_type`. For a non-indexed family the whole match's motive is exactly
+                // `λs. Π(trailing). expected'` (see `motive_body` above, pre-index-abstraction);
+                // the IH for a structurally-smaller field is that same shape with the scrutinee
+                // replaced by the field. Concretely: weaken `motive_body` (built relative to
+                // `scope`) into `sc`'s current scope (which has `n_con_binders` more binders — the
+                // fields/IHs introduced so far for this constructor, including this field's own
+                // `arg_name` binder just pushed above), then substitute the (now-shifted) free
+                // occurrence of the scrutinee for `arg_name`'s own `Var(0)`. Without this, a
+                // self-call's result type is `None` under `synth_type`, and consuming it (e.g. in
+                // a further `match`, or a `let`) forces an unascribed `Lam`/`Pair` into inference
+                // position — the "cannot infer a type" bug this fixes (indexed families are left
+                // opaque; their IH additionally needs the *refined* indices, computed only later).
+                let ih_ty = if decl_nindices == 0 {
+                    let shifted = weaken(&motive_body, n_con_binders);
+                    Some(subst_var(
+                        &shifted,
+                        scrut_idx + n_con_binders,
+                        &Term::Var(0),
+                    ))
+                } else {
+                    None
+                };
+                sc = sc.push_var_ty(&ih_name, ih_ty);
                 n_con_binders += 1;
-                if let Some(r) = rec.as_mut() {
-                    r.ih.insert(arg_name.clone(), ih_name);
+                // The IH binder is always introduced (the kernel `Elim` supplies `self field` for
+                // every recursive field), but it is only offered to *self-calls* when this match is
+                // on a function parameter. A nested match's field IH belongs to the inner eliminator,
+                // not to `self`; registering it would silently miscompile a course-of-values call.
+                if scrutinee_is_param {
+                    if let Some(r) = rec.as_mut() {
+                        r.ih.insert(arg_name.clone(), ih_name);
+                    }
                 }
             }
         }
@@ -3110,7 +3891,7 @@ fn elab_flat_match(
         let refined_indices: Option<Vec<Term>> = if refine_ivars.is_empty() {
             None
         } else {
-            kernel_con.as_ref().and_then(|(_, con)| {
+            kernel_con.as_ref().and_then(|(_, _, con)| {
                 if con.result_indices.len() != refine_ivars.len() {
                     return None;
                 }
@@ -3327,6 +4108,17 @@ fn abstract_vars(term: &Term, targets: &[usize]) -> Term {
                 is.iter().map(&r).collect(),
             ),
             T::Con(c, args) => T::Con(c.clone(), args.iter().map(&r).collect()),
+            T::PCon {
+                data,
+                name,
+                args,
+                dim,
+            } => T::PCon {
+                data: data.clone(),
+                name: name.clone(),
+                args: args.iter().map(&r).collect(),
+                dim: dim.clone(),
+            },
             T::Elim {
                 data,
                 motive,
@@ -3399,9 +4191,15 @@ fn abstract_vars(term: &Term, targets: &[usize]) -> Term {
                 base: Box::new(r(base)),
             },
             T::Unglue(a) => T::Unglue(Box::new(r(a))),
-            T::Op { effect, op, arg } => T::Op {
+            T::Op {
+                effect,
+                op,
+                type_args,
+                arg,
+            } => T::Op {
                 effect: effect.clone(),
                 op: op.clone(),
+                type_args: type_args.iter().map(&r).collect(),
                 arg: Box::new(r(arg)),
             },
             T::Handle {
@@ -3438,9 +4236,23 @@ fn abstract_vars(term: &Term, targets: &[usize]) -> Term {
     body
 }
 
-/// Substitute a *closed* term `c` for de Bruijn 0 in `t`, decrementing the remaining indices
-/// (capture-free because `c` mentions no bound variables). Used to instantiate a `Pi` codomain
-/// with a closed metavariable when inserting implicit arguments.
+/// Substitute `c` for de Bruijn 0 in `t`, decrementing the remaining indices. Capture-avoiding for
+/// *any* `c` (not just a closed one): each time the traversal descends under a binder, the
+/// insertion site sits `j` binders deeper than where `c` was valid, so `c` itself must be shifted
+/// by `j` at the point of insertion (`weaken(c, j)`), exactly as ordinary substitution requires.
+///
+/// This was previously named `subst0_closed` and skipped that shift (`c.clone()` regardless of
+/// `j`), on the documented assumption that `c` "mentions no bound variables". That assumption did
+/// not hold at every call site — e.g. [`synth_type`]'s `App` case substitutes an *argument's*
+/// elaborated term, which is routinely a plain variable reference such as a type parameter `V` —
+/// so whenever the target `t` mentioned the substituted de Bruijn index at more than one nesting
+/// depth (e.g. a polymorphic function's codomain like `Pi (mv : Maybe V) (Maybe V)`, which uses `V`
+/// both in the domain and, one binder deeper, in the codomain), only the *shallowest* occurrence
+/// substituted correctly; deeper ones inserted an unshifted (too-low) index, silently corrupting
+/// the synthesized type. This surfaced as spurious kernel `not definitionally equal` rejections —
+/// a `Data(...)` value appearing where a universe (or the real expected type) was wanted — for any
+/// `let`/`match` whose scrutinee was a call to a polymorphic function. Since `weaken(c, 0) == c`,
+/// this is a strict generalization: still correct when `c` happens to be closed.
 fn subst0_closed(t: &Term, c: &Term) -> Term {
     fn go(t: &Term, j: usize, c: &Term) -> Term {
         use blight_kernel::Term as T;
@@ -3452,7 +4264,7 @@ fn subst0_closed(t: &Term, c: &Term) -> Term {
                     return T::Var(*i);
                 }
                 match i.cmp(&j) {
-                    Ordering::Equal => c.clone(),
+                    Ordering::Equal => weaken(c, j),
                     Ordering::Greater => T::Var(i - 1),
                     Ordering::Less => T::Var(*i),
                 }
@@ -3582,6 +4394,17 @@ fn abstract_var_at(term: &Term, k: usize, depth: usize) -> Term {
             is.iter().map(r).collect(),
         ),
         T::Con(c, args) => T::Con(c.clone(), args.iter().map(r).collect()),
+        T::PCon {
+            data,
+            name,
+            args,
+            dim,
+        } => T::PCon {
+            data: data.clone(),
+            name: name.clone(),
+            args: args.iter().map(r).collect(),
+            dim: dim.clone(),
+        },
         T::Elim {
             data,
             motive,
@@ -3657,9 +4480,15 @@ fn abstract_var_at(term: &Term, k: usize, depth: usize) -> Term {
             base: Box::new(r(base)),
         },
         T::Unglue(a) => T::Unglue(Box::new(r(a))),
-        T::Op { effect, op, arg } => T::Op {
+        T::Op {
+            effect,
+            op,
+            type_args,
+            arg,
+        } => T::Op {
             effect: effect.clone(),
             op: op.clone(),
+            type_args: type_args.iter().map(&r).collect(),
             arg: Box::new(r(arg)),
         },
         T::Handle {
@@ -4111,6 +4940,85 @@ mod tests {
         // The kernel now refines this correct dependent match (item 1b), so the gate certifies it.
         env.declare(&decl, Some(&ty))
             .expect("safe-tail declares (kernel refines the dependent match — item 1b)");
+    }
+
+    /// Regression (varying-leading-argument soundness): a `deftotal` whose recursive call varies a
+    /// *runtime-relevant* leading argument — a genuine **accumulator** — must be rejected, not
+    /// silently compiled to a structural `Elim` that drops the change. `sum-acc acc n` recurses on
+    /// `n` while threading `acc` forward via `(Succ acc)`; the `Elim` fixes the leading `acc` at its
+    /// outer value, so binding the call to `n`'s induction hypothesis would discard `(Succ acc)` and
+    /// the function would always return its initial `acc` (e.g. `sum-acc Zero 3 = 0`, not `3`). The
+    /// kernel's *type* re-check cannot catch this (both are `Nat`), so the elaborator must refuse it.
+    #[test]
+    fn deftotal_rejects_varying_leading_accumulator() {
+        let env = env_with_decls(&["(defdata Nat () (Zero) (Succ (n Nat)))"]);
+        let ty = elaborate(
+            &env,
+            &parse_surface(&read_one("(Pi ((acc Nat) (n Nat)) Nat)").unwrap().0).unwrap(),
+        )
+        .expect("sum-acc type elaborates");
+        let body = parse_surface(
+            &read_one(
+                "(lam (acc) (lam (n) (match n \
+                   [(Zero) acc] \
+                   [(Succ m) (sum-acc (Succ acc) m)])))",
+            )
+            .unwrap()
+            .0,
+        )
+        .unwrap();
+        let decl = Decl::DefTotal {
+            name: "sum-acc".into(),
+            body,
+        };
+        let mut env = env;
+        let res = env.declare(&decl, Some(&ty));
+        assert!(
+            matches!(res, Err(ElabError::BadMatch(ref m)) if m.contains("structural sub-term")),
+            "a deftotal varying a runtime-relevant leading accumulator must be rejected, got {res:?}"
+        );
+    }
+
+    /// Companion to the above: a structural fold whose varied leading argument is *irrelevant* to the
+    /// result must still be accepted. `vec-length` varies its leading length index `n` (→ the
+    /// constructor's predecessor `m`) in the recursive call, but the spine length it computes is
+    /// independent of `n`, so dropping the varied index is exact. The interprocedural relevance
+    /// analysis must see this and not over-reject (the dual hazard of the accumulator fix).
+    #[test]
+    fn defrec_accepts_varying_irrelevant_leading_index() {
+        let env = env_with_decls(&[
+            "(defdata Nat () (Zero) (Succ (n Nat)))",
+            "(defdata Vec ((a (Type 0))) ((n Nat)) \
+                (vnil (=> Zero)) \
+                (vcons (m Nat) (x a) (xs (Vec a m)) (=> (Succ m))))",
+        ]);
+        let ty = elaborate(
+            &env,
+            &parse_surface(
+                &read_one("(Pi ((A (Type 0)) (n Nat) (v (Vec A n))) Nat)")
+                    .unwrap()
+                    .0,
+            )
+            .unwrap(),
+        )
+        .expect("vec-length type elaborates");
+        let body = parse_surface(
+            &read_one(
+                "(lam (A n v) (match v \
+                   [(vnil) Zero] \
+                   [(vcons m x xs) (Succ (vec-length A m xs))]))",
+            )
+            .unwrap()
+            .0,
+        )
+        .unwrap();
+        let decl = Decl::DefineRec {
+            name: "vec-length".into(),
+            body,
+        };
+        let mut env = env;
+        env.declare(&decl, Some(&ty))
+            .expect("a structural fold whose varied leading index is irrelevant must be accepted");
     }
 
     /// Regression: a `match` over an *indexed* family whose scrutinee index is a *non-variable*
@@ -4798,6 +5706,161 @@ mod tests {
         match pure {
             Term::EffTy(row, _) => assert!(row.is_empty(), "`pure` is the empty row"),
             other => panic!("expected Term::EffTy, got {other:?}"),
+        }
+    }
+
+    /// `(! (State Extra) Nat)` elaborates to `Term::EffTy` with a row carrying both labels (Wave
+    /// 7/E1: closed multi-label rows — previously only a single label was expressible).
+    #[test]
+    fn bang_multi_label_row_type() {
+        let mut env = state_env();
+        let (sx, _) = read_one("(effect Extra (bump Nat Nat))").expect("reads");
+        let decl = parse_decl(&sx).expect("parses");
+        env.declare(&decl, None).expect("declares");
+
+        let (sx, _) = read_one("(! (State Extra) Nat)").expect("reads");
+        let term = elaborate(&env, &parse_surface(&sx).expect("parses")).expect("elaborates");
+        match term {
+            Term::EffTy(row, _) => {
+                assert!(row.contains(&blight_kernel::EffName::new("State")));
+                assert!(row.contains(&blight_kernel::EffName::new("Extra")));
+            }
+            other => panic!("expected Term::EffTy, got {other:?}"),
+        }
+    }
+
+    /// An open row-variable tail used somewhere other than directly ascribing a `handle` is a
+    /// clean `ElabError`, not a silent accept or a dropped tail (Wave 7/E1).
+    #[test]
+    fn bang_open_tail_without_handle_ascription_rejected() {
+        let env = state_env();
+        let (sx, _) = read_one("(! (State | r) Nat)").expect("reads");
+        let err = elaborate(&env, &parse_surface(&sx).expect("parses"))
+            .expect_err("an unresolved row-variable tail must be rejected, not accepted");
+        assert!(
+            matches!(err, ElabError::BadForm(_)),
+            "expected a clean BadForm, got {err:?}"
+        );
+    }
+
+    /// Row-variable unification (Wave 7/E1): `{State | r}` unified against the concrete row
+    /// `{State, Extra}` succeeds, resolving `r` to the row's *extension* `{Extra}` — whatever the
+    /// pattern didn't explicitly name.
+    #[test]
+    fn row_var_unifies_with_extension() {
+        use blight_kernel::{EffName, Grade, Row};
+        let pattern = RowPattern {
+            labels: vec![EffName::new("State")],
+            tail: Some("r".to_string()),
+        };
+        let concrete = Row::single(EffName::new("State"), Grade::Omega)
+            .union(&Row::single(EffName::new("Extra"), Grade::Omega));
+        let mut scope = RowVarScope::new();
+        let resolved = scope.unify(&pattern, &concrete).expect("unifies");
+        assert_eq!(
+            resolved, concrete,
+            "unify returns the concrete row unchanged on success"
+        );
+        assert_eq!(
+            scope.0.get("r"),
+            Some(&Row::single(EffName::new("Extra"), Grade::Omega)),
+            "r resolves to the extension {{Extra}}"
+        );
+    }
+
+    /// Two incompatible resolutions of the same row variable are a clean `ElabError`, never a
+    /// kernel panic — the mandated reject twin for row-variable unification (Wave 7/E1).
+    #[test]
+    fn row_tail_mismatch_rejected() {
+        use blight_kernel::{EffName, Grade, Row};
+        let pattern = RowPattern {
+            labels: vec![EffName::new("State")],
+            tail: Some("r".to_string()),
+        };
+        let mut scope = RowVarScope::new();
+        let first = Row::single(EffName::new("State"), Grade::Omega)
+            .union(&Row::single(EffName::new("Extra1"), Grade::Omega));
+        scope
+            .unify(&pattern, &first)
+            .expect("first resolution unifies");
+
+        let second = Row::single(EffName::new("State"), Grade::Omega)
+            .union(&Row::single(EffName::new("Extra2"), Grade::Omega));
+        let err = scope
+            .unify(&pattern, &second)
+            .expect_err("a second, incompatible resolution of `r` must be rejected");
+        assert!(
+            matches!(err, ElabError::BadForm(_)),
+            "expected a clean BadForm, got {err:?}"
+        );
+    }
+
+    /// A declared label that is not actually present in the concrete row is also a clean reject.
+    #[test]
+    fn row_pattern_missing_label_rejected() {
+        use blight_kernel::{EffName, Grade, Row};
+        let pattern = RowPattern {
+            labels: vec![EffName::new("State")],
+            tail: Some("r".to_string()),
+        };
+        let mut scope = RowVarScope::new();
+        let concrete = Row::single(EffName::new("Extra"), Grade::Omega);
+        let err = scope
+            .unify(&pattern, &concrete)
+            .expect_err("State is not present in the concrete row");
+        assert!(matches!(err, ElabError::BadForm(_)));
+    }
+
+    /// `(the (! (Extra1 | r) Nat) (handle (perform get tt) (return x (perform bump1 (perform
+    /// bump2 x))) (get u k (k Zero))))` — a row-polymorphic handler ascription (Wave 7/E1). The
+    /// handler discharges `State` (its only clause); the return clause performs two further
+    /// effects, `Extra1` and `Extra2`. `r` is unified against the handle's actual, kernel-inferred
+    /// row, resolving to `{Extra2}` — the "whatever else" the declared type didn't name. This
+    /// exercises the full elaboration path end to end (the elaborator-level twin of
+    /// `stdlib::row_polymorphic_handler_composes`, which exercises the same mechanism through a
+    /// real `examples/`-backed program and the `Program` driver).
+    #[test]
+    fn row_polymorphic_handler_ascription_resolves_tail() {
+        let mut env = state_env();
+        for src in [
+            "(effect Extra1 (bump1 Nat Nat))",
+            "(effect Extra2 (bump2 Nat Nat))",
+        ] {
+            let (sx, _) = read_one(src).expect("reads");
+            let decl = parse_decl(&sx).expect("parses");
+            env.declare(&decl, None).expect("declares");
+        }
+        let src = "(the (! (Extra1 | r) Nat) \
+                     (handle (perform get tt) \
+                       (return x (perform bump1 (perform bump2 x))) \
+                       (get u k (k Zero))))";
+        let (sx, _) = read_one(src).expect("reads");
+        let term = elaborate(&env, &parse_surface(&sx).expect("parses")).expect("elaborates");
+        match term {
+            Term::Ann(inner, ty) => {
+                assert!(
+                    matches!(*inner, Term::Handle { .. }),
+                    "the ascribed term is the Handle, unchanged"
+                );
+                match *ty {
+                    Term::EffTy(row, _) => {
+                        assert!(
+                            row.contains(&blight_kernel::EffName::new("Extra1")),
+                            "Extra1 is present, as declared"
+                        );
+                        assert!(
+                            row.contains(&blight_kernel::EffName::new("Extra2")),
+                            "Extra2 is present -- the resolved tail"
+                        );
+                        assert!(
+                            !row.contains(&blight_kernel::EffName::new("State")),
+                            "State was discharged by the handler"
+                        );
+                    }
+                    other => panic!("expected Term::EffTy, got {other:?}"),
+                }
+            }
+            other => panic!("expected Term::Ann, got {other:?}"),
         }
     }
 
