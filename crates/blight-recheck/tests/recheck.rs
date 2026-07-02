@@ -392,8 +392,10 @@ fn recheck_checks_transp_not_declined() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// extended coverage (indexed / multi-binder eliminators). Out-of-fragment constructs (cubical Kan
-// operations, effects/handlers, partiality) are still honestly *declined*, never rejected.
+// extended coverage (indexed / multi-binder eliminators). Effects/handlers and partiality are now
+// MODELED (Checked), not declined (see `recheck_agrees_on_surface_effect_program` below). Only
+// cubical `Glue`/`ua`/partial-element/system, `foreign` postulates, and universe-level variables
+// remain out-of-fragment and are honestly *declined*, never rejected.
 // ---------------------------------------------------------------------------------------------
 
 /// RED: the re-checker agrees with the kernel on a **two-parameter** family (`Pair A B`) and a
@@ -602,11 +604,12 @@ fn recheck_agrees_on_indexed_elim() {
         .expect("re-checker independently agrees the indexed eliminator has type Nat");
 }
 
-/// The delay layer (`Delay`/`now`/`later`/`force`) is now **modelled** by the re-checker, not
-/// declined. We hand the re-checker `Judgement`s directly (the kernel's *proof* gate forbids a
-/// top-level `later`/`force` because it carries `Partial`, but the re-checker's job is to
-/// independently re-derive the *type* — so we exercise `recheck_judgement` on built judgements,
-/// exactly as `recheck_rejects_mutated_term` does). Each must be ACCEPTED (`Ok`), not `Declined`.
+/// The delay layer (`Delay`/`now`/`later`/`force`) is **modelled** by the re-checker, not declined.
+/// We hand the re-checker `Judgement`s directly (exactly as `recheck_rejects_mutated_term` does);
+/// each is a valid *typing* judgement — `recheck_judgement` is the general/buildable door, which
+/// (like the kernel's `Checker`) accepts partial programs — so all must re-check to `Ok`, including
+/// the partial `later`/`force` shapes. (The proof-strength *purity* door that rejects a top-level
+/// `later`/`force` is exercised separately by `recheck_proof_path_demands_purity`.)
 #[test]
 fn recheck_accepts_delay_layer() {
     use blight_kernel::{Arg, ConName, Constructor, DataDecl, DataName, Level, Term};
@@ -640,7 +643,9 @@ fn recheck_accepts_delay_layer() {
         match recheck_judgement(&sig, &j) {
             Ok(()) => {}
             other => {
-                panic!("expected the re-checker to ACCEPT {what} (not decline), got {other:?}")
+                panic!(
+                    "expected the re-checker to ACCEPT {what} (not decline/reject), got {other:?}"
+                )
             }
         }
     };
@@ -653,7 +658,7 @@ fn recheck_accepts_delay_layer() {
         delay_nat(),
         "`now Zero : Delay Nat`",
     );
-    // `later (now Zero) : Delay Nat`.
+    // `later (now Zero) : Delay Nat` — a partial (possibly-diverging) buildable judgement, accepted.
     accept(
         Term::Later(Box::new(Term::Now(Box::new(zero())))),
         delay_nat(),
@@ -668,6 +673,85 @@ fn recheck_accepts_delay_layer() {
         nat(),
         "`force (now Zero) : Nat`",
     );
+}
+
+/// B2 (proof-boundary purity, the decline-vs-reject win): the *proof-strength* re-check door
+/// (`recheck_judgement_as_proof`, what `recheck_proof` uses) independently re-derives the kernel's
+/// `check_top_with` purity invariant — a proof's effect row must be empty. So:
+///   * a *pure* judgement (`now Zero : Delay Nat`) passes the proof door, but
+///   * an impure/partial one (`later (now Zero)` carrying `Partial`; `force (now Zero)` likewise) is
+///     **Rejected** for impurity — where the plain (buildable) `recheck_judgement` accepts it.
+///
+/// A `Proof` value can never be forged with an impure conclusion (the kernel's purity gate forbids
+/// it), so we exercise the re-derivation on hand-built `Judgement`s, which is exactly the soundness
+/// scenario: had a buggy kernel minted such a proof, the second checker would now catch it.
+#[test]
+fn recheck_proof_path_demands_purity() {
+    use blight_kernel::{Arg, ConName, Constructor, DataDecl, DataName, Term};
+
+    let mut sig = Signature::new();
+    sig.declare(DataDecl {
+        name: DataName("Nat".into()),
+        params: vec![],
+        indices: vec![],
+        level: 0,
+        constructors: vec![
+            Constructor {
+                name: ConName("Zero".into()),
+                args: vec![],
+                result_indices: vec![],
+            },
+            Constructor {
+                name: ConName("Succ".into()),
+                args: vec![Arg::Rec(vec![])],
+                result_indices: vec![],
+            },
+        ],
+        path_constructors: vec![],
+    });
+    let nat = || Term::Data(DataName("Nat".into()), vec![], vec![]);
+    let zero = || Term::Con(ConName("Zero".into()), vec![]);
+    let delay_nat = || Term::Delay(Box::new(nat()));
+
+    // A pure `now Zero : Delay Nat` is accepted by *both* doors.
+    let pure = Judgement::HasType {
+        term: Term::Now(Box::new(zero())),
+        ty: delay_nat(),
+    };
+    assert!(recheck_judgement(&sig, &pure).is_ok());
+    assert!(
+        blight_recheck::recheck_judgement_as_proof(&sig, &pure).is_ok(),
+        "a pure `now Zero` passes the proof-purity door"
+    );
+
+    // `later (now Zero) : Delay Nat` carries `Partial`: accepted by the buildable door, REJECTED by
+    // the proof door for impurity.
+    let later = Judgement::HasType {
+        term: Term::Later(Box::new(Term::Now(Box::new(zero())))),
+        ty: delay_nat(),
+    };
+    assert!(
+        recheck_judgement(&sig, &later).is_ok(),
+        "the buildable door accepts a partial `later`"
+    );
+    match blight_recheck::recheck_judgement_as_proof(&sig, &later) {
+        Err(RecheckError::Rejected(msg)) if msg.contains("pure") => {}
+        other => panic!("the proof door must REJECT a partial `later` as impure, got {other:?}"),
+    }
+
+    // `force (now Zero) : Nat` likewise carries `Partial` and is rejected at the proof boundary.
+    let now_zero_ann = Term::Now(Box::new(Term::Ann(Box::new(zero()), Box::new(nat()))));
+    let force = Judgement::HasType {
+        term: Term::Force(Box::new(now_zero_ann)),
+        ty: nat(),
+    };
+    match blight_recheck::recheck_judgement_as_proof(&sig, &force) {
+        Err(RecheckError::Rejected(msg)) if msg.contains("pure") => {}
+        other => panic!("the proof door must REJECT a `force` as impure, got {other:?}"),
+    }
+
+    // Silence the unused `Arg` import warning (kept for parity with the sibling delay-layer test).
+    let _ = Arg::Rec(vec![]);
 }
 
 /// RED: the re-checker independently ACCEPTS primitive `Int` programs (M11). It re-runs the same
@@ -713,10 +797,12 @@ fn recheck_accepts_int_arith() {
     );
 }
 
-/// RED (M7): the effect/handler layer is now **modelled** by the re-checker at the type level, so
-/// `perform`/`handle`/`! E A` programs are ACCEPTED (`Ok`), not `Declined`. Like the delay-layer
-/// test, we hand the re-checker `Judgement`s directly (the re-checker re-derives only the *types*;
-/// it ignores effect rows and continuation grades, mirroring its delay-layer precedent). We build a
+/// The effect/handler layer is **modelled** by the re-checker. We hand it `Judgement`s directly via
+/// the general/buildable door (`recheck_judgement`), which accepts effectful programs: `! E Unit`
+/// (a type former), a bare `perform op tt` (carries the unhandled label `E`), and a fully *handled*
+/// program (whose effect `E` is discharged) all re-check to `Ok`. (The proof-strength door would
+/// reject the bare `perform` for impurity — see `recheck_proof_path_demands_purity`; the handler's
+/// independent continuation-grade discipline is `recheck_enforces_continuation_grade`.) We build a
 /// tiny signature with one effect `E` whose op `op : Π(_:Unit). Unit`.
 #[test]
 fn recheck_accepts_effects_and_handlers() {
@@ -744,6 +830,7 @@ fn recheck_accepts_effects_and_handlers() {
     // effect E { op : Π(_:Unit). Unit }  (continuation grade is irrelevant to the re-checker).
     let decl = EffDecl {
         name: EffName::new("E"),
+        params: vec![],
         ops: vec![OpSig {
             name: "op".into(),
             param_ty: unit_ty(),
@@ -759,12 +846,14 @@ fn recheck_accepts_effects_and_handlers() {
         match recheck_judgement(&sig, &j) {
             Ok(()) => {}
             other => {
-                panic!("expected the re-checker to ACCEPT {what} (not decline), got {other:?}")
+                panic!(
+                    "expected the re-checker to ACCEPT {what} (not decline/reject), got {other:?}"
+                )
             }
         }
     };
 
-    // `! E Unit : Univ 0` — the effectful computation *type* is a type (row ignored).
+    // `! E Unit : Univ 0` — the effectful computation *type* is a (pure) type former.
     accept(
         Term::EffTy(
             Row::single(EffName::new("E"), Grade::One),
@@ -774,11 +863,13 @@ fn recheck_accepts_effects_and_handlers() {
         "`! E Unit : Univ 0`",
     );
 
-    // `perform op tt : Unit` — the op result type, re-derived from the signature.
+    // `perform op tt : Unit` — the op result type, re-derived from the signature. The buildable door
+    // accepts the unhandled effect (the proof door would not — see the purity test).
     accept(
         Term::Op {
             effect: EffName::new("E"),
             op: "op".into(),
+            type_args: vec![],
             arg: Box::new(tt()),
         },
         unit_ty(),
@@ -793,6 +884,7 @@ fn recheck_accepts_effects_and_handlers() {
             body: Box::new(Term::Op {
                 effect: EffName::new("E"),
                 op: "op".into(),
+                type_args: vec![],
                 arg: Box::new(tt()),
             }),
             return_clause: Box::new(Term::Var(0)),
@@ -807,6 +899,96 @@ fn recheck_accepts_effects_and_handlers() {
 
     // Sanity: silence the otherwise-unused `Arg` import (kept for parity with sibling tests).
     let _ = Arg::Rec(vec![]);
+}
+
+/// B2 (continuation-multiplicity grade): the re-checker now independently enforces a handler
+/// clause's continuation grade, mirroring the kernel. We build a handler whose op clause resumes its
+/// continuation `k` **twice** (`k (k tt)`), and show that the *only* thing distinguishing acceptance
+/// from rejection is the operation's declared `cont_grade`:
+///   * with `cont_grade = ω` (resume freely) the whole handled program is pure → `Ok`;
+///   * with `cont_grade = 1` (resume at most once) the double-resume is a grade violation → the
+///     re-checker `Rejected`s it, where before B2 the grade was ignored and it slipped through.
+#[test]
+fn recheck_enforces_continuation_grade() {
+    use blight_kernel::row::EffName;
+    use blight_kernel::signature::{EffDecl, OpSig};
+    use blight_kernel::{ConName, Constructor, DataDecl, DataName, Grade, Term};
+
+    // Build a signature with `Unit` and an effect `E { op : Unit -> Unit }` at a chosen cont grade.
+    let make_sig = |cont_grade: Grade| {
+        let mut sig = Signature::new();
+        sig.declare(DataDecl {
+            name: DataName("Unit".into()),
+            params: vec![],
+            indices: vec![],
+            level: 0,
+            constructors: vec![Constructor {
+                name: ConName("tt".into()),
+                args: vec![],
+                result_indices: vec![],
+            }],
+            path_constructors: vec![],
+        });
+        let decl = EffDecl {
+            name: EffName::new("E"),
+            params: vec![],
+            ops: vec![OpSig {
+                name: "op".into(),
+                param_ty: Term::Data(DataName("Unit".into()), vec![], vec![]),
+                result_ty: Term::Data(DataName("Unit".into()), vec![], vec![]),
+                cont_grade,
+            }],
+        };
+        sig.check_effect(&decl).expect("E is well-formed");
+        sig.declare_effect(decl);
+        sig
+    };
+
+    let unit_ty = || Term::Data(DataName("Unit".into()), vec![], vec![]);
+    let tt = || Term::Con(ConName("tt".into()), vec![]);
+    // `handle (perform op tt) { return x. x ; op x k. (k (k tt)) } : Unit`. The op clause binds
+    // `x:Unit` (de Bruijn 1) then `k:Unit→Unit` (de Bruijn 0) and resumes `k` *twice* — `k (k tt)`.
+    let double_resume_handle = || Term::Handle {
+        body: Box::new(Term::Op {
+            effect: EffName::new("E"),
+            op: "op".into(),
+            type_args: vec![],
+            arg: Box::new(tt()),
+        }),
+        return_clause: Box::new(Term::Var(0)),
+        op_clauses: vec![(
+            "op".into(),
+            Box::new(Term::App(
+                Box::new(Term::Var(0)),
+                Box::new(Term::App(Box::new(Term::Var(0)), Box::new(tt()))),
+            )),
+        )],
+    };
+
+    // ω continuation: resuming twice is allowed; the effect is discharged → pure → accepted.
+    let sig_omega = make_sig(Grade::Omega);
+    let j_ok = Judgement::HasType {
+        term: double_resume_handle(),
+        ty: unit_ty(),
+    };
+    assert!(
+        recheck_judgement(&sig_omega, &j_ok).is_ok(),
+        "with cont_grade=ω, a double-resume handler is well-graded and pure → re-check Ok"
+    );
+
+    // grade-1 continuation: resuming twice violates the multiplicity → independently Rejected.
+    let sig_one = make_sig(Grade::One);
+    let j_bad = Judgement::HasType {
+        term: double_resume_handle(),
+        ty: unit_ty(),
+    };
+    match recheck_judgement(&sig_one, &j_bad) {
+        Err(RecheckError::Rejected(msg)) if msg.contains("continuation") => {}
+        other => panic!(
+            "with cont_grade=1, a double-resume handler must be REJECTED for its continuation \
+             multiplicity, got {other:?}"
+        ),
+    }
 }
 
 /// RED (M7): the re-checker AGREES with the kernel on a full surface effect program loaded through
@@ -998,4 +1180,166 @@ fn recheck_agrees_with_kernel_on_M0_M5() {
          (the Nat (region r Zero))",
     );
     assert_agreement(&env, &proofs, "M5:regions");
+}
+
+// =================================================================================================
+// Wave 5 / N1: NbE-with-sharing `conv` fast path — kernel/re-checker parity golden.
+//
+// Both `blight-kernel` and `blight-recheck` independently normalize via NbE, and both had the
+// same "no sharing across reduction steps" cost (see `ValueChain`'s doc-comment in each crate's
+// `value.rs`). This builds a raw kernel `Term` directly (bypassing the elaborator, for exact
+// control over recursion depth) proving `plus (nat_lit depth) Zero ≡ nat_lit depth` by a
+// constant path — the same shape as the `plus-zero` proof above, but deep enough that the
+// pre-N1 `Vec`-backed `Env` made both checkers' `conv` prohibitively slow. `check_top_with`
+// (kernel) must produce a `Proof`, and `recheck_proof` (the independent re-checker) must then
+// independently agree — both within the same generous, non-flaky bound.
+// =================================================================================================
+
+fn deep_plus_zero_proof(depth: u32) -> (Signature, Term) {
+    let nat = DataName("Nat".into());
+    let zero_con = ConName("Zero".into());
+    let succ_con = ConName("Succ".into());
+
+    let mut sig = Signature::new();
+    sig.declare(blight_kernel::DataDecl {
+        name: nat.clone(),
+        params: vec![],
+        indices: vec![],
+        level: 0,
+        constructors: vec![
+            blight_kernel::Constructor {
+                name: zero_con.clone(),
+                args: vec![],
+                result_indices: vec![],
+            },
+            blight_kernel::Constructor {
+                name: succ_con.clone(),
+                args: vec![blight_kernel::Arg::Rec(vec![])],
+                result_indices: vec![],
+            },
+        ],
+        path_constructors: vec![],
+    });
+
+    let nat_ty = || Term::Data(nat.clone(), vec![], vec![]);
+    let zero = || Term::Con(zero_con.clone(), vec![]);
+    let succ = |n: Term| Term::Con(succ_con.clone(), vec![n]);
+    let nat_lit = |n: u32| {
+        let mut t = zero();
+        for _ in 0..n {
+            t = succ(t);
+        }
+        t
+    };
+
+    // `plus = λa. λb. Elim Nat (λ_. Nat) [b, λn.λih. Succ ih] a` — structurally recursive on
+    // its *first* argument, so `plus (nat_lit depth) Zero` drives a `depth`-deep `do_elim`.
+    //
+    // Ascribed with its Pi type (`Term::Ann`), matching how the elaborator always produces
+    // curried definitions in practice (a named global with a *known* type, never a bare anonymous
+    // `Lam` in inference position): the re-checker's bidirectional `infer` cannot synthesize a
+    // type for a bare introduction form (by design — the kernel's `CannotInfer`/the re-checker's
+    // matching `Declined`, a documented fragment limitation, not a soundness gap), so building
+    // this raw term without the ascription would make the re-checker *decline* rather than agree,
+    // for a reason unrelated to what N1 fixes.
+    let plus_ty = Term::Pi(
+        Grade::Omega,
+        Box::new(nat_ty()),
+        Box::new(Term::Pi(Grade::Omega, Box::new(nat_ty()), Box::new(nat_ty()))),
+    );
+    let plus = Term::Ann(
+        Box::new(Term::Lam(Box::new(Term::Lam(Box::new(Term::Elim {
+            data: nat.clone(),
+            motive: Box::new(Term::Lam(Box::new(nat_ty()))),
+            methods: vec![
+                Term::Var(0),
+                Term::Lam(Box::new(Term::Lam(Box::new(succ(Term::Var(0)))))),
+            ],
+            scrutinee: Box::new(Term::Var(1)),
+        }))))),
+        Box::new(plus_ty),
+    );
+    let plus_applied = Term::App(
+        Box::new(Term::App(Box::new(plus), Box::new(nat_lit(depth)))),
+        Box::new(zero()),
+    );
+
+    // Proof term: the constant path `λi. nat_lit depth`, checked against
+    // `Path Nat (plus (nat_lit depth) Zero) (nat_lit depth)` — the boundary check at `i = 0`
+    // forces exactly the deep `conv` this golden pins.
+    let ty = Term::PathP {
+        family: Box::new(nat_ty()),
+        lhs: Box::new(plus_applied),
+        rhs: Box::new(nat_lit(depth)),
+    };
+    let proof_term = Term::PLam(Box::new(nat_lit(depth)));
+    (sig, Term::Ann(Box::new(proof_term), Box::new(ty)))
+}
+
+/// `eval`/`check`/`conv` recurse natively in the Rust call stack; mirrors
+/// `crates/blight-repl/tests/spore.rs`'s `on_big_stack` for the same reason.
+fn on_big_stack<F: FnOnce() + Send + 'static>(f: F) {
+    std::thread::Builder::new()
+        .stack_size(256 * 1024 * 1024)
+        .spawn(f)
+        .expect("spawn big-stack test thread")
+        .join()
+        .expect("big-stack test thread panicked (see message above)");
+}
+
+/// Red-first (Wave 5/N1): before the `ValueChain` sharing fix, a deep `plus (nat_lit n) Zero ≡
+/// nat_lit n` proof made the kernel's own `conv` prohibitively slow well before the re-checker
+/// was even reached. Green: both the kernel's `check_top_with` and the re-checker's
+/// `recheck_proof` independently finish and agree, within a generous bound.
+#[test]
+fn deep_plus_zero_conv_kernel_and_recheck_agree_in_bounded_time() {
+    on_big_stack(|| {
+        let (sig, ann) = deep_plus_zero_proof(1_500);
+        let Term::Ann(term, ty) = ann else {
+            unreachable!()
+        };
+
+        let start = std::time::Instant::now();
+        let proof = check_top_with(sig.clone(), *term, *ty)
+            .expect("kernel accepts the deep plus-zero proof");
+        let recheck_result = blight_recheck::recheck_proof(&sig, &proof);
+        let elapsed = start.elapsed();
+
+        assert!(
+            recheck_result.is_ok(),
+            "the re-checker must independently AGREE the deep plus-zero proof checks, got {recheck_result:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(15),
+            "kernel + re-checker on a 1,500-deep plus-zero proof took {elapsed:?} — the NbE \
+             sharing fix regressed (see ValueChain's doc-comment in each crate's value.rs)"
+        );
+    });
+}
+
+/// Discriminator twin: the sharing fast path must change only *how much work* is repeated, never
+/// *what* is decided — an off-by-one deep proof must still be rejected by both checkers.
+#[test]
+fn deep_plus_zero_conv_off_by_one_still_rejected_by_kernel() {
+    on_big_stack(|| {
+        let (sig, ann) = deep_plus_zero_proof(200);
+        let Term::Ann(term, ty) = ann else {
+            unreachable!()
+        };
+        // Corrupt the claimed type's `rhs` endpoint by one `Succ`, matching `deep_plus_zero_proof`'s
+        // internal shape without needing to reconstruct it (off-by-one term instead).
+        let Term::PathP { family, lhs, rhs } = *ty else {
+            unreachable!()
+        };
+        let bumped_rhs = Term::Con(ConName("Succ".into()), vec![*rhs]);
+        let bumped_ty = Term::PathP {
+            family,
+            lhs,
+            rhs: Box::new(bumped_rhs),
+        };
+        match check_top_with(sig, *term, bumped_ty) {
+            Err(_) => {}
+            Ok(p) => panic!("kernel must reject the off-by-one plus-zero proof, got {p:?}"),
+        }
+    });
 }

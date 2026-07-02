@@ -11,6 +11,7 @@ blight-kernel = { path = "../blight-kernel" }
 
 [dev-dependencies]
 blight-elab = { path = "../blight-elab" }
+proptest = "1.11.0"
 
 [lints.rust]
 unsafe_code = "forbid"

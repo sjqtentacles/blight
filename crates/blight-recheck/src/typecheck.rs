@@ -2,9 +2,9 @@
 //! grade-usage discipline, but a wholly separate implementation built on this crate's value-based
 //! NbE. Free variables are reflected against their types so η and path boundaries fire correctly.
 
-use crate::conv::{conv, fresh_var, subtype};
+use crate::conv::{conv, fresh_var, kan_line_grade_skeleton_eq, subtype};
 use crate::normalize::{apply, eval, quote};
-use crate::term::{RGrade, RInterval, RTerm};
+use crate::term::{RGrade, RInterval, RRow, RTerm};
 use crate::value::{Env, RValue};
 use crate::RecheckError;
 use blight_kernel::signature::{Arg, Constructor, DataDecl, Signature};
@@ -16,13 +16,16 @@ fn reject(msg: impl Into<String>) -> RecheckError {
     RecheckError::Rejected(msg.into())
 }
 
-/// An *honest refusal*: the judgement uses a construct outside the supported core fragment, so the
-/// re-checker neither accepts nor (unsoundly) rejects it. The build treats this as "not re-checked"
-/// rather than a soundness alarm. (Currently no `typecheck` path declines — the higher-order
-/// eliminator motive that previously did is now fully re-verified — but the cubical/level paths in
-/// `term.rs` still construct `Declined` directly; this helper is retained for symmetry with
-/// [`reject`].)
-#[allow(dead_code)]
+/// The built-in `Partial` effect label (spec §4.5): a `later`/`force` contributes it, marking the
+/// computation as possibly-divergent. Its own independent copy of the kernel's reserved label.
+fn partial_label() -> blight_kernel::EffName {
+    blight_kernel::EffName::partial()
+}
+
+/// An *honest refusal*: the judgement uses a construct outside the supported core fragment (or one
+/// whose type the re-checker cannot synthesize without an annotation — the kernel's `CannotInfer`),
+/// so the re-checker neither accepts nor (unsoundly) rejects it. The build treats this as "not
+/// re-checked" rather than a soundness alarm. Declining is always sound: it abstains, never certifies.
 fn decline(msg: impl Into<String>) -> RecheckError {
     RecheckError::Declined(msg.into())
 }
@@ -167,66 +170,92 @@ impl<'a> Recheck<'a> {
         Recheck { sig }
     }
 
-    /// Top-level re-check: `term : ty` in the empty context, demanded once.
-    pub fn check_top(&self, term: &RTerm, ty: &RTerm) -> RResult<()> {
+    /// Top-level re-check: `term : ty` in the empty context, demanded once, independently
+    /// re-deriving the effect row + grade discipline along the way (continuation multiplicities,
+    /// `Op`/`later`/`force` labels, handler discharge).
+    ///
+    /// `require_pure` selects which of the kernel's two top-level disciplines to re-derive:
+    /// * `false` — the general *typing* judgement door (the kernel's `Checker`, used for buildable
+    ///   programs): a definition may legitimately be **partial or effectful** (e.g. a `define-rec`
+    ///   whose `later`-guarded body carries `Partial`, like `ackermann`), so any top-level row is
+    ///   accepted. The row discipline is still re-derived (so a handler over-resuming its
+    ///   continuation is Rejected), it just is not required to be empty. This is what
+    ///   [`crate::recheck_judgement`] uses.
+    /// * `true` — the *proof* door, mirroring [`blight_kernel::check_top_with`] (spec §4.1, §4.5):
+    ///   a complete proof must additionally be **pure and total** — its independently inferred
+    ///   effect row must be *empty* (in particular `Partial` at grade 0). A proof can only ever be
+    ///   minted by the kernel after this check, so re-deriving it is the second opinion on the
+    ///   purity invariant. This is what [`crate::recheck_proof`] uses.
+    pub fn check_top(&self, term: &RTerm, ty: &RTerm, require_pure: bool) -> RResult<()> {
         let ctx = Ctx::empty();
         self.infer_universe(&ctx, ty)?;
         let ty_val = eval(self.sig, &ctx.env, ty);
-        let _u = self.check(&ctx, term, &ty_val, RGrade::One)?;
+        let (row, _u) = self.check(&ctx, term, &ty_val, RGrade::One)?;
+        if require_pure && !row.is_empty() {
+            return Err(reject(format!(
+                "a top-level proof must be pure (empty effect row), but it independently \
+                 re-derives effects: {row:?}"
+            )));
+        }
         Ok(())
     }
 
-    /// Infer the (value) type of `term` and its usage vector, at ambient demand `sigma`.
-    fn infer(&self, ctx: &Ctx, term: &RTerm, sigma: RGrade) -> RResult<(RValue, Usage)> {
+    /// Infer the (value) type of `term`, its independently-derived effect [`RRow`], and its usage
+    /// vector, at ambient demand `sigma`. Pure terms infer the empty row; `Op` contributes its
+    /// effect's label; `later`/`force` contribute `Partial`; eliminators/applications union their
+    /// subterms' rows — mirroring the kernel's `infer_g` exactly (`check.rs`).
+    fn infer(&self, ctx: &Ctx, term: &RTerm, sigma: RGrade) -> RResult<(RValue, RRow, Usage)> {
         let n = ctx.len();
         match term {
             RTerm::Var(i) => {
                 let ty = ctx
                     .lookup(*i)
                     .ok_or_else(|| reject(format!("unbound de Bruijn index {i}")))?;
-                Ok((ty, Usage::unit(*i, n, sigma)))
+                Ok((ty, RRow::empty(), Usage::unit(*i, n, sigma)))
             }
-            RTerm::Univ(l) => Ok((RValue::Univ(l + 1), Usage::zero(n))),
+            RTerm::Univ(l) => Ok((RValue::Univ(l + 1), RRow::empty(), Usage::zero(n))),
             RTerm::Pi(grade, dom, cod) => {
                 let dl = self.infer_universe(ctx, dom)?;
                 let dom_v = eval(self.sig, &ctx.env, dom);
                 let ctx2 = ctx.extend(self.sig, dom_v, *grade);
                 let cl = self.infer_universe(&ctx2, cod)?;
-                Ok((RValue::Univ(dl.max(cl)), Usage::zero(n)))
+                Ok((RValue::Univ(dl.max(cl)), RRow::empty(), Usage::zero(n)))
             }
             RTerm::Sigma(dom, cod) => {
                 let dl = self.infer_universe(ctx, dom)?;
                 let dom_v = eval(self.sig, &ctx.env, dom);
                 let ctx2 = ctx.extend(self.sig, dom_v, RGrade::Omega);
                 let cl = self.infer_universe(&ctx2, cod)?;
-                Ok((RValue::Univ(dl.max(cl)), Usage::zero(n)))
+                Ok((RValue::Univ(dl.max(cl)), RRow::empty(), Usage::zero(n)))
             }
+            // App: the result row is the union of the function's and argument's rows (spec §4.1).
             RTerm::App(f, a) => {
-                let (f_ty, usage_f) = self.infer(ctx, f, sigma)?;
+                let (f_ty, row_f, usage_f) = self.infer(ctx, f, sigma)?;
                 match f_ty {
                     RValue::Pi(rho, dom, cod) => {
-                        let usage_a = self.check(ctx, a, &dom, sigma.mul(rho))?;
+                        let (row_a, usage_a) = self.check(ctx, a, &dom, sigma.mul(rho))?;
                         let a_val = eval(self.sig, &ctx.env, a);
                         let result = cod.apply(self.sig, a_val);
-                        Ok((result, usage_f.add(&usage_a)))
+                        Ok((result, row_f.union(&row_a), usage_f.add(&usage_a)))
                     }
                     other => Err(reject(format!("applied a non-function of type {other:?}"))),
                 }
             }
+            // Projections pass the pair's row and usage through unchanged.
             RTerm::Fst(p) => {
-                let (p_ty, usage) = self.infer(ctx, p, sigma)?;
+                let (p_ty, row, usage) = self.infer(ctx, p, sigma)?;
                 match p_ty {
-                    RValue::Sigma(dom, _cod) => Ok((*dom, usage)),
+                    RValue::Sigma(dom, _cod) => Ok((*dom, row, usage)),
                     other => Err(reject(format!("Fst of a non-pair of type {other:?}"))),
                 }
             }
             RTerm::Snd(p) => {
-                let (p_ty, usage) = self.infer(ctx, p, sigma)?;
+                let (p_ty, row, usage) = self.infer(ctx, p, sigma)?;
                 match p_ty {
                     RValue::Sigma(_dom, cod) => {
                         let p_val = eval(self.sig, &ctx.env, p);
                         let fst = crate::normalize::vfst(p_val);
-                        Ok((cod.apply(self.sig, fst), usage))
+                        Ok((cod.apply(self.sig, fst), row, usage))
                     }
                     other => Err(reject(format!("Snd of a non-pair of type {other:?}"))),
                 }
@@ -234,8 +263,8 @@ impl<'a> Recheck<'a> {
             RTerm::Ann(t, ty) => {
                 self.infer_universe(ctx, ty)?;
                 let ty_v = eval(self.sig, &ctx.env, ty);
-                let usage = self.check(ctx, t, &ty_v, sigma)?;
-                Ok((ty_v, usage))
+                let (row, usage) = self.check(ctx, t, &ty_v, sigma)?;
+                Ok((ty_v, row, usage))
             }
             RTerm::Elim {
                 data,
@@ -244,15 +273,16 @@ impl<'a> Recheck<'a> {
                 scrutinee,
             } => self.infer_elim(ctx, data, motive, methods, scrutinee, sigma),
             RTerm::PApp(p, r) => {
-                let (p_ty, usage) = self.infer(ctx, p, sigma)?;
+                let (p_ty, row, usage) = self.infer(ctx, p, sigma)?;
                 match p_ty {
                     RValue::PathP { family, .. } => {
                         let r_v = crate::normalize::eval_interval(&ctx.env, r);
-                        Ok((family.apply_dim(self.sig, r_v), usage))
+                        Ok((family.apply_dim(self.sig, r_v), row, usage))
                     }
                     other => Err(reject(format!("path-applied a non-path of type {other:?}"))),
                 }
             }
+            // A type former: pure (empty row). Endpoints are checked in the 0-fragment.
             RTerm::PathP { family, lhs, rhs } => {
                 let ctx_dim = ctx.extend_dim();
                 let l = self.infer_universe(&ctx_dim, family)?;
@@ -267,18 +297,23 @@ impl<'a> Recheck<'a> {
                 };
                 self.check(ctx, lhs, &fam0, RGrade::Zero)?;
                 self.check(ctx, rhs, &fam1, RGrade::Zero)?;
-                Ok((RValue::Univ(l), Usage::zero(n)))
+                Ok((RValue::Univ(l), RRow::empty(), Usage::zero(n)))
             }
             RTerm::Data(name, _ps, _is) => {
                 let decl = self
                     .sig
                     .get(name)
                     .ok_or_else(|| reject(format!("unknown inductive type {name:?}")))?;
-                Ok((RValue::Univ(decl.level), Usage::zero(n)))
+                Ok((RValue::Univ(decl.level), RRow::empty(), Usage::zero(n)))
             }
             RTerm::Con(name, args) => self.infer_con(ctx, name, args, sigma),
-            RTerm::Lam(_) | RTerm::Pair(_, _) | RTerm::PLam(_) => Err(reject(format!(
-                "term needs a type annotation to be inferred: {term:?}"
+            // A bare introduction form (λ / pair / path-λ) in *inference* position has no synthesizable
+            // type — exactly the kernel's `CannotInfer`. This is a fragment limitation, not a type
+            // error: the re-checker *declines* (abstains) rather than (unsoundly) rejecting a
+            // kernel-valid program. Such redexes arise in compiled `define-rec` eliminator forms whose
+            // motive/methods the re-checker reaches in inference position.
+            RTerm::Lam(_) | RTerm::Pair(_, _) | RTerm::PLam(_) => Err(decline(format!(
+                "introduction form needs a type annotation to be inferred: {term:?}"
             ))),
             RTerm::Interval(_) => Err(reject("a bare interval has no type in the term layer")),
 
@@ -287,7 +322,7 @@ impl<'a> Recheck<'a> {
             // `Transp (i.A) φ a0 : A i1`; `HComp A φ u a0 : A`; `Comp (i.A) φ u a0 : A i1`.
             // The base inhabits the *source* type (`A i0` for transp/comp, `A` for hcomp), so we
             // **check** it there (it may be a bare constructor needing the expected type) and read
-            // the conclusion off the *target* (`A i1` / `A`).
+            // the conclusion off the *target* (`A i1` / `A`). The base's row passes through.
             RTerm::Transp { family, base, .. } => {
                 let ctx_dim = ctx.extend_dim();
                 self.infer_universe(&ctx_dim, family)?;
@@ -295,18 +330,19 @@ impl<'a> Recheck<'a> {
                     let e = ctx.env.extend_dim(RInterval::I0);
                     eval(self.sig, &e, family)
                 };
-                let b_usage = self.check(ctx, base, &ty_at_0, sigma)?;
+                let (b_row, b_usage) = self.check(ctx, base, &ty_at_0, sigma)?;
                 let ty_at_1 = {
                     let e = ctx.env.extend_dim(RInterval::I1);
                     eval(self.sig, &e, family)
                 };
-                Ok((ty_at_1, b_usage))
+                self.reject_heterogeneous_grade_line(ctx, &ty_at_0, &ty_at_1)?;
+                Ok((ty_at_1, b_row, b_usage))
             }
             RTerm::HComp { ty, base, .. } => {
                 self.infer_universe(ctx, ty)?;
                 let ty_val = eval(self.sig, &ctx.env, ty);
-                let b_usage = self.check(ctx, base, &ty_val, sigma)?;
-                Ok((ty_val, b_usage))
+                let (b_row, b_usage) = self.check(ctx, base, &ty_val, sigma)?;
+                Ok((ty_val, b_row, b_usage))
             }
             RTerm::Comp { family, base, .. } => {
                 let ctx_dim = ctx.extend_dim();
@@ -315,56 +351,75 @@ impl<'a> Recheck<'a> {
                     let e = ctx.env.extend_dim(RInterval::I0);
                     eval(self.sig, &e, family)
                 };
-                let b_usage = self.check(ctx, base, &ty_at_0, sigma)?;
+                let (b_row, b_usage) = self.check(ctx, base, &ty_at_0, sigma)?;
                 let ty_at_1 = {
                     let e = ctx.env.extend_dim(RInterval::I1);
                     eval(self.sig, &e, family)
                 };
-                Ok((ty_at_1, b_usage))
+                self.reject_heterogeneous_grade_line(ctx, &ty_at_0, &ty_at_1)?;
+                Ok((ty_at_1, b_row, b_usage))
             }
 
-            // Partiality (spec §4.5), modeled independently. We re-derive only the *types*; the
-            // re-checker does not track effect rows, so the proof-boundary `Partial` discipline
-            // (which the kernel enforces) is intentionally not re-modeled here.
-            // `Delay A : Univ ℓ` when `A : Univ ℓ`.
+            // Partiality (spec §4.5), modeled independently. `Delay A : Univ ℓ` is a pure type
+            // former. `now a` is *total* (the row of `a`). `later`/`force` **may diverge**, so each
+            // contributes the built-in `Partial` label at the ambient demand — exactly the nonzero
+            // partiality grade the top-level purity check rejects in a proof.
             RTerm::Delay(a) => {
                 let l = self.infer_universe(ctx, a)?;
-                Ok((RValue::Univ(l), Usage::zero(n)))
+                Ok((RValue::Univ(l), RRow::empty(), Usage::zero(n)))
             }
-            // `now a : Delay A` where `A` is the inferred type of `a`.
+            // `now a : Delay A` where `A` is the inferred type of `a` (row = `a`'s row).
             RTerm::Now(a) => {
-                let (a_ty, usage) = self.infer(ctx, a, sigma)?;
-                Ok((RValue::Delay(Box::new(a_ty)), usage))
+                let (a_ty, row, usage) = self.infer(ctx, a, sigma)?;
+                Ok((RValue::Delay(Box::new(a_ty)), row, usage))
             }
             // `later d : Delay A` where `d : Delay A` (the inferred type of `d` is already a Delay).
             RTerm::Later(d) => {
-                let (d_ty, usage) = self.infer(ctx, d, sigma)?;
+                let (d_ty, d_row, usage) = self.infer(ctx, d, sigma)?;
                 match d_ty {
-                    RValue::Delay(_) => Ok((d_ty, usage)),
+                    RValue::Delay(_) => {
+                        let row = d_row.union(&RRow::single(partial_label(), sigma));
+                        Ok((d_ty, row, usage))
+                    }
                     other => Err(reject(format!("`later` of a non-Delay of type {other:?}"))),
                 }
             }
             // `force d : A` when `d : Delay A`.
             RTerm::Force(d) => {
-                let (d_ty, usage) = self.infer(ctx, d, sigma)?;
+                let (d_ty, d_row, usage) = self.infer(ctx, d, sigma)?;
                 match d_ty {
-                    RValue::Delay(inner) => Ok((*inner, usage)),
+                    RValue::Delay(inner) => {
+                        let row = d_row.union(&RRow::single(partial_label(), sigma));
+                        Ok((*inner, row, usage))
+                    }
                     other => Err(reject(format!("`force` of a non-Delay of type {other:?}"))),
                 }
             }
 
-            // Effects and handlers (spec §4), modeled at the TYPE LEVEL only (M7). The re-checker
-            // re-derives the *types* via the signature's operation signatures, ignoring effect rows
-            // and continuation grades (the kernel's soundness responsibility) — the same honest
-            // precedent the partiality layer above follows.
-            // `! E A : Univ ℓ` when `A : Univ ℓ` (the row is dropped at translation time).
+            // Effects and handlers (spec §4). `! E A : Univ ℓ` is a pure type former (the row `E` is
+            // part of the *type*, not the formation's effect). `perform op a` contributes its
+            // effect's label at the ambient demand. `handle` discharges the labels it interprets.
             RTerm::EffTy(a) => {
                 let l = self.infer_universe(ctx, a)?;
-                Ok((RValue::Univ(l), Usage::zero(n)))
+                Ok((RValue::Univ(l), RRow::empty(), Usage::zero(n)))
             }
             // `perform op a`: look up the op; check `a` against `param_ty`; the type is
-            // `result_ty[a/x]` (the result type evaluated with the arg bound at de Bruijn 0).
-            RTerm::Op { effect, op, arg } => {
+            // `result_ty[a/x]`; the row is `a`'s row unioned with `{effect : σ}`.
+            //
+            // Wave 7/E2 (parameterized effects, lockstep with `check.rs`'s kernel rule): a
+            // parameterized effect's `perform` site supplies one type argument per entry in the
+            // effect's declared telescope, each independently re-checked in the 0-fragment against
+            // its declared type — mirroring `RTerm::Data`'s own parameters. `param_ty`/`result_ty`
+            // are terms over `[effect params…, x:A]`; we thread the instantiated type-argument
+            // values into the evaluation env before the parameter/result type, exactly as the
+            // kernel does. Empty `type_args` (a non-parameterized effect) makes this identical to
+            // the pre-E2 behavior.
+            RTerm::Op {
+                effect,
+                op,
+                type_args,
+                arg,
+            } => {
                 let (eff, opsig) = self
                     .sig
                     .op_of(op)
@@ -375,42 +430,64 @@ impl<'a> Recheck<'a> {
                         eff.name
                     )));
                 }
-                // Translate and evaluate the op's parameter/result types (closed kernel terms).
+                if type_args.len() != eff.params.len() {
+                    return Err(reject(format!(
+                        "operation {op:?} of effect {:?} expects {} type argument(s), got {}",
+                        eff.name,
+                        eff.params.len(),
+                        type_args.len()
+                    )));
+                }
+                let mut penv = Env::new();
+                let mut pvals: Vec<RValue> = Vec::with_capacity(type_args.len());
+                for (ta, pty_term) in type_args.iter().zip(eff.params.iter()) {
+                    let pty_rt = crate::term::from_kernel(pty_term)?;
+                    let pty_val = eval(self.sig, &penv, &pty_rt);
+                    self.check(ctx, ta, &pty_val, RGrade::Zero)?;
+                    let ta_val = eval(self.sig, &ctx.env, ta);
+                    penv = penv.extend(ta_val.clone());
+                    pvals.push(ta_val);
+                }
+                // Translate and evaluate the op's parameter/result types in the env extended with
+                // the instantiated type parameters.
                 let param_rt = crate::term::from_kernel(&opsig.param_ty)?;
                 let result_rt = crate::term::from_kernel(&opsig.result_ty)?;
-                let param_val = eval(self.sig, &Env::new(), &param_rt);
-                let usage = self.check(ctx, arg, &param_val, sigma)?;
-                // `result_ty` mentions the parameter as de Bruijn 0: evaluate it in an env that
-                // binds the argument's value.
+                let param_val = eval(self.sig, &penv, &param_rt);
+                let (row_a, usage) = self.check(ctx, arg, &param_val, sigma)?;
+                // `result_ty` mentions the parameter as de Bruijn 0 (innermost, after the effect's
+                // own params): evaluate it in an env that also binds the argument's value.
                 let arg_val = eval(self.sig, &ctx.env, arg);
-                let result_env = Env::new().extend(arg_val);
+                let result_env = penv.extend(arg_val);
                 let result_val = eval(self.sig, &result_env, &result_rt);
-                Ok((result_val, usage))
+                let row = row_a.union(&RRow::single(effect.clone(), sigma));
+                Ok((result_val, row, usage))
             }
             // `handle body { return x. r ; (op x k. e)... }`: infer body's type `A`; the return
             // clause binds `x:A` and infers the result type `C`; each op clause is checked against
-            // `C` under `x:Aᵢ`, `k:Π(_:Bᵢ).C`. The Handle's type is `C`. Rows and continuation
-            // grades are ignored (the kernel checks those).
+            // `C` under `x:Aᵢ`, `k:Π(_:Bᵢ).C` at the operation's continuation multiplicity. The
+            // Handle's type is `C`; the handled labels are discharged from the body's row.
             RTerm::Handle {
                 body,
                 return_clause,
                 op_clauses,
             } => self.infer_handle(ctx, body, return_clause, op_clauses, sigma),
 
-            // ---- primitive machine integers (M11) ----
-            RTerm::IntTy => Ok((RValue::Univ(0), Usage::zero(n))),
-            RTerm::IntLit(_) => Ok((RValue::IntTy, Usage::zero(n))),
+            // ---- primitive machine integers (M11): pure arithmetic ----
+            RTerm::IntTy => Ok((RValue::Univ(0), RRow::empty(), Usage::zero(n))),
+            RTerm::IntLit(_) => Ok((RValue::IntTy, RRow::empty(), Usage::zero(n))),
             RTerm::IntPrim { lhs, rhs, .. } => {
-                let ul = self.check(ctx, lhs, &RValue::IntTy, sigma)?;
-                let ur = self.check(ctx, rhs, &RValue::IntTy, sigma)?;
-                Ok((RValue::IntTy, ul.add(&ur)))
+                let (rl, ul) = self.check(ctx, lhs, &RValue::IntTy, sigma)?;
+                let (rr, ur) = self.check(ctx, rhs, &RValue::IntTy, sigma)?;
+                Ok((RValue::IntTy, rl.union(&rr), ul.add(&ur)))
             }
         }
     }
 
-    /// Infer a term that must be a type, returning its universe level.
+    /// Infer a term that must be a type, returning its universe level. Type formation lives in the
+    /// 0-fragment, so its effect row is discarded (it is empty by construction — every label is
+    /// added at grade 0, the absent grade — matching the kernel's `infer_universe`).
     fn infer_universe(&self, ctx: &Ctx, ty: &RTerm) -> RResult<u32> {
-        let (k, _u) = self.infer(ctx, ty, RGrade::Zero)?;
+        let (k, _row, _u) = self.infer(ctx, ty, RGrade::Zero)?;
         match k {
             RValue::Univ(l) => Ok(l),
             other => Err(reject(format!(
@@ -419,11 +496,37 @@ impl<'a> Recheck<'a> {
         }
     }
 
-    /// Re-derive a `handle`'s result type `C` (spec §4.3), an independent port of the kernel's
-    /// `Handle` rule with the row-discharge and continuation-grade checks dropped (the re-checker
-    /// does not track rows/grades). Infer the body's type `A`; bind `x:A` and infer the return
-    /// clause's type `C`; for each op clause bind `x:Aᵢ` then `k:Π(_:Bᵢ).C` and check the clause
-    /// body against `C`. The Handle's type is `C`.
+    /// Obligation 1.3.2 (`docs/metatheory.md` §1.3): independently re-derive the kernel's
+    /// `Transp`/`Comp` grade-skeleton restriction. `a0`/`a1` are a Kan line's two endpoints; if
+    /// they are not already definitionally equal (genuinely differing types are fine — that is the
+    /// point of `transp`/`ua`), any `Pi`-formers occurring at corresponding positions must still
+    /// agree in declared grade, or the checked base's usage discipline would be laundered across
+    /// the line with no re-verification. See `kan_line_grade_skeleton_eq`'s doc comment and the
+    /// kernel's identical `check.rs` restriction for the full soundness argument.
+    fn reject_heterogeneous_grade_line(
+        &self,
+        ctx: &Ctx,
+        a0: &RValue,
+        a1: &RValue,
+    ) -> RResult<()> {
+        if !conv(self.sig, ctx.lvl, ctx.dlvl, a0, a1)
+            && !kan_line_grade_skeleton_eq(self.sig, ctx.lvl, a0, a1)
+        {
+            return Err(reject(
+                "a Kan line whose Pi-formers disagree in grade would launder the base's usage \
+                 discipline (obligation 1.3.2, docs/metatheory.md §1.3)",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Re-derive a `handle`'s result type `C` and effect row (spec §4.3), an independent port of the
+    /// kernel's `Handle` rule. Infer the body's type `A` and row `E_body`; bind `x:A` and infer the
+    /// return clause's type `C`; for each op clause bind `x:Aᵢ` then `k:Π(_:Bᵢ).C` (at the
+    /// operation's **continuation multiplicity** `cont_grade`) and check the clause body against `C`.
+    /// The handled labels are *discharged* from `E_body`; the clauses' and return clause's own rows
+    /// are unioned in. The Handle's type is `C`. **B2: the continuation grade is now enforced** —
+    /// resuming `k` at a grade exceeding `cont_grade` is Rejected, mirroring the kernel.
     fn infer_handle(
         &self,
         ctx: &Ctx,
@@ -431,34 +534,51 @@ impl<'a> Recheck<'a> {
         return_clause: &RTerm,
         op_clauses: &[(blight_kernel::signature::OpName, Box<RTerm>)],
         sigma: RGrade,
-    ) -> RResult<(RValue, Usage)> {
-        // 1. Infer the body's type `A`.
-        let (body_ty, body_usage) = self.infer(ctx, body, sigma)?;
+    ) -> RResult<(RValue, RRow, Usage)> {
+        // 1. Infer the body's type `A` and row `E_body`.
+        let (body_ty, body_row, body_usage) = self.infer(ctx, body, sigma)?;
 
-        // 2. Return clause: bind `x : A`, infer its type `C`.
+        // 2. Return clause: bind `x : A`, infer its type `C` and row.
         let ctx_ret = ctx.extend(self.sig, body_ty, sigma);
-        let (c_ty, ret_usage) = self.infer(&ctx_ret, return_clause, sigma)?;
+        let (c_ty, ret_row, ret_usage) = self.infer(&ctx_ret, return_clause, sigma)?;
         // `C` must live at `ctx.len()` (it may not mention the bound `x`); quote it there and
         // re-evaluate in the ambient env so it is reusable under the op clauses' binders.
         let c_term = quote(self.sig, ctx.lvl, ctx.dlvl, &c_ty);
         let c_val = eval(self.sig, &ctx.env, &c_term);
         let (_demand_x, ret_usage) = ret_usage.pop();
         let mut total_usage = body_usage.add(&ret_usage);
+        let mut result_row = ret_row;
+        let mut handled: Vec<blight_kernel::EffName> = Vec::new();
 
         // 3. Operation clauses: each binds `x:Aᵢ` (the op parameter) then `k:Π(_:Bᵢ).C`.
         for (op, clause) in op_clauses.iter() {
-            let (_eff, opsig) = self
+            let (eff, opsig) = self
                 .sig
                 .op_of(op)
                 .ok_or_else(|| reject(format!("handler clause for unknown operation {op:?}")))?;
+            // Wave 7/E2 scope gate, lockstep with the kernel's identical restriction (see
+            // `check.rs`'s `Handle` rule): handling an operation of a *parameterized* effect is an
+            // intentionally unmodeled shape here, so it is rejected rather than mistyped against
+            // the parameter-open signature.
+            if !eff.params.is_empty() {
+                return Err(reject(format!(
+                    "handling operation {op:?} of the parameterized effect {:?} is not yet \
+                     supported (Wave 7/E2 scope: perform + typecheck only)",
+                    eff.name
+                )));
+            }
+            handled.push(eff.name.clone());
             let param_rt = crate::term::from_kernel(&opsig.param_ty)?;
             let result_rt = crate::term::from_kernel(&opsig.result_ty)?;
+            let cont_grade: RGrade = opsig.cont_grade.into();
             // `Aᵢ` is closed over the ambient context.
             let param_val = eval(self.sig, &Env::new(), &param_rt);
             let ctx_x = ctx.extend(self.sig, param_val, sigma);
             // `Bᵢ = result_ty[x]` lives in `x:Aᵢ`'s scope (de Bruijn 0 = x). Build the
             // continuation type `k : Π(_:Bᵢ). C` (where `C` is weakened past the `x` binder by 1,
-            // becoming weakened by 2 inside the Pi's codomain), evaluate it in `ctx_x`'s env.
+            // becoming weakened by 2 inside the Pi's codomain), evaluate it in `ctx_x`'s env. The
+            // binder grade is the operation's continuation multiplicity, so the usage discipline
+            // (`demand(k) ≤ cont_grade`) is checked just like an ordinary λ-binder.
             let k_dom_val = eval(self.sig, &ctx_x.env, &result_rt);
             // The continuation's codomain ignores its own binder: it is `C` shifted past `x`+`_`.
             let cod_closure_body = shift_free(&c_term, 2);
@@ -470,56 +590,83 @@ impl<'a> Recheck<'a> {
                     body: std::rc::Rc::new(cod_closure_body),
                 },
             );
-            let ctx_xk = ctx_x.extend(self.sig, k_ty, RGrade::Omega);
+            let ctx_xk = ctx_x.extend(self.sig, k_ty, cont_grade);
             // Check the clause body against `C` (under the two binders `x`, `k`). `C` is closed at
             // `ctx.len()`, so it is invariant under the extra binders when evaluated in `ctx`'s env.
             let c_val_xk = c_val.clone();
-            let clause_usage = self.check(&ctx_xk, clause, &c_val_xk, sigma)?;
-            // Pop the two binders (`k` then `x`); the re-checker ignores the continuation grade.
-            let (_demand_k, clause_usage) = clause_usage.pop();
+            let (clause_row, clause_usage) = self.check(&ctx_xk, clause, &c_val_xk, sigma)?;
+            // Pop the two binders (`k` then `x`); enforce `k`'s continuation multiplicity grade.
+            let (demand_k, clause_usage) = clause_usage.pop();
+            if !demand_k.leq(cont_grade) {
+                return Err(reject(format!(
+                    "handler clause for {op:?} resumes its continuation at grade {demand_k:?}, but \
+                     the operation's continuation multiplicity is {cont_grade:?}"
+                )));
+            }
             let (_demand_x, clause_usage) = clause_usage.pop();
+            result_row = result_row.union(&clause_row);
             total_usage = total_usage.add(&clause_usage);
         }
 
-        Ok((c_val, total_usage))
+        // 4. Discharge handled labels from the body's row, then union the clauses' rows.
+        let mut discharged = body_row;
+        for label in &handled {
+            discharged = discharged.discharge(label);
+        }
+        result_row = result_row.union(&discharged);
+
+        Ok((c_val, result_row, total_usage))
     }
 
-    /// Check `term` against expected value-type `expected` at ambient demand `sigma`.
-    fn check(&self, ctx: &Ctx, term: &RTerm, expected: &RValue, sigma: RGrade) -> RResult<Usage> {
+    /// Check `term` against expected value-type `expected` at ambient demand `sigma`, returning the
+    /// independently-derived effect row and usage vector. A `λ`/path binder propagates its body's
+    /// row (effects are *not* suspended by a binder in this calculus — the kernel's `check_g` returns
+    /// `body_row` likewise); intro forms union their components' rows.
+    fn check(
+        &self,
+        ctx: &Ctx,
+        term: &RTerm,
+        expected: &RValue,
+        sigma: RGrade,
+    ) -> RResult<(RRow, Usage)> {
         match (term, expected) {
             (RTerm::Lam(body), RValue::Pi(grade, dom, cod)) => {
                 let ctx2 = ctx.extend(self.sig, (**dom).clone(), *grade);
                 // The bound variable's value in the extended env is the fresh var at ctx.lvl.
                 let fresh = fresh_var(self.sig, ctx.lvl, dom);
                 let cod_inst = cod.apply(self.sig, fresh);
-                let body_usage = self.check(&ctx2, body, &cod_inst, sigma)?;
+                let (body_row, body_usage) = self.check(&ctx2, body, &cod_inst, sigma)?;
                 let (demand_x, rest) = body_usage.pop();
                 if !demand_x.leq(*grade) {
                     return Err(reject(format!(
                         "λ-binder at grade {grade:?} but body demands it at {demand_x:?}"
                     )));
                 }
-                Ok(rest)
+                Ok((body_row, rest))
             }
             (RTerm::Pair(a, b), RValue::Sigma(dom, cod)) => {
-                let usage_a = self.check(ctx, a, dom, sigma)?;
+                let (row_a, usage_a) = self.check(ctx, a, dom, sigma)?;
                 let a_val = eval(self.sig, &ctx.env, a);
                 let cod_inst = cod.apply(self.sig, a_val);
-                let usage_b = self.check(ctx, b, &cod_inst, sigma)?;
-                Ok(usage_a.add(&usage_b))
+                let (row_b, usage_b) = self.check(ctx, b, &cod_inst, sigma)?;
+                Ok((row_a.union(&row_b), usage_a.add(&usage_b)))
             }
             (RTerm::Con(name, args), RValue::Data(d_name, params, exp_indices)) => {
                 self.check_con(ctx, name, args, d_name, params, exp_indices, sigma)
             }
             // `now a : Delay A` — check the payload against `A` (so a bare-constructor payload is
-            // accepted, mirroring `Con`/`Pair` checking). `later d : Delay A` — check `d` against
-            // the same `Delay A`.
+            // accepted, mirroring `Con`/`Pair` checking); `now` is *total* (row = `a`'s row).
+            // `later d : Delay A` — check `d` against the same `Delay A`, then add the `Partial`
+            // label at the ambient demand (a guarded step may diverge).
             (RTerm::Now(a), RValue::Delay(inner)) => self.check(ctx, a, inner, sigma),
-            (RTerm::Later(d), RValue::Delay(_)) => self.check(ctx, d, expected, sigma),
+            (RTerm::Later(d), RValue::Delay(_)) => {
+                let (d_row, usage) = self.check(ctx, d, expected, sigma)?;
+                Ok((d_row.union(&RRow::single(partial_label(), sigma)), usage))
+            }
             (RTerm::PLam(body), RValue::PathP { family, lhs, rhs }) => {
                 let ctx_dim = ctx.extend_dim();
                 let fam_at_i = family.apply_dim(self.sig, RInterval::Dim(ctx.dlvl));
-                let body_usage = self.check(&ctx_dim, body, &fam_at_i, sigma)?;
+                let (body_row, body_usage) = self.check(&ctx_dim, body, &fam_at_i, sigma)?;
                 // Boundary: body[0/i] ≡ lhs, body[1/i] ≡ rhs.
                 let b0 = {
                     let e = ctx.env.extend_dim(RInterval::I0);
@@ -535,12 +682,12 @@ impl<'a> Recheck<'a> {
                 if !conv(self.sig, ctx.lvl, ctx.dlvl, &b1, rhs) {
                     return Err(reject("path rhs boundary mismatch"));
                 }
-                Ok(body_usage)
+                Ok((body_row, body_usage))
             }
             _ => {
-                let (actual, usage) = self.infer(ctx, term, sigma)?;
+                let (actual, row, usage) = self.infer(ctx, term, sigma)?;
                 if subtype(self.sig, ctx.lvl, ctx.dlvl, &actual, expected) {
-                    Ok(usage)
+                    Ok((row, usage))
                 } else {
                     Err(reject(format!(
                         "type mismatch: inferred {actual:?} but expected {expected:?}"
@@ -568,7 +715,7 @@ impl<'a> Recheck<'a> {
         name: &blight_kernel::ConName,
         args: &[RTerm],
         sigma: RGrade,
-    ) -> RResult<(RValue, Usage)> {
+    ) -> RResult<(RValue, RRow, Usage)> {
         let (decl, _idx, ctor) = self
             .sig
             .data_of_con(name)
@@ -577,8 +724,9 @@ impl<'a> Recheck<'a> {
         let ctor = ctor.clone();
         if !decl.params.is_empty() {
             // Parameterized: parameters are not recoverable from the arguments — needs an
-            // ascription, just like the kernel's `CannotInfer`.
-            return Err(reject(format!(
+            // ascription, just like the kernel's `CannotInfer`. A limitation, not a type error, so
+            // we *decline* (abstain) rather than reject a kernel-valid program.
+            return Err(decline(format!(
                 "constructor {name:?} of a parameterized family needs a type annotation to be inferred"
             )));
         }
@@ -592,13 +740,15 @@ impl<'a> Recheck<'a> {
         // Non-parameterized family: recursive arguments share the (param-free) family head.
         let rec_ty = RValue::Data(decl.name.clone(), vec![], vec![]);
         let mut usage = Usage::zero(ctx.len());
+        let mut row = RRow::empty();
         // `env` evaluates the constructor's result-index terms; for a non-parameterized family it
         // binds only the (innermost-last) argument values.
         let mut env = Env::new();
         for (arg, shape) in args.iter().zip(ctor.args.iter()) {
             match shape {
                 Arg::Rec(_) => {
-                    let u = self.check(ctx, arg, &rec_ty, sigma)?;
+                    let (r, u) = self.check(ctx, arg, &rec_ty, sigma)?;
+                    row = row.union(&r);
                     usage = usage.add(&u);
                 }
                 Arg::NonRec(ty) => {
@@ -607,7 +757,8 @@ impl<'a> Recheck<'a> {
                     // evaluated in the ambient context env (the family is non-parameterized, so
                     // there are no params to thread; this keeps kernel<->recheck symmetric).
                     let ty_val = eval(self.sig, &ctx.env, &ty_t);
-                    let u = self.check(ctx, arg, &ty_val, sigma)?;
+                    let (r, u) = self.check(ctx, arg, &ty_val, sigma)?;
+                    row = row.union(&r);
                     usage = usage.add(&u);
                 }
             }
@@ -622,7 +773,7 @@ impl<'a> Recheck<'a> {
                 Ok::<RValue, RecheckError>(eval(self.sig, &env, &rt))
             })
             .collect::<RResult<_>>()?;
-        Ok((RValue::Data(decl.name, vec![], result_indices), usage))
+        Ok((RValue::Data(decl.name, vec![], result_indices), row, usage))
     }
 
     /// Check a constructor application against an expected `Data` family (spec §2.7).
@@ -636,7 +787,7 @@ impl<'a> Recheck<'a> {
         params: &[RValue],
         exp_indices: &[RValue],
         sigma: RGrade,
-    ) -> RResult<Usage> {
+    ) -> RResult<(RRow, Usage)> {
         let (decl, _idx, ctor) = self
             .sig
             .data_of_con(name)
@@ -662,6 +813,7 @@ impl<'a> Recheck<'a> {
             env = env.extend(p.clone());
         }
         let mut usage = Usage::zero(ctx.len());
+        let mut row = RRow::empty();
         for (arg, shape) in args.iter().zip(ctor.args.iter()) {
             match shape {
                 Arg::Rec(rec_indices) => {
@@ -673,13 +825,15 @@ impl<'a> Recheck<'a> {
                         })
                         .collect::<RResult<_>>()?;
                     let rec_ty = RValue::Data(decl.name.clone(), params.to_vec(), rec_index_vals);
-                    let u = self.check(ctx, arg, &rec_ty, sigma)?;
+                    let (r, u) = self.check(ctx, arg, &rec_ty, sigma)?;
+                    row = row.union(&r);
                     usage = usage.add(&u);
                 }
                 Arg::NonRec(ty) => {
                     let ty_t = crate::term::from_kernel(ty)?;
                     let ty_val = eval(self.sig, &env, &ty_t);
-                    let u = self.check(ctx, arg, &ty_val, sigma)?;
+                    let (r, u) = self.check(ctx, arg, &ty_val, sigma)?;
+                    row = row.union(&r);
                     usage = usage.add(&u);
                 }
             }
@@ -694,7 +848,7 @@ impl<'a> Recheck<'a> {
                 return Err(reject("constructor result index mismatch"));
             }
         }
-        Ok(usage)
+        Ok((row, usage))
     }
 
     /// Re-check a dependent eliminator (spec §2.7): an independent port of the kernel's
@@ -710,7 +864,7 @@ impl<'a> Recheck<'a> {
         methods: &[RTerm],
         scrutinee: &RTerm,
         sigma: RGrade,
-    ) -> RResult<(RValue, Usage)> {
+    ) -> RResult<(RValue, RRow, Usage)> {
         let decl = self
             .sig
             .get(data)
@@ -719,8 +873,8 @@ impl<'a> Recheck<'a> {
         let nindices = decl.indices.len();
         let indexed = nindices != 0;
 
-        // Infer the scrutinee's type; recover the family's params and (all) index values.
-        let (scrut_ty, scrut_usage) = self.infer(ctx, scrutinee, sigma)?;
+        // Infer the scrutinee's type, row, and usage; recover the family's params and index values.
+        let (scrut_ty, scrut_row, scrut_usage) = self.infer(ctx, scrutinee, sigma)?;
         let (eparams, scrut_indices) = match &scrut_ty {
             RValue::Data(d, ps, is) if d == data => (ps.clone(), is.clone()),
             other => {
@@ -817,6 +971,8 @@ impl<'a> Recheck<'a> {
             )));
         }
         let mut usage = scrut_usage;
+        // The eliminator's row unions the scrutinee's row with every (reachable) method's row.
+        let mut row = scrut_row;
         for (ctor, method) in decl.constructors.iter().zip(methods.iter()) {
             // Dependent pattern matching (spec §2.7): refine the branch against the scrutinee's
             // indices. Unifying the constructor's result indices with the scrutinee indices either
@@ -830,7 +986,7 @@ impl<'a> Recheck<'a> {
                     // Vacuous branch: nothing to check, contributes no usage.
                 }
                 Refinement::Solved { args, ambient } => {
-                    let u = self.check_refined_method(
+                    let (r, u) = self.check_refined_method(
                         ctx,
                         &decl,
                         ctor,
@@ -842,11 +998,13 @@ impl<'a> Recheck<'a> {
                         &ambient,
                         sigma,
                     )?;
+                    row = row.union(&r);
                     usage = usage.add(&u);
                 }
                 Refinement::Stuck => {
                     let method_ty = self.method_type(ctx, &decl, ctor, &motive_v, &eparams)?;
-                    let u = self.check(ctx, method, &method_ty, sigma)?;
+                    let (r, u) = self.check(ctx, method, &method_ty, sigma)?;
+                    row = row.union(&r);
                     usage = usage.add(&u);
                 }
             }
@@ -869,7 +1027,7 @@ impl<'a> Recheck<'a> {
         } else {
             apply(self.sig, motive_v, scrut_v)
         };
-        Ok((result, usage))
+        Ok((result, row, usage))
     }
 
     /// Recover a dependent motive from an index-ignoring one (see the call site in `infer_elim`).
@@ -1348,7 +1506,7 @@ impl<'a> Recheck<'a> {
         solved: &[Option<RValue>],
         ambient: &[(usize, RValue)],
         sigma: RGrade,
-    ) -> RResult<Usage> {
+    ) -> RResult<(RRow, Usage)> {
         let mut cur = ctx.clone();
         let mut body = method;
         // `arg_env` evaluates the constructor's arg/index types (param scope, then bound args), in
@@ -1478,9 +1636,9 @@ impl<'a> Recheck<'a> {
             concl = apply(self.sig, concl, ix);
         }
         concl = apply(self.sig, concl, con_val);
-        let u = self.check(&cur, body, &concl, sigma)?;
+        let (row, u) = self.check(&cur, body, &concl, sigma)?;
         // The method binders are not part of the ambient usage vector; truncate to ambient length.
-        Ok(u.truncate(ctx.len()))
+        Ok((row, u.truncate(ctx.len())))
     }
 
     /// Re-express the ambient index solutions (computed over constructor-argument placeholders) in
@@ -1624,9 +1782,18 @@ fn translate_go(t: &RTerm, depth_in: usize, m: usize, repls: &[RTerm]) -> RTerm 
         // Effects/handlers: recurse over term children, honoring the handler clause binders
         // (return clause: +1; each op clause: +2).
         RTerm::EffTy(a) => RTerm::EffTy(Box::new(translate_go(a, depth_in, m, repls))),
-        RTerm::Op { effect, op, arg } => RTerm::Op {
+        RTerm::Op {
+            effect,
+            op,
+            type_args,
+            arg,
+        } => RTerm::Op {
             effect: effect.clone(),
             op: op.clone(),
+            type_args: type_args
+                .iter()
+                .map(|t| translate_go(t, depth_in, m, repls))
+                .collect(),
             arg: Box::new(translate_go(arg, depth_in, m, repls)),
         },
         RTerm::Handle {
@@ -1759,9 +1926,15 @@ fn shift_free_cut(t: &RTerm, d: usize, cut: usize) -> RTerm {
         RTerm::Later(a) => RTerm::Later(Box::new(shift_free_cut(a, d, cut))),
         RTerm::Force(a) => RTerm::Force(Box::new(shift_free_cut(a, d, cut))),
         RTerm::EffTy(a) => RTerm::EffTy(Box::new(shift_free_cut(a, d, cut))),
-        RTerm::Op { effect, op, arg } => RTerm::Op {
+        RTerm::Op {
+            effect,
+            op,
+            type_args,
+            arg,
+        } => RTerm::Op {
             effect: effect.clone(),
             op: op.clone(),
+            type_args: type_args.iter().map(|t| shift_free_cut(t, d, cut)).collect(),
             arg: Box::new(shift_free_cut(arg, d, cut)),
         },
         RTerm::Handle {
@@ -1782,5 +1955,179 @@ fn shift_free_cut(t: &RTerm, d: usize, cut: usize) -> RTerm {
             lhs: Box::new(shift_free_cut(lhs, d, cut)),
             rhs: Box::new(shift_free_cut(rhs, d, cut)),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use blight_kernel::signature::{EffDecl, OpSig};
+    use blight_kernel::{ConName, Constructor, DataDecl, EffName, Grade, Term};
+
+    /// Wave 7/E2 recheck twin of the kernel's `check::tests::ref_eff_sig`: the same `Unit`/`Flag`
+    /// data plus a parameterized `Ref A` effect (`get : Unit -> A`, `put : A -> Unit`), built from
+    /// kernel `Term`s (the signature format the re-checker shares with the kernel).
+    fn ref_eff_sig() -> Signature {
+        let mut sig = Signature::empty();
+        sig.declare(DataDecl {
+            name: DataName("Unit".into()),
+            params: vec![],
+            indices: vec![],
+            level: 0,
+            constructors: vec![Constructor {
+                name: ConName("tt".into()),
+                args: vec![],
+                result_indices: vec![],
+            }],
+            path_constructors: vec![],
+        });
+        sig.declare(DataDecl {
+            name: DataName("Flag".into()),
+            params: vec![],
+            indices: vec![],
+            level: 0,
+            constructors: vec![Constructor {
+                name: ConName("mk".into()),
+                args: vec![],
+                result_indices: vec![],
+            }],
+            path_constructors: vec![],
+        });
+        let decl = EffDecl {
+            name: EffName::new("Ref"),
+            params: vec![Term::Univ(blight_kernel::Level::Zero)], // A : Type 0
+            ops: vec![
+                OpSig {
+                    name: "get".into(),
+                    param_ty: Term::Data(DataName("Unit".into()), vec![], vec![]),
+                    // scope `[A, x:Unit]` (x innermost = index 0), so `A` itself is index 1.
+                    result_ty: Term::Var(1),
+                    cont_grade: Grade::Omega,
+                },
+                OpSig {
+                    name: "put".into(),
+                    param_ty: Term::Var(0), // scope `[A]`: A is index 0
+                    result_ty: Term::Data(DataName("Unit".into()), vec![], vec![]),
+                    cont_grade: Grade::Omega,
+                },
+            ],
+        };
+        sig.check_effect(&decl).expect("Ref is well-formed");
+        sig.declare_effect(decl);
+        sig
+    }
+
+    fn flag_ty() -> RTerm {
+        RTerm::Data(DataName("Flag".into()), vec![], vec![])
+    }
+    fn mk_flag() -> RTerm {
+        RTerm::Con(ConName("mk".into()), vec![])
+    }
+    fn tt() -> RTerm {
+        RTerm::Con(ConName("tt".into()), vec![])
+    }
+
+    /// Wave 7/E2 — recheck twin of `blight_kernel::check::tests::parameterized_op_instantiates_type_arg`:
+    /// the re-checker independently re-derives `perform (get @ Flag) tt : Flag` (not `Unit`), the
+    /// type argument (not the value argument's type) driving the instantiated result — and agrees
+    /// with the kernel.
+    #[test]
+    fn parameterized_effect_roundtrips() {
+        let sig = ref_eff_sig();
+        let checker = Recheck::new(&sig);
+        let ctx = Ctx::empty();
+
+        let get_flag = RTerm::Op {
+            effect: EffName::new("Ref"),
+            op: "get".into(),
+            type_args: vec![flag_ty()],
+            arg: Box::new(tt()),
+        };
+        let (ty, row, _u) = checker
+            .infer(&ctx, &get_flag, RGrade::One)
+            .expect("get @ Flag infers");
+        assert!(
+            matches!(ty, RValue::Data(ref d, ..) if d.0 == "Flag"),
+            "re-checker instantiates the result to the type argument Flag, got {ty:?}"
+        );
+        assert_eq!(row.grade_of(&EffName::new("Ref")), RGrade::One);
+
+        // `put` is contravariant in the same parameter: `perform (put @ Flag) mk_flag : Unit`.
+        let put_flag = RTerm::Op {
+            effect: EffName::new("Ref"),
+            op: "put".into(),
+            type_args: vec![flag_ty()],
+            arg: Box::new(mk_flag()),
+        };
+        let (ty2, _row2, _u2) = checker
+            .infer(&ctx, &put_flag, RGrade::One)
+            .expect("put @ Flag infers");
+        assert!(matches!(ty2, RValue::Data(ref d, ..) if d.0 == "Unit"));
+    }
+
+    /// A `perform` site with the wrong type-argument arity is Rejected, matching the kernel's
+    /// `perform_at_wrong_type_arg_rejected`.
+    #[test]
+    fn parameterized_effect_wrong_arity_rejected() {
+        let sig = ref_eff_sig();
+        let checker = Recheck::new(&sig);
+        let ctx = Ctx::empty();
+
+        let missing = RTerm::Op {
+            effect: EffName::new("Ref"),
+            op: "get".into(),
+            type_args: vec![],
+            arg: Box::new(tt()),
+        };
+        assert!(
+            checker.infer(&ctx, &missing, RGrade::One).is_err(),
+            "missing type argument is rejected"
+        );
+
+        let extra = RTerm::Op {
+            effect: EffName::new("Ref"),
+            op: "get".into(),
+            type_args: vec![flag_ty(), flag_ty()],
+            arg: Box::new(tt()),
+        };
+        assert!(
+            checker.infer(&ctx, &extra, RGrade::One).is_err(),
+            "extra type argument is rejected"
+        );
+    }
+
+    /// Wave 7/E2 — recheck twin of the kernel's `check::tests::handling_parameterized_effect_op_rejected`:
+    /// handling an operation of a parameterized effect is an intentionally unmodeled shape here too
+    /// (the `infer_handle` scope gate), so it must be Rejected, not silently mistyped against the
+    /// parameter-open signature and not merely Declined.
+    #[test]
+    fn handling_parameterized_effect_op_rejected() {
+        let sig = ref_eff_sig();
+        let checker = Recheck::new(&sig);
+        let ctx = Ctx::empty();
+        let body = RTerm::Op {
+            effect: EffName::new("Ref"),
+            op: "get".into(),
+            type_args: vec![flag_ty()],
+            arg: Box::new(tt()),
+        };
+        let term = RTerm::Handle {
+            body: Box::new(body),
+            return_clause: Box::new(RTerm::Var(0)),
+            op_clauses: vec![(
+                "get".into(),
+                Box::new(RTerm::App(
+                    Box::new(RTerm::Var(0)),
+                    Box::new(RTerm::Var(1)),
+                )),
+            )],
+        };
+        assert!(
+            matches!(
+                checker.infer(&ctx, &term, RGrade::One),
+                Err(RecheckError::Rejected(_))
+            ),
+            "handling a parameterized effect's operation is Rejected, not Declined or silently accepted"
+        );
     }
 }

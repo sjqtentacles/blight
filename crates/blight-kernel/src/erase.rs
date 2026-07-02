@@ -142,6 +142,20 @@ fn go(term: &Term, ty: &Term, env: &mut Vec<bool>) -> Term {
             scrutinee: Box::new(go(scrutinee, &Term::Erased, env)),
         },
 
+        // `dim` carries no *term* variable content (dimensions live in a separate space); only
+        // `args` can.
+        Term::PCon {
+            data,
+            name,
+            args,
+            dim,
+        } => Term::PCon {
+            data: data.clone(),
+            name: name.clone(),
+            args: args.iter().map(|t| go(t, &Term::Erased, env)).collect(),
+            dim: dim.clone(),
+        },
+
         // Cubical formers carry no *term* binders (dimensions live in a separate space) so the
         // term-variable environment is unchanged when descending.
         Term::PathP { family, lhs, rhs } => Term::PathP {
@@ -206,9 +220,18 @@ fn go(term: &Term, ty: &Term, env: &mut Vec<bool>) -> Term {
         Term::Unglue(g) => Term::Unglue(Box::new(go(g, &Term::Erased, env))),
         // Effects are runtime-relevant (M2 does not erase effectful structure). Traverse
         // structurally, honoring the handler clause binders (return: 1; op clauses: 2).
-        Term::Op { effect, op, arg } => Term::Op {
+        // The type-argument instantiation of a parameterized effect's operation is type-level
+        // content (Wave 7/E2), like a `Data`'s own `params`/`indices` above — not runtime content,
+        // so it is carried unchanged rather than traversed (see the `Data` arm's `term.clone()`).
+        Term::Op {
+            effect,
+            op,
+            type_args,
+            arg,
+        } => Term::Op {
             effect: effect.clone(),
             op: op.clone(),
+            type_args: type_args.clone(),
             arg: Box::new(go(arg, &Term::Erased, env)),
         },
         Term::Handle {
@@ -305,6 +328,7 @@ pub fn occurs(i: usize, term: &Term) -> bool {
                 scrutinee,
                 ..
             } => go(i, motive) || methods.iter().any(|t| go(i, t)) || go(i, scrutinee),
+            Term::PCon { args, .. } => args.iter().any(|t| go(i, t)),
             Term::PathP { family, lhs, rhs } => go(i, family) || go(i, lhs) || go(i, rhs),
             Term::PApp(p, _) => go(i, p),
             Term::Partial(_, a) => go(i, a),

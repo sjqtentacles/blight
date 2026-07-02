@@ -62,6 +62,91 @@ impl From<blight_kernel::Grade> for RGrade {
     }
 }
 
+/// This crate's *own* graded effect row (spec §4.1), an independent mirror of
+/// [`blight_kernel::Row`] built over [`RGrade`] so the re-checker's effect accounting is a genuine
+/// second opinion rather than a re-use of the kernel's row algebra.
+///
+/// A row records, per effect label, the [`RGrade`] (continuation multiplicity) at which the
+/// surrounding computation uses that effect; an optional open `tail` carries row polymorphism. A
+/// label graded [`RGrade::Zero`] is *absent* (never stored), so the empty closed row denotes a
+/// *pure* computation. Two rows combine by graded union (per-label [`RGrade::add`]); a `Handle`
+/// `discharge`s the labels it interprets. This is exactly the discipline the kernel runs in
+/// `check.rs`; the re-checker re-derives it from scratch so that a false `Proof` would have to fool
+/// *both* row checkers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RRow {
+    labels: std::collections::BTreeMap<blight_kernel::EffName, RGrade>,
+    tail: Option<blight_kernel::RowVar>,
+}
+
+impl RRow {
+    /// The empty (pure) row `⟨⟩`.
+    pub fn empty() -> Self {
+        RRow {
+            labels: std::collections::BTreeMap::new(),
+            tail: None,
+        }
+    }
+
+    /// A row carrying a single label at `grade` (a [`RGrade::Zero`] grade yields the empty row).
+    pub fn single(label: blight_kernel::EffName, grade: RGrade) -> Self {
+        let mut r = RRow::empty();
+        r.insert(label, grade);
+        r
+    }
+
+    /// Insert/accumulate `label` at `grade` (grade-`add` with any existing entry). Inserting at
+    /// `Zero` is a no-op.
+    fn insert(&mut self, label: blight_kernel::EffName, grade: RGrade) {
+        if grade == RGrade::Zero {
+            return;
+        }
+        let entry = self.labels.entry(label).or_insert(RGrade::Zero);
+        *entry = entry.add(grade);
+    }
+
+    /// Whether this row is empty *and closed* — i.e. denotes a pure, total computation.
+    pub fn is_empty(&self) -> bool {
+        self.labels.is_empty() && self.tail.is_none()
+    }
+
+    /// The grade at which `label` appears (`Zero` if absent).
+    pub fn grade_of(&self, label: &blight_kernel::EffName) -> RGrade {
+        self.labels.get(label).copied().unwrap_or(RGrade::Zero)
+    }
+
+    /// Whether `label` appears at a nonzero grade.
+    pub fn contains(&self, label: &blight_kernel::EffName) -> bool {
+        self.labels.contains_key(label)
+    }
+
+    /// The open tail row variable, if any.
+    pub fn tail(&self) -> Option<&blight_kernel::RowVar> {
+        self.tail.as_ref()
+    }
+
+    /// Graded union `E₁ ⊔ E₂` (spec §4.1): per-label [`RGrade::add`]. Mirrors
+    /// [`blight_kernel::Row::union`]'s tail handling (prefer an existing tail).
+    pub fn union(&self, other: &RRow) -> RRow {
+        let mut out = self.clone();
+        for (label, grade) in other.labels.iter() {
+            out.insert(label.clone(), *grade);
+        }
+        if out.tail.is_none() {
+            out.tail = other.tail.clone();
+        }
+        out
+    }
+
+    /// Discharge a label (spec §4.3): remove it entirely. This is what a `Handle` does — having
+    /// interpreted `ℓ`, the result row no longer mentions it.
+    pub fn discharge(&self, label: &blight_kernel::EffName) -> RRow {
+        let mut out = self.clone();
+        out.labels.remove(label);
+        out
+    }
+}
+
 /// A De Morgan interval term, mirrored from the kernel (the interval theory is small and shared).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RInterval {
@@ -167,9 +252,12 @@ pub enum RTerm {
     // precedent as the delay layer above). ----
     /// `perform op a` — invoke effect operation `op` of `effect` with argument `a`. The re-checker
     /// re-derives its type as `result_ty[a/x]` from the op's signature; the row is ignored.
+    /// `type_args` (Wave 7/E2) is the effect's type-parameter instantiation at this site, one term
+    /// per entry in the declaring `EffDecl`'s telescope — empty for a non-parameterized effect.
     Op {
         effect: blight_kernel::row::EffName,
         op: blight_kernel::signature::OpName,
+        type_args: Vec<RTerm>,
         arg: Box<RTerm>,
     },
     /// `handle body { return x. r ; (op x k. e)... }`. Binders mirror the kernel: `return_clause`
@@ -298,9 +386,15 @@ pub fn from_kernel(t: &Term) -> Result<RTerm, RecheckError> {
         },
 
         // ---- effects and handlers: now MODELED at the type level (Checked), not declined ----
-        Term::Op { effect, op, arg } => RTerm::Op {
+        Term::Op {
+            effect,
+            op,
+            type_args,
+            arg,
+        } => RTerm::Op {
             effect: effect.clone(),
             op: op.clone(),
+            type_args: type_args.iter().map(from_kernel).collect::<Result<_, _>>()?,
             arg: Box::new(from_kernel(arg)?),
         },
         Term::Handle {
@@ -322,6 +416,16 @@ pub fn from_kernel(t: &Term) -> Result<RTerm, RecheckError> {
         Term::Partial(..) | Term::System(..) => {
             return Err(RecheckError::Declined(
                 "cubical partial element/system".into(),
+            ))
+        }
+        // Higher inductive type path constructors (Wave 7/E4): the re-checker has no independent
+        // model of a HIT's boundary equations (`crate::blight_kernel::signature::PathConstructor`
+        // lives only in the *kernel's* signature, which this crate does not re-derive), so it
+        // honestly declines rather than silently pass a construct it cannot re-verify — the same
+        // discipline as `Glue`/`Partial`/`System` above.
+        Term::PCon { .. } => {
+            return Err(RecheckError::Declined(
+                "higher inductive type path constructor".into(),
             ))
         }
         Term::Glue { .. } | Term::GlueTerm { .. } | Term::Unglue(..) => {

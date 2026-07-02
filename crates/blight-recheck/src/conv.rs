@@ -107,9 +107,6 @@ pub fn conv(sig: &Signature, lvl: usize, dlvl: usize, a: &RValue, b: &RValue) ->
         (RValue::Now(a), RValue::Now(b)) => conv(sig, lvl, dlvl, a, b),
         (RValue::Later(a), RValue::Later(b)) => conv(sig, lvl, dlvl, a, b),
         (RValue::Force(a), RValue::Force(b)) => conv(sig, lvl, dlvl, a, b),
-        // `! E A` and `! E' A` are convertible whenever their payloads are: the re-checker ignores
-        // rows (the kernel separately verified them).
-        (RValue::EffTy(a), RValue::EffTy(b)) => conv(sig, lvl, dlvl, a, b),
         (RValue::IntTy, RValue::IntTy) => true,
         (RValue::IntLit(a), RValue::IntLit(b)) => a == b,
         _ => false,
@@ -142,4 +139,306 @@ pub fn subtype(
 /// in the checker).
 pub fn fresh_var(sig: &Signature, lvl: usize, ty: &RValue) -> RValue {
     reflect(sig, Neutral::Var(lvl), ty)
+}
+
+/// Obligation 1.3.2 (`docs/metatheory.md` §1.3): mirrors `blight_kernel::check`'s
+/// `kan_line_grade_skeleton_eq`. A Kan line's two endpoints may genuinely differ as *types* (the
+/// whole point of `transp`/`ua`), but `Transp`/`Comp` check their base once, against the *source*
+/// endpoint, then hand back the *target* endpoint as the result type with no re-verification. If
+/// both endpoints are `Pi`-formers disagreeing in grade, this launders the checked value's usage
+/// discipline. Note: since `conv` above already treats differing Pi-grades as non-convertible,
+/// this only needs to run on the `!conv(a0, a1)` branch — it independently re-derives that any
+/// `Pi`/`Sigma` skeleton shared between the (otherwise non-convertible) endpoints still agrees in
+/// grade, as a second line of defense alongside the kernel's own identical check.
+///
+/// **Mechanized (Wave 8 / M10):** `mechanization/BlightMeta/GradeSkeleton.lean`'s
+/// `grade_skeleton_preserved_by_transp` proves this check's soundness content once, independently
+/// of which of the two (kernel/re-checker) copies calls it — see `docs/metatheory.md` §1.3's
+/// Track M7 section and `docs/metatheory-mechanized.md`.
+pub fn kan_line_grade_skeleton_eq(sig: &Signature, lvl: usize, a: &RValue, b: &RValue) -> bool {
+    match (a, b) {
+        (RValue::Pi(g1, d1, c1), RValue::Pi(g2, d2, c2)) => {
+            if g1 != g2 || !kan_line_grade_skeleton_eq(sig, lvl, d1, d2) {
+                return false;
+            }
+            let fresh = RValue::Neutral(Neutral::Var(lvl));
+            kan_line_grade_skeleton_eq(
+                sig,
+                lvl + 1,
+                &c1.apply(sig, fresh.clone()),
+                &c2.apply(sig, fresh),
+            )
+        }
+        (RValue::Sigma(d1, c1), RValue::Sigma(d2, c2)) => {
+            if !kan_line_grade_skeleton_eq(sig, lvl, d1, d2) {
+                return false;
+            }
+            let fresh = RValue::Neutral(Neutral::Var(lvl));
+            kan_line_grade_skeleton_eq(
+                sig,
+                lvl + 1,
+                &c1.apply(sig, fresh.clone()),
+                &c2.apply(sig, fresh),
+            )
+        }
+        _ => true,
+    }
+}
+
+// =================================================================================================
+// White-box unit tests for definitional equality (Track D — mutation hardening). These pin down
+// *every* arm of `conv`/`subtype` directly on hand-built [`RValue`]s, including the negative cases
+// (where conv must return `false`): this is what discriminates a healthy checker from a mutant that
+// e.g. flips a `==` to `!=`, deletes a match arm, or turns η's `||` guard into `&&`.
+// =================================================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::normalize::{eval, reflect};
+    use crate::term::{RGrade, RTerm};
+    use crate::value::{Env, RValue};
+    use blight_kernel::{ConName, DataName, Signature};
+
+    fn sig() -> Signature {
+        Signature::new()
+    }
+    fn ev(s: &Signature, t: RTerm) -> RValue {
+        eval(s, &Env::new(), &t)
+    }
+    fn nat_t() -> RTerm {
+        RTerm::Data(DataName("Nat".into()), vec![], vec![])
+    }
+    fn bool_t() -> RTerm {
+        RTerm::Data(DataName("Bool".into()), vec![], vec![])
+    }
+    fn zero_t() -> RTerm {
+        RTerm::Con(ConName("Zero".into()), vec![])
+    }
+    fn succ_t(t: RTerm) -> RTerm {
+        RTerm::Con(ConName("Succ".into()), vec![t])
+    }
+
+    #[test]
+    fn univ_conv_is_level_exact() {
+        let s = sig();
+        assert!(conv(&s, 0, 0, &RValue::Univ(0), &RValue::Univ(0)));
+        assert!(!conv(&s, 0, 0, &RValue::Univ(0), &RValue::Univ(1)));
+    }
+
+    #[test]
+    fn int_conv_distinguishes_type_and_literals() {
+        let s = sig();
+        assert!(conv(&s, 0, 0, &RValue::IntTy, &RValue::IntTy));
+        assert!(!conv(&s, 0, 0, &RValue::IntTy, &RValue::IntLit(0)));
+        assert!(conv(&s, 0, 0, &RValue::IntLit(5), &RValue::IntLit(5)));
+        assert!(!conv(&s, 0, 0, &RValue::IntLit(5), &RValue::IntLit(6)));
+    }
+
+    #[test]
+    fn delay_family_conv_recurses_and_separates_variants() {
+        let s = sig();
+        let il = RValue::IntLit;
+        let now = |n| RValue::Now(Box::new(il(n)));
+        let delay = |n| RValue::Delay(Box::new(il(n)));
+        let later = |n| RValue::Later(Box::new(il(n)));
+        let force = |n| RValue::Force(Box::new(il(n)));
+        // Each arm recurses into its payload …
+        assert!(conv(&s, 0, 0, &now(1), &now(1)));
+        assert!(!conv(&s, 0, 0, &now(1), &now(2)));
+        assert!(conv(&s, 0, 0, &delay(1), &delay(1)));
+        assert!(!conv(&s, 0, 0, &delay(1), &delay(2)));
+        assert!(conv(&s, 0, 0, &later(1), &later(1)));
+        assert!(!conv(&s, 0, 0, &later(1), &later(2)));
+        assert!(conv(&s, 0, 0, &force(1), &force(1)));
+        assert!(!conv(&s, 0, 0, &force(1), &force(2)));
+        // … and distinct variants are never conv.
+        assert!(!conv(&s, 0, 0, &now(1), &later(1)));
+        assert!(!conv(&s, 0, 0, &delay(1), &now(1)));
+    }
+
+    #[test]
+    fn interval_conv_uses_normal_form() {
+        let s = sig();
+        let iv = RValue::Interval;
+        assert!(conv(&s, 0, 0, &iv(RInterval::I0), &iv(RInterval::I0)));
+        assert!(!conv(&s, 0, 0, &iv(RInterval::I0), &iv(RInterval::I1)));
+        // De Morgan: ¬¬0 ≡ 0.
+        let dneg0 = RInterval::Neg(Box::new(RInterval::Neg(Box::new(RInterval::I0))));
+        assert!(conv(&s, 0, 0, &iv(dneg0), &iv(RInterval::I0)));
+    }
+
+    #[test]
+    fn data_conv_checks_name_params_and_indices() {
+        let s = sig();
+        let nat = || RValue::Data(DataName("Nat".into()), vec![], vec![]);
+        let boolean = RValue::Data(DataName("Bool".into()), vec![], vec![]);
+        assert!(conv(&s, 0, 0, &nat(), &nat()));
+        assert!(!conv(&s, 0, 0, &nat(), &boolean)); // name
+        let vec_of = |ps, is| RValue::Data(DataName("Vec".into()), ps, is);
+        let a = vec_of(vec![nat()], vec![RValue::IntLit(0)]);
+        assert!(conv(
+            &s,
+            0,
+            0,
+            &a,
+            &vec_of(vec![nat()], vec![RValue::IntLit(0)])
+        ));
+        assert!(!conv(
+            &s,
+            0,
+            0,
+            &a,
+            &vec_of(vec![nat()], vec![RValue::IntLit(1)])
+        )); // index content
+        assert!(!conv(
+            &s,
+            0,
+            0,
+            &a,
+            &vec_of(vec![boolean.clone()], vec![RValue::IntLit(0)])
+        )); // param content
+        assert!(!conv(
+            &s,
+            0,
+            0,
+            &a,
+            &vec_of(vec![], vec![RValue::IntLit(0)])
+        )); // param arity
+        assert!(!conv(&s, 0, 0, &a, &vec_of(vec![nat()], vec![]))); // index arity
+    }
+
+    #[test]
+    fn con_conv_checks_name_arity_and_args() {
+        let s = sig();
+        let zero = || RValue::Con(ConName("Zero".into()), vec![]);
+        let succ = |v| RValue::Con(ConName("Succ".into()), vec![v]);
+        assert!(conv(&s, 0, 0, &zero(), &zero()));
+        assert!(!conv(&s, 0, 0, &zero(), &succ(zero()))); // name + arity
+        assert!(conv(&s, 0, 0, &succ(zero()), &succ(zero())));
+        assert!(!conv(&s, 0, 0, &succ(zero()), &succ(succ(zero())))); // arg content
+    }
+
+    #[test]
+    fn neutral_conv_compares_by_quote() {
+        let s = sig();
+        let v0 = RValue::Neutral(Neutral::Var(0));
+        let v1 = RValue::Neutral(Neutral::Var(1));
+        assert!(conv(&s, 2, 0, &v0, &v0));
+        assert!(!conv(&s, 2, 0, &v0, &v1));
+    }
+
+    #[test]
+    fn pi_conv_checks_grade_domain_and_codomain() {
+        let s = sig();
+        let pi = |g, a: RTerm, b: RTerm| ev(&s, RTerm::Pi(g, Box::new(a), Box::new(b)));
+        let base = pi(RGrade::Omega, nat_t(), nat_t());
+        assert!(conv(&s, 0, 0, &base, &pi(RGrade::Omega, nat_t(), nat_t())));
+        assert!(!conv(&s, 0, 0, &base, &pi(RGrade::One, nat_t(), nat_t()))); // grade
+        assert!(!conv(
+            &s,
+            0,
+            0,
+            &base,
+            &pi(RGrade::Omega, bool_t(), nat_t())
+        )); // domain
+        assert!(!conv(
+            &s,
+            0,
+            0,
+            &base,
+            &pi(RGrade::Omega, nat_t(), bool_t())
+        )); // codomain
+    }
+
+    #[test]
+    fn sigma_conv_checks_domain_and_codomain() {
+        let s = sig();
+        let sg = |a: RTerm, b: RTerm| ev(&s, RTerm::Sigma(Box::new(a), Box::new(b)));
+        let base = sg(nat_t(), nat_t());
+        assert!(conv(&s, 0, 0, &base, &sg(nat_t(), nat_t())));
+        assert!(!conv(&s, 0, 0, &base, &sg(bool_t(), nat_t()))); // domain
+        assert!(!conv(&s, 0, 0, &base, &sg(nat_t(), bool_t()))); // codomain
+    }
+
+    #[test]
+    fn pathp_conv_checks_endpoints() {
+        let s = sig();
+        let path = |lhs: RTerm, rhs: RTerm| {
+            ev(
+                &s,
+                RTerm::PathP {
+                    family: Box::new(nat_t()),
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+            )
+        };
+        let base = path(zero_t(), zero_t());
+        assert!(conv(&s, 0, 0, &base, &path(zero_t(), zero_t())));
+        assert!(!conv(&s, 0, 0, &base, &path(succ_t(zero_t()), zero_t()))); // lhs
+        assert!(!conv(&s, 0, 0, &base, &path(zero_t(), succ_t(zero_t())))); // rhs
+    }
+
+    #[test]
+    fn eta_for_functions_against_bare_neutral() {
+        let s = sig();
+        let pi_val = ev(
+            &s,
+            RTerm::Pi(RGrade::Omega, Box::new(nat_t()), Box::new(nat_t())),
+        );
+        let reflected = reflect(&s, Neutral::Var(0), &pi_val); // a ReflectedFun
+        let bare = RValue::Neutral(Neutral::Var(0));
+        // η must fire when *either* side is function-shaped (so the `||` guard, not `&&`, is right),
+        // and `is_fun` must report `true`.
+        assert!(conv(&s, 1, 0, &reflected, &bare));
+        assert!(conv(&s, 1, 0, &bare, &reflected));
+    }
+
+    #[test]
+    fn eta_for_pairs() {
+        let s = sig();
+        let pair = |a, b| RValue::Pair(Box::new(RValue::IntLit(a)), Box::new(RValue::IntLit(b)));
+        assert!(conv(&s, 0, 0, &pair(1, 2), &pair(1, 2)));
+        assert!(!conv(&s, 0, 0, &pair(1, 2), &pair(1, 3))); // second components differ
+        assert!(!conv(&s, 0, 0, &pair(1, 2), &pair(9, 2))); // first components differ
+    }
+
+    #[test]
+    fn eta_for_pairs_against_bare_neutral() {
+        let s = sig();
+        // A neutral of Σ type reflects to `(fst v, snd v)`, a *Pair*; the bare neutral is *not* a
+        // Pair, so η must fire when *either* side is a pair (the `||` guard, not `&&`).
+        let sigma_val = ev(&s, RTerm::Sigma(Box::new(nat_t()), Box::new(nat_t())));
+        let reflected = reflect(&s, Neutral::Var(0), &sigma_val); // a Pair of Fst/Snd neutrals
+        let bare = RValue::Neutral(Neutral::Var(0));
+        assert!(conv(&s, 1, 0, &reflected, &bare));
+        assert!(conv(&s, 1, 0, &bare, &reflected));
+    }
+
+    #[test]
+    fn eta_for_paths_against_bare_neutral() {
+        let s = sig();
+        let path_val = ev(
+            &s,
+            RTerm::PathP {
+                family: Box::new(nat_t()),
+                lhs: Box::new(zero_t()),
+                rhs: Box::new(zero_t()),
+            },
+        );
+        let reflected = reflect(&s, Neutral::Var(0), &path_val); // a ReflectedPath
+        let bare = RValue::Neutral(Neutral::Var(0));
+        assert!(conv(&s, 1, 0, &reflected, &bare));
+        assert!(conv(&s, 1, 0, &bare, &reflected));
+    }
+
+    #[test]
+    fn subtype_adds_universe_cumulativity() {
+        let s = sig();
+        assert!(subtype(&s, 0, 0, &RValue::Univ(0), &RValue::Univ(1))); // 0 ≤ 1
+        assert!(!subtype(&s, 0, 0, &RValue::Univ(1), &RValue::Univ(0))); // 1 ≰ 0
+                                                                         // Otherwise it falls back to conv.
+        assert!(subtype(&s, 0, 0, &RValue::IntTy, &RValue::IntTy));
+        assert!(!subtype(&s, 0, 0, &RValue::IntTy, &RValue::Univ(0)));
+    }
 }

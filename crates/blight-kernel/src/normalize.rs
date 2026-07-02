@@ -7,12 +7,115 @@
 use crate::term::{DataName, Interval, Term};
 use crate::value::{Closure, Env, Frame, Neutral, Value};
 
+// =================================================================================================
+// Wave 5 / N2: metered evaluation + honest divergence errors.
+//
+// `eval`/`conv`/`quote` are *total* functions over a well-typed core fragment, but the surface
+// language is not total (`define-rec`, fuel-driven recursion, `Delay`) — a real program can
+// genuinely diverge under NbE, and without a budget that hangs the caller forever (an editor,
+// REPL, or LSP request) rather than reporting anything. This is a **usability** property only,
+// never a soundness one: exceeding the budget always *rejects* (a `TypeError`, propagated by
+// `check.rs`), it can never cause an otherwise-invalid term to be accepted. The default proof path
+// (`check_top`/`check_top_with`) stays completely unmetered — preserving completeness for
+// genuinely long-but-terminating proofs — metering is opt-in, for interactive callers that would
+// rather get a clean error than an unresponsive process (the LSP/REPL wiring in later waves).
+//
+// Implementation note: `eval`/`conv_at`/`quote_at`/`do_elim` return bare `Value`/`bool`/`Term`,
+// not `Result`, and are called from many dozens of sites throughout `check.rs`/`kan.rs` with that
+// assumption. Threading a `Result` (or an explicit fuel parameter) through every one of those
+// signatures — to support a rarely-used, purely-diagnostic opt-in feature — would be a large,
+// TCB-wide, high-risk signature change for a usability nicety. Instead, the budget is a
+// thread-local counter decremented at each engine's recursive entry point; exhaustion unwinds via
+// a *typed, crate-private* panic payload (never a bare string, so it can never be confused with a
+// genuine bug's panic) caught only at the metered entry point below. Every other panic payload is
+// re-raised via `resume_unwind` unchanged, so a real bug is never mistaken for (or masked as) a
+// budget exhaustion.
+std::thread_local! {
+    /// `None` = unmetered (the default; every existing call site is unaffected). `Some(0)` means
+    /// the budget is exhausted *this step* — checked and decremented at each tick.
+    static BUDGET: std::cell::Cell<Option<u64>> = std::cell::Cell::new(None);
+}
+
+/// The typed panic payload for budget exhaustion (crate-private, never constructed elsewhere) —
+/// see the module-level `N2` doc-comment for why a panic, and why this must be a distinct type
+/// rather than a string.
+struct BudgetExceeded;
+
+/// Consume one step of the current metering budget, if metering is active. Called at the
+/// recursive entry point of each of the engine's three traversals (`eval`, `conv_at`, `quote_at`)
+/// plus `do_elim` (which recurses on its own without necessarily re-entering `eval`). A no-op
+/// (zero cost beyond a thread-local load) when no budget is set — the unmetered path used by every
+/// existing caller is unaffected.
+#[inline]
+fn tick() {
+    if let Some(n) = BUDGET.get() {
+        if n == 0 {
+            std::panic::panic_any(BudgetExceeded);
+        }
+        BUDGET.set(Some(n - 1));
+    }
+}
+
+/// Run `f` with normalization metered at `budget` steps: if `f`'s use of `eval`/`conv`/`quote`
+/// (transitively) exhausts the budget, return `Err(())` instead of hanging or panicking the
+/// caller's thread. `Ok(f())` otherwise. Nesting is supported (the inner call gets its own budget
+/// and the outer budget is restored around it, RAII-style) but is not currently exercised.
+///
+/// This is the *only* supported way to set the metering budget — `BUDGET` has no other public
+/// accessor, so every unmetered call site (the entire existing kernel test suite, every proof,
+/// `check_top`/`check_top_with`) is provably unaffected by this feature's existence.
+/// Known UX rough edge: unless [`quiet_budget_panics`] has been installed, the default panic hook
+/// still prints a `thread '...' panicked at ...` line to stderr for every budget exhaustion, even
+/// though it is caught and turned into a clean `Err` here. `std::panic::set_hook`/`take_hook` are
+/// *process-global*, so `run_metered` itself cannot safely swap the hook per-call without racing
+/// concurrent panics on other threads; embedding binaries (the REPL/LSP) that call this repeatedly
+/// should install [`quiet_budget_panics`] exactly once at process start-up instead.
+pub fn run_metered<T>(budget: u64, f: impl FnOnce() -> T) -> Result<T, ()> {
+    let previous = BUDGET.replace(Some(budget));
+    struct RestoreOnDrop(Option<u64>);
+    impl Drop for RestoreOnDrop {
+        fn drop(&mut self) {
+            BUDGET.set(self.0);
+        }
+    }
+    let _restore = RestoreOnDrop(previous);
+
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(v) => Ok(v),
+        Err(payload) => {
+            if payload.downcast_ref::<BudgetExceeded>().is_some() {
+                Err(())
+            } else {
+                // Not ours: a genuine bug elsewhere in `f`. Never mask it as a budget exhaustion.
+                std::panic::resume_unwind(payload)
+            }
+        }
+    }
+}
+
+/// Install a process-wide panic hook that silently swallows [`BudgetExceeded`]'s marker (so a
+/// budget exhaustion doesn't print a scary `thread '...' panicked at ...` line to stderr) while
+/// delegating every other panic to whatever hook was previously installed, unchanged. Call this
+/// **once**, at process start-up, from a long-lived embedder of metered checking (a REPL or LSP
+/// server) — never from inside a hot per-request path, since `set_hook` is process-global and
+/// repeated installation would both race other threads and leak the previously-installed hook on
+/// every call.
+pub fn quiet_budget_panics() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if info.payload().downcast_ref::<BudgetExceeded>().is_none() {
+            previous(info);
+        }
+    }));
+}
+
 /// Push a pending elimination [`Frame`] onto an [`Value::OpNode`]'s continuation spine, producing
 /// the bubbled `OpNode`. This is how every eliminator propagates an effectful-neutral: instead of
 /// getting stuck, it records "do this elimination when the operation is eventually resumed".
 fn op_push(
     effect: crate::row::EffName,
     op: crate::signature::OpName,
+    type_args: Vec<Value>,
     arg: Box<Value>,
     mut cont: Vec<Frame>,
     frame: Frame,
@@ -21,6 +124,7 @@ fn op_push(
     Value::OpNode {
         effect,
         op,
+        type_args,
         arg,
         cont,
     }
@@ -63,6 +167,7 @@ pub fn do_handle(handler: &std::rc::Rc<crate::value::HandlerVal>, comp: Value) -
         Value::OpNode {
             effect,
             op,
+            type_args,
             arg,
             cont,
         } => {
@@ -80,6 +185,7 @@ pub fn do_handle(handler: &std::rc::Rc<crate::value::HandlerVal>, comp: Value) -
                 Value::OpNode {
                     effect,
                     op,
+                    type_args,
                     arg,
                     cont,
                 }
@@ -95,6 +201,7 @@ pub fn do_handle(handler: &std::rc::Rc<crate::value::HandlerVal>, comp: Value) -
 
 /// Evaluate a term in an environment to a semantic value (the "eval" half of NbE).
 pub fn eval(env: &Env, term: &Term) -> Value {
+    tick();
     match term {
         Term::Var(i) => env
             .lookup(*i)
@@ -128,8 +235,20 @@ pub fn eval(env: &Env, term: &Term) -> Value {
         Term::Pair(a, b) => Value::Pair(Box::new(eval(env, a)), Box::new(eval(env, b))),
         Term::Fst(p) => vfst(eval(env, p)),
         Term::Snd(p) => vsnd(eval(env, p)),
-        // Ascription is transparent at runtime: evaluate the underlying term.
-        Term::Ann(t, _ty) => eval(env, t),
+        // Ascription is transparent for *reduction* (the inner term is what actually computes),
+        // but when that computation gets stuck (e.g. a global whose body is an `Elim` on a free
+        // variable — the common case for a lemma applied to an abstract hypothesis), the raw
+        // `Value::Neutral` it produces has no memory of its own type, so a later `@0`/`@1`/`.fst`
+        // on it (say, inside a `trans` chain) would stay maximally stuck instead of reducing to
+        // the known boundary/projection. Reflecting the ascribed type onto that neutral (the same
+        // `reflect` that `env_for` applies to *hypothesis variables*) restores exactly that
+        // information, at no cost to conversion (`conv_at` already `η`-expands `ReflectedPath`/
+        // `ReflectedFun` uniformly with `PLam`/`Lam`, so this only ever *unblocks* boundary
+        // reduction, never changes what two values are convertible to).
+        Term::Ann(t, ty) => match eval(env, t) {
+            Value::Neutral(n) => reflect(n, &eval(env, ty)),
+            other => other,
+        },
 
         // ---- data / recursion (spec §2.7) ----
         Term::Data(name, params, indices) => Value::Data(
@@ -139,6 +258,55 @@ pub fn eval(env: &Env, term: &Term) -> Value {
         ),
         Term::Con(name, args) => {
             Value::Con(name.clone(), args.iter().map(|t| eval(env, t)).collect())
+        }
+        // Path constructor (spec §2.7, Wave 7/E4): at an interval endpoint this is *definitionally*
+        // the declared `lhs`/`rhs` boundary (looked up unconditionally, unlike `Con` above, which
+        // never consults the signature at `eval` time — `PCon` must, to decide whether `dim` has
+        // collapsed); at a free dimension it stays a genuine new canonical value. Scope: only a
+        // *nullary* path constructor (`args` empty) is implemented (see `Term::PCon`'s doc-comment);
+        // a non-empty argument telescope is out of the implemented HIT fragment.
+        Term::PCon {
+            data,
+            name,
+            args,
+            dim,
+        } => {
+            if !args.is_empty() {
+                unimplemented!(
+                    "eval: a path constructor with a non-empty argument telescope is out of the \
+                     implemented HIT fragment (Wave 7/E4: only nullary path constructors, e.g. \
+                     S¹'s `loop`, are supported)"
+                );
+            }
+            let rv = eval_interval(env, dim);
+            match rv {
+                Interval::I0 | Interval::I1 => {
+                    let sig = env.sig().unwrap_or_else(|| {
+                        panic!("eval: no signature in scope for path constructor {name:?}")
+                    });
+                    let decl = sig
+                        .get(data)
+                        .unwrap_or_else(|| panic!("eval: unknown data type {data:?}"));
+                    let (_, pc) = decl.path_constructor(name).unwrap_or_else(|| {
+                        panic!("eval: {name:?} is not a path constructor of {data:?}")
+                    });
+                    let endpoint = if matches!(rv, Interval::I0) {
+                        &pc.lhs
+                    } else {
+                        &pc.rhs
+                    };
+                    // Nullary path constructor: the endpoint is a closed term (no params/args to
+                    // substitute), so it evaluates correctly under a fresh signature-only env
+                    // regardless of the ambient `env`'s bindings.
+                    eval(&Env::with_sig(sig.clone()), endpoint)
+                }
+                other => Value::PCon {
+                    data: data.clone(),
+                    name: name.clone(),
+                    args: Vec::new(),
+                    dim: other,
+                },
+            }
         }
         Term::Elim {
             data,
@@ -245,9 +413,15 @@ pub fn eval(env: &Env, term: &Term) -> Value {
         Term::Unglue(g) => do_unglue(&eval(env, g)),
 
         // ---- effects (spec §4): perform builds an effectful-neutral with the identity cont ----
-        Term::Op { effect, op, arg } => Value::OpNode {
+        Term::Op {
+            effect,
+            op,
+            type_args,
+            arg,
+        } => Value::OpNode {
             effect: effect.clone(),
             op: op.clone(),
+            type_args: type_args.iter().map(|t| eval(env, t)).collect(),
             arg: Box::new(eval(env, arg)),
             cont: Vec::new(),
         },
@@ -388,11 +562,12 @@ pub fn apply(f: Value, arg: Value) -> Value {
         if let Value::OpNode {
             effect,
             op,
+            type_args,
             arg: oarg,
             cont,
         } = arg
         {
-            return op_push(effect, op, oarg, cont, Frame::AppFun(f));
+            return op_push(effect, op, type_args, oarg, cont, Frame::AppFun(f));
         }
     }
     match f {
@@ -407,9 +582,10 @@ pub fn apply(f: Value, arg: Value) -> Value {
         Value::OpNode {
             effect,
             op,
+            type_args,
             arg: oarg,
             cont,
-        } => op_push(effect, op, oarg, cont, Frame::App(arg)),
+        } => op_push(effect, op, type_args, oarg, cont, Frame::App(arg)),
         // Resuming a captured continuation `k v` (spec §4.3, deep handlers): replay the captured
         // spine onto the resume value `v`, then re-install the handler around the result so the
         // remainder of the computation stays handled.
@@ -427,11 +603,13 @@ pub fn do_unglue(glued: &Value) -> Value {
         Value::OpNode {
             effect,
             op,
+            type_args,
             arg,
             cont,
         } => op_push(
             effect.clone(),
             op.clone(),
+            type_args.clone(),
             arg.clone(),
             cont.clone(),
             Frame::Unglue,
@@ -488,9 +666,10 @@ pub fn papp(p: Value, r: Interval) -> Value {
         Value::OpNode {
             effect,
             op,
+            type_args,
             arg,
             cont,
-        } => op_push(effect, op, arg, cont, Frame::PApp(r)),
+        } => op_push(effect, op, type_args, arg, cont, Frame::PApp(r)),
         other => panic!("papp: not a path: {other:?}"),
     }
 }
@@ -503,9 +682,10 @@ pub fn vfst(p: Value) -> Value {
         Value::OpNode {
             effect,
             op,
+            type_args,
             arg,
             cont,
-        } => op_push(effect, op, arg, cont, Frame::Fst),
+        } => op_push(effect, op, type_args, arg, cont, Frame::Fst),
         other => panic!("fst: not a pair: {other:?}"),
     }
 }
@@ -518,9 +698,10 @@ pub fn vsnd(p: Value) -> Value {
         Value::OpNode {
             effect,
             op,
+            type_args,
             arg,
             cont,
-        } => op_push(effect, op, arg, cont, Frame::Snd),
+        } => op_push(effect, op, type_args, arg, cont, Frame::Snd),
         other => panic!("snd: not a pair: {other:?}"),
     }
 }
@@ -537,9 +718,10 @@ pub fn do_force(d: Value) -> Value {
         Value::OpNode {
             effect,
             op,
+            type_args,
             arg,
             cont,
-        } => op_push(effect, op, arg, cont, Frame::Force),
+        } => op_push(effect, op, type_args, arg, cont, Frame::Force),
         other => panic!("force: not a delay: {other:?}"),
     }
 }
@@ -586,6 +768,7 @@ fn resolve_interval(env: &Env, r: &Interval) -> Interval {
 /// hypothesis (a recursive `Elim` over the same motive/methods) immediately after each recursive
 /// argument. On a neutral scrutinee, build a stuck neutral `Elim`.
 fn do_elim(env: &Env, data: &DataName, motive: Value, methods: Vec<Value>, scrut: Value) -> Value {
+    tick();
     match scrut {
         Value::Con(con, args) => {
             // Find the constructor's index and its argument shape from the signature.
@@ -615,6 +798,41 @@ fn do_elim(env: &Env, data: &DataName, motive: Value, methods: Vec<Value>, scrut
             }
             result
         }
+        // Path constructor ι-rule (spec §2.7, Wave 7/E4): `Elim` commutes with the path
+        // application the constructor denotes — the eliminator's path *method* for this
+        // constructor (stored after all point methods, see `DataDecl::path_constructor`) is
+        // applied to the constructor's args (none, in the implemented nullary fragment) and then
+        // to the same dimension, mirroring how the point-constructor case above applies the point
+        // *method* to the constructor's args. This is well-typed by construction: the path
+        // method's type (built by `Checker::path_method_type`) is exactly the `PathP` whose
+        // endpoints are `Elim` applied to the constructor's declared `lhs`/`rhs` — so at `dim =
+        // I0`/`I1` this rule and `eval`'s endpoint-collapsing `PCon` rule necessarily agree (both
+        // ultimately select the same point method).
+        Value::PCon {
+            data: pdata,
+            name: pname,
+            args: pargs,
+            dim,
+        } => {
+            let sig = env
+                .sig()
+                .unwrap_or_else(|| panic!("do_elim: no signature in scope for {pdata:?}"));
+            let decl = sig
+                .get(&pdata)
+                .unwrap_or_else(|| panic!("do_elim: unknown data type {pdata:?}"));
+            let (pidx, _pc) = decl.path_constructor(&pname).unwrap_or_else(|| {
+                panic!("do_elim: {pname:?} is not a path constructor of {pdata:?}")
+            });
+            let method_idx = decl.constructors.len() + pidx;
+            let mut result = methods
+                .get(method_idx)
+                .cloned()
+                .unwrap_or_else(|| panic!("do_elim: missing method for path constructor index {pidx}"));
+            for arg in pargs.into_iter() {
+                result = apply(result, arg);
+            }
+            papp(result, dim)
+        }
         Value::Neutral(n) => Value::Neutral(Neutral::Elim {
             data: data.clone(),
             motive: Box::new(motive),
@@ -632,11 +850,13 @@ fn do_elim(env: &Env, data: &DataName, motive: Value, methods: Vec<Value>, scrut
         Value::OpNode {
             effect,
             op,
+            type_args,
             arg,
             cont,
         } => op_push(
             effect,
             op,
+            type_args,
             arg,
             cont,
             Frame::Elim {
@@ -666,6 +886,7 @@ pub fn quote_value_at(lvl: usize, dlvl: usize, value: &Value) -> Term {
 
 /// Quote with explicit term-level `lvl` and dimension-level `dlvl`.
 fn quote_at(lvl: usize, dlvl: usize, value: &Value) -> Term {
+    tick();
     match value {
         Value::Neutral(n) => quote_neutral(lvl, dlvl, n),
         Value::Univ(l) => Term::Univ(l.clone()),
@@ -692,6 +913,17 @@ fn quote_at(lvl: usize, dlvl: usize, value: &Value) -> Term {
             name.clone(),
             args.iter().map(|v| quote_at(lvl, dlvl, v)).collect(),
         ),
+        Value::PCon {
+            data,
+            name,
+            args,
+            dim,
+        } => Term::PCon {
+            data: data.clone(),
+            name: name.clone(),
+            args: args.iter().map(|v| quote_at(lvl, dlvl, v)).collect(),
+            dim: quote_interval(dlvl, dim),
+        },
         Value::PathP { family, lhs, rhs } => Term::PathP {
             family: Box::new(quote_dim_closure(lvl, dlvl, family)),
             lhs: Box::new(quote_at(lvl, dlvl, lhs)),
@@ -734,12 +966,14 @@ fn quote_at(lvl: usize, dlvl: usize, value: &Value) -> Term {
         Value::OpNode {
             effect,
             op,
+            type_args,
             arg,
             cont,
         } => {
             let mut t = Term::Op {
                 effect: effect.clone(),
                 op: op.clone(),
+                type_args: type_args.iter().map(|v| quote_at(lvl, dlvl, v)).collect(),
                 arg: Box::new(quote_at(lvl, dlvl, arg)),
             };
             for frame in cont {
@@ -890,6 +1124,7 @@ pub fn conv_dim(lvl: usize, dlvl: usize, a: &Value, b: &Value) -> bool {
 
 /// Definitional equality with explicit term-level and dimension-level counters.
 fn conv_at(lvl: usize, dlvl: usize, a: &Value, b: &Value) -> bool {
+    tick();
     match (a, b) {
         // η for functions: compare on a fresh argument regardless of which side is a Lam (or a
         // reflected function, or a runtime continuation — all are function values).
@@ -960,6 +1195,26 @@ fn conv_at(lvl: usize, dlvl: usize, a: &Value, b: &Value) -> bool {
                 && a1.len() == a2.len()
                 && a1.iter().zip(a2).all(|(a, b)| conv_at(lvl, dlvl, a, b))
         }
+        (
+            Value::PCon {
+                data: d1,
+                name: n1,
+                args: a1,
+                dim: r1,
+            },
+            Value::PCon {
+                data: d2,
+                name: n2,
+                args: a2,
+                dim: r2,
+            },
+        ) => {
+            d1 == d2
+                && n1 == n2
+                && a1.len() == a2.len()
+                && a1.iter().zip(a2).all(|(a, b)| conv_at(lvl, dlvl, a, b))
+                && quote_interval(dlvl, r1) == quote_interval(dlvl, r2)
+        }
         (Value::Neutral(n1), Value::Neutral(n2)) => {
             quote_neutral(lvl, dlvl, n1) == quote_neutral(lvl, dlvl, n2)
         }
@@ -970,18 +1225,22 @@ fn conv_at(lvl: usize, dlvl: usize, a: &Value, b: &Value) -> bool {
             Value::OpNode {
                 effect: e1,
                 op: o1,
+                type_args: t1,
                 arg: a1,
                 cont: c1,
             },
             Value::OpNode {
                 effect: e2,
                 op: o2,
+                type_args: t2,
                 arg: a2,
                 cont: c2,
             },
         ) => {
             e1 == e2
                 && o1 == o2
+                && t1.len() == t2.len()
+                && t1.iter().zip(t2).all(|(a, b)| conv_at(lvl, dlvl, a, b))
                 && conv_at(lvl, dlvl, a1, a2)
                 && c1.len() == c2.len()
                 && c1
@@ -1362,6 +1621,7 @@ mod tests {
         Value::OpNode {
             effect: crate::row::EffName::new("E"),
             op: "op".to_string(),
+            type_args: Vec::new(),
             arg: Box::new(Value::Univ(Level::Zero)),
             cont: Vec::new(),
         }
@@ -1467,6 +1727,7 @@ mod tests {
         let c = Value::OpNode {
             effect: crate::row::EffName::new("E"),
             op: "other".to_string(),
+            type_args: Vec::new(),
             arg: Box::new(Value::Univ(Level::Zero)),
             cont: Vec::new(),
         };
@@ -1483,9 +1744,182 @@ mod tests {
         let op = Term::Op {
             effect: crate::row::EffName::new("E"),
             op: "op".to_string(),
+            type_args: Vec::new(),
             arg: Box::new(u0()),
         };
         let v = eval(&Env::empty(), &op);
         assert_eq!(quote(0, &v), op);
+    }
+
+    // ---- Wave 5 / N1: NbE-with-sharing `conv` fast path ----
+    //
+    // `spore_reader.bl`'s documented normalizer-performance wall's dominant term is *repeated*
+    // re-cloning of the same already-built environment/closure across many reduction steps: a wide
+    // ambient environment (the whole loaded prelude sits in scope as a nested chain of bindings)
+    // made every single `Env::extend` an O(n) copy, and a deep `Elim` recursion (a fuel-driven
+    // structural recursion) made `do_elim`'s per-level `motive.clone()`/`methods.clone()` re-pay
+    // that O(n) cost once per level — an O(depth × env-size) compounding that `ValueChain` (an
+    // O(1)-clone persistent chain) closes.
+    //
+    // Residual, *not* fixed here (documented honestly rather than silently left untested): a
+    // wide flat `let`-chain still pays O(width²) the *first* time it is evaluated, because
+    // `eval`'s `Term::Lam`/`Pi`/`Sigma`/`PLam` arms still deep-`clone()` the remaining `Box<Term>`
+    // subtree into each new `Closure` — a one-time construction cost, not a repeated-reduction
+    // one, and it is orthogonal to `ValueChain`. Closing it fully needs `Term`'s own recursive
+    // fields to move from `Box<Term>` to `Rc<Term>` (so a closure can share a pointer into the
+    // original tree instead of cloning a subtree), which touches the term representation used by
+    // every crate in the pipeline (elab/kernel/recheck/codegen) — too large a TCB-adjacent change
+    // to take in the same pass as the `Env` fix. Flagged here as the natural N1 follow-on.
+
+    use crate::signature::{Arg, Constructor, DataDecl, Signature};
+    use crate::term::{ConName, DataName};
+    use std::time::{Duration, Instant};
+
+    /// `eval`/`quote`/`conv`/`do_elim` recurse natively in the Rust call stack (no trampoline), so
+    /// a several-thousand-deep term overflows the ~2 MiB default test-thread stack well before it
+    /// exercises anything interesting about environment sharing. Mirrors
+    /// `crates/blight-repl/tests/spore.rs`'s `on_big_stack` for the same reason.
+    fn on_big_stack<F: FnOnce() + Send + 'static>(f: F) {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024 * 1024)
+            .spawn(f)
+            .expect("spawn big-stack test thread")
+            .join()
+            .expect("big-stack test thread panicked (see message above)");
+    }
+
+    fn nat_name() -> DataName {
+        DataName("Nat".into())
+    }
+    fn nat_zero() -> Term {
+        Term::Con(ConName("zero".into()), vec![])
+    }
+    fn nat_succ(n: Term) -> Term {
+        Term::Con(ConName("succ".into()), vec![n])
+    }
+    fn nat_ty() -> Term {
+        Term::Data(nat_name(), vec![], vec![])
+    }
+    fn nat_sig() -> Signature {
+        let mut sig = Signature::empty();
+        sig.declare(DataDecl {
+            name: nat_name(),
+            params: vec![],
+            indices: vec![],
+            level: 0,
+            constructors: vec![
+                Constructor {
+                    name: ConName("zero".into()),
+                    args: vec![],
+                    result_indices: vec![],
+                },
+                Constructor {
+                    name: ConName("succ".into()),
+                    args: vec![Arg::Rec(vec![])],
+                    result_indices: vec![],
+                },
+            ],
+            path_constructors: vec![],
+        });
+        sig
+    }
+    /// A church-unary `Nat` literal `succ (succ (... zero))`, `n` deep.
+    fn nat_lit(n: u32) -> Term {
+        let mut t = nat_zero();
+        for _ in 0..n {
+            t = nat_succ(t);
+        }
+        t
+    }
+
+    /// `λ a. λ b. Elim Nat (λ_. Nat) [b, λn.λih. succ ih] a` — structural `plus`, recursive on
+    /// its *first* argument (so `plus (nat_lit n) zero` drives an `n`-deep `do_elim` recursion).
+    fn plus_term() -> Term {
+        Term::Lam(Box::new(Term::Lam(Box::new(Term::Elim {
+            data: nat_name(),
+            motive: Box::new(Term::Lam(Box::new(nat_ty()))),
+            methods: vec![
+                Term::Var(0), // zero case: the second argument `b`
+                Term::Lam(Box::new(Term::Lam(Box::new(nat_succ(Term::Var(0)))))), // λn.λih. succ ih
+            ],
+            scrutinee: Box::new(Term::Var(1)), // the first argument `a`
+        }))))
+    }
+
+    /// Build a term with `width` nested `let`-bound `Univ 0` binders wrapping `body`, so
+    /// evaluating `body` happens in an ambient environment `width` deep — modeling a large
+    /// loaded-prelude scope, independent of any elimination depth.
+    fn wrap_in_wide_env(width: u32, body: Term) -> Term {
+        let mut t = body;
+        for _ in 0..width {
+            t = Term::App(Box::new(Term::Lam(Box::new(t))), Box::new(u0()));
+        }
+        t
+    }
+
+    /// Red-first perf pin (Wave 5/N1): building a `width`-deep ambient environment used to cost
+    /// O(width²) (`Env::extend` copied every prior binding on each nested `let`). With the
+    /// `ValueChain` fix this is O(width); assert a generous, non-flaky wall-clock bound that a
+    /// quadratic implementation over this width would blow through by orders of magnitude.
+    /// Red-first perf pin (Wave 5/N1): the exact shape `spore_reader.bl`'s fuel-recursive
+    /// `resolve-ty`/`resolve-term` produce — a deep structurally-recursive `Elim` whose motive and
+    /// methods get re-cloned at every one of `depth` levels (`do_elim`'s `Value::Con` arm). Before
+    /// the fix, `motive.clone()`/`methods.clone()` deep-cloned an O(env-size) `Vec<Value>` at each
+    /// level; combined with the wide ambient environment below, this is the compounding blowup
+    /// the normalizer performance wall documents ("still running after minutes, multiple GB").
+    #[test]
+    fn deep_elim_conv_is_bounded_under_wide_ambient_env() {
+        on_big_stack(|| {
+            let sig = std::rc::Rc::new(nat_sig());
+            let depth = 2_500u32;
+            let width = 1_500u32;
+
+            // `plus (nat_lit depth) zero` inside a `width`-deep ambient environment: exercises
+            // both compounding dimensions of the documented blowup at once.
+            let plus_applied = Term::App(
+                Box::new(Term::App(Box::new(plus_term()), Box::new(nat_lit(depth)))),
+                Box::new(nat_zero()),
+            );
+            let term = wrap_in_wide_env(width, plus_applied);
+
+            let env = Env::with_sig(sig);
+            let start = Instant::now();
+            let result = eval(&env, &term);
+            let expected = eval(&env, &nat_lit(depth));
+            assert!(
+                conv(0, &result, &expected),
+                "plus (nat_lit {depth}) zero ≡ nat_lit {depth}"
+            );
+            let elapsed = start.elapsed();
+            assert!(
+                elapsed < Duration::from_secs(10),
+                "a {depth}-deep Elim under a {width}-wide ambient env took {elapsed:?} — the \
+                 do_elim/Env sharing fix regressed (see ValueChain's doc-comment)"
+            );
+        });
+    }
+
+    /// Discriminator twin: `conv` must still *reject* two structurally different deep Nats — the
+    /// sharing fast path changes only how much work is repeated, never what `conv` decides.
+    #[test]
+    fn deep_elim_conv_still_rejects_unequal_result() {
+        on_big_stack(|| {
+            let sig = std::rc::Rc::new(nat_sig());
+            let depth = 500u32;
+            let env = Env::with_sig(sig);
+
+            let plus_applied = Term::App(
+                Box::new(Term::App(Box::new(plus_term()), Box::new(nat_lit(depth)))),
+                Box::new(nat_zero()),
+            );
+            let result = eval(&env, &plus_applied);
+            // Off by one: not convertible.
+            let unequal = eval(&env, &nat_lit(depth + 1));
+            assert!(
+                !conv(0, &result, &unequal),
+                "plus (nat_lit {depth}) zero must NOT be convertible to nat_lit {}",
+                depth + 1
+            );
+        });
     }
 }

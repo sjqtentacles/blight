@@ -73,6 +73,17 @@ impl DataDecl {
             .enumerate()
             .find(|(_, c)| &c.name == name)
     }
+
+    /// Find a path constructor by name and its index *within the path-constructor list* (Wave
+    /// 7/E4). An eliminator's methods vector is `[point methods...][path methods...]`, in
+    /// declaration order within each group, so the method for path constructor index `i` lives at
+    /// `self.constructors.len() + i`.
+    pub fn path_constructor(&self, name: &ConName) -> Option<(usize, &PathConstructor)> {
+        self.path_constructors
+            .iter()
+            .enumerate()
+            .find(|(_, c)| &c.name == name)
+    }
 }
 
 /// The signature of one effect operation (spec §4.1): `op : Π(x:A). B`, where `A` is the
@@ -99,6 +110,12 @@ pub struct OpSig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffDecl {
     pub name: crate::row::EffName,
+    /// Parameter telescope (Wave 7/E2), like `DataDecl::params`: each a type, later params may
+    /// mention earlier ones. Every `OpSig` of this effect has its `param_ty`/`result_ty` as terms
+    /// over the ambient context extended with this telescope (outermost-first), then (for
+    /// `result_ty`) the operation's own value parameter `x` innermost. Empty for a
+    /// non-parameterized effect (every effect declared before E2).
+    pub params: Vec<Term>,
     pub ops: Vec<OpSig>,
 }
 
@@ -263,6 +280,7 @@ mod tests {
     fn state_eff() -> EffDecl {
         EffDecl {
             name: EffName("State".into()),
+            params: vec![],
             ops: vec![
                 OpSig {
                     name: "get".into(),
@@ -298,6 +316,7 @@ mod tests {
         let sig = Signature::new();
         let bad = EffDecl {
             name: EffName("Bad".into()),
+            params: vec![],
             ops: vec![
                 OpSig {
                     name: "op".into(),
@@ -322,6 +341,7 @@ mod tests {
         sig.declare_effect(state_eff());
         let clash = EffDecl {
             name: EffName("Other".into()),
+            params: vec![],
             ops: vec![OpSig {
                 name: "get".into(),
                 param_ty: unit_ty(),
@@ -344,8 +364,45 @@ mod tests {
         let sig = Signature::new();
         let p = EffDecl {
             name: EffName::partial(),
+            params: vec![],
             ops: vec![],
         };
         assert!(sig.check_effect(&p).is_err());
+    }
+
+    /// A parameterized effect (Wave 7/E2) declares a non-empty `params` telescope; well-formedness
+    /// (name/op uniqueness) is unaffected by parameterization.
+    #[test]
+    fn parameterized_effect_declares_and_looks_up() {
+        let mut sig = Signature::new();
+        // `Ref` with one type parameter `A` (de Bruijn 0 inside `param_ty`/`result_ty`):
+        // `get : Unit -> A`, `put : A -> Unit`.
+        let a_ty = Term::Univ(Level::Zero); // A : Type 0
+        let decl = EffDecl {
+            name: EffName("Ref".into()),
+            params: vec![a_ty],
+            ops: vec![
+                OpSig {
+                    name: "get".into(),
+                    param_ty: unit_ty(),
+                    // scope `[A, x:Unit]` (x innermost = index 0), so `A` is index 1.
+                    result_ty: Term::Var(1),
+                    cont_grade: crate::semiring::Grade::Omega,
+                },
+                OpSig {
+                    name: "put".into(),
+                    param_ty: Term::Var(0), // scope `[A]`: A is index 0
+                    result_ty: unit_ty(),
+                    cont_grade: crate::semiring::Grade::Omega,
+                },
+            ],
+        };
+        assert!(sig.check_effect(&decl).is_ok());
+        sig.declare_effect(decl);
+        let found = sig.get_effect(&EffName("Ref".into())).expect("declared");
+        assert_eq!(found.params.len(), 1, "Ref has one type parameter");
+        let (e, op) = sig.op_of("get").expect("op get");
+        assert_eq!(e.name, EffName("Ref".into()));
+        assert_eq!(op.name, "get");
     }
 }

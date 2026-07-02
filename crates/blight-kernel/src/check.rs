@@ -13,7 +13,7 @@ use crate::semiring::{Grade, Semiring};
 use crate::signature::{Arg, Constructor, DataDecl, Signature};
 use crate::term::{Cofib, DataName, Level, Term};
 use crate::usage::Usage;
-use crate::value::{Env, Neutral, Value};
+use crate::value::{Closure, Env, Neutral, Value};
 
 /// A kernel type error. Carries enough to report *why* a term failed to check; it never
 /// indicates unsoundness, only "this did not grow a proof" (spec §1.2).
@@ -38,6 +38,11 @@ pub enum TypeError {
     /// An effect-discipline violation (spec §4): an effect escaped where a pure/total computation
     /// was required, an unknown effect/operation was performed, or a handler was malformed.
     EffectError(String),
+    /// Wave 5/N2: an *opt-in metered* check (see [`check_top_metered`]) exhausted its
+    /// normalization budget before `eval`/`conv`/`quote` finished. This is a usability signal
+    /// only, never a soundness one — it can only ever cause a rejection, never an acceptance —
+    /// and it is unreachable from the default (unmetered) `check_top`/`check_top_with`.
+    NormalizationBudget,
 }
 
 impl std::fmt::Display for TypeError {
@@ -58,6 +63,11 @@ impl std::fmt::Display for TypeError {
                 write!(f, "cannot infer a type (needs an ascription): {s}")
             }
             TypeError::EffectError(s) => write!(f, "effect discipline: {s}"),
+            TypeError::NormalizationBudget => write!(
+                f,
+                "normalization budget exceeded (metered check; the term may diverge or simply be \
+                 very deep — this is not a soundness rejection)"
+            ),
         }
     }
 }
@@ -328,7 +338,12 @@ impl Checker {
             // the ambient demand `σ` (the continuation-multiplicity currency — a proof demanded at grade
             // `1` performs the effect once, etc.). The unhandled effect makes this an *effectful* term:
             // its label can only be discharged by an enclosing `Handle`.
-            Term::Op { effect, op, arg } => {
+            Term::Op {
+                effect,
+                op,
+                type_args,
+                arg,
+            } => {
                 let (eff, opsig) = self
                     .sig
                     .op_of(op)
@@ -339,17 +354,40 @@ impl Checker {
                         eff.name
                     )));
                 }
-                // Type the parameter and result against the ambient context (M2: op signatures are
-                // closed over the ambient context; `param_ty` is a type, `result_ty` a type in `x:A`).
+                // Parameterized effects (Wave 7/E2): the `perform` site must supply exactly one
+                // type argument per entry in the effect's declared telescope, each checked in the
+                // 0-fragment against its declared type — mirroring `Term::Data`'s own parameter
+                // check (see that rule's comment). A non-parameterized effect (the overwhelmingly
+                // common case, `eff.params` empty) takes an empty `type_args` and this loop is a
+                // no-op, so existing (pre-E2) programs are checked identically to before.
+                if type_args.len() != eff.params.len() {
+                    return Err(TypeError::EffectError(format!(
+                        "operation {op:?} of effect {:?} expects {} type argument(s), got {}",
+                        eff.name,
+                        eff.params.len(),
+                        type_args.len()
+                    )));
+                }
+                let mut pvals: Vec<Value> = Vec::with_capacity(type_args.len());
+                for (ta, pty_term) in type_args.iter().zip(eff.params.iter()) {
+                    let pty = eval(&self.env_with_vars(ctx, &pvals), pty_term);
+                    self.check_g(ctx, ta, &pty, Grade::Zero)?;
+                    pvals.push(eval(&self.env_for(ctx), ta));
+                }
+                // Type the parameter and result against the ambient context extended with the
+                // effect's (now-instantiated) type parameters; `param_ty` is a type, `result_ty` a
+                // type in `[params…, x:A]`.
                 let param_ty_term = opsig.param_ty.clone();
                 let result_ty_term = opsig.result_ty.clone();
-                let param_ty = eval(&self.env_for(ctx), &param_ty_term);
+                let param_ty = eval(&self.env_with_vars(ctx, &pvals), &param_ty_term);
                 // Check the operation argument at the ambient demand.
                 let (row_a, usage_a) = self.check_g(ctx, arg, &param_ty, sigma)?;
-                // Result type `B[a/x]`: evaluate `result_ty` in the environment extended with `a`'s value.
+                // Result type `B[params…, a/x]`: evaluate `result_ty` in the environment extended
+                // with the instantiated type parameters, then `a`'s value.
                 let a_val = eval(&self.env_for(ctx), arg);
-                let result_env = self.env_for(ctx).extend(a_val);
-                let result_ty = eval(&result_env, &result_ty_term);
+                let mut result_vals = pvals.clone();
+                result_vals.push(a_val);
+                let result_ty = eval(&self.env_with_vars(ctx, &result_vals), &result_ty_term);
                 // The operation contributes its effect label at the ambient demand, unioned with the
                 // argument's own row (the argument may itself be effectful).
                 let row = row_a.union(&Row::single(effect.clone(), sigma));
@@ -389,6 +427,19 @@ impl Checker {
                             "handler clause for unknown operation {op:?}"
                         ))
                     })?;
+                    // Wave 7/E2 scope gate: handling an operation of a *parameterized* effect is
+                    // not yet supported (a generic clause would need to be typed once per
+                    // instantiation, e.g. `Ref Nat`'s `get` vs `Ref Bool`'s `get`; E2 only wires
+                    // declaration + `perform` instantiation). Reject with a clear, dedicated error
+                    // rather than silently mistyping the clause against the *uninstantiated*
+                    // (parameter-open) signature.
+                    if !eff.params.is_empty() {
+                        return Err(TypeError::EffectError(format!(
+                            "handling operation {op:?} of the parameterized effect {:?} is not \
+                             yet supported (Wave 7/E2 scope: perform + typecheck only)",
+                            eff.name
+                        )));
+                    }
                     handled.push(eff.name.clone());
                     let param_ty_term = opsig.param_ty.clone();
                     let result_ty_term = opsig.result_ty.clone();
@@ -415,6 +466,12 @@ impl Checker {
                     let (clause_row, clause_usage) =
                         self.check_g(&ctx_xk, clause, &c_val_xk, sigma)?;
                     // Pop the two binders (`k` then `x`); enforce `k`'s multiplicity grade.
+                    //
+                    // Mechanized (Wave 8 / M10): `mechanization/BlightMeta/Effects.lean`'s
+                    // `HasType.handle` requires the identical bound (`δk ≤ opGrade`), and
+                    // `handle_abort_never_resumes`/`handle_linear_at_most_once` prove this check's
+                    // exact semantic content (spec §4.4) as corollaries of the grade order — see
+                    // `docs/metatheory.md` §2.5 and `docs/metatheory-mechanized.md`.
                     let (demand_k, clause_usage) = clause_usage.pop();
                     if !demand_k.leq(cont_grade) {
                         return Err(TypeError::GradeViolation(format!(
@@ -586,6 +643,50 @@ impl Checker {
                 Ok((data_ty, row, usage))
             }
 
+            // Path-constructor introduction (spec §2.7, Wave 7/E4 HITs). Mirrors `Term::Con` just
+            // above: in this Wave's implemented HIT fragment (a non-parameterized, non-indexed
+            // carrier with only nullary path constructors — see the `(PCon, Data)` rule in
+            // `check_g` for the general boundary/telescope checks), a path constructor's type is
+            // fully determined without any expected-type input, exactly like a point
+            // constructor's. This is what lets a `PCon` appear as an `Elim`'s *scrutinee* (needed
+            // to state the eliminator's path-computation rule, spec §2.7's ι-reduction extended to
+            // path constructors — see `path_method_type`/`normalize::do_elim`'s `Value::PCon` arm)
+            // without a surrounding type ascription: `infer_elim` recovers the scrutinee's type by
+            // inferring it, just as it does for a point-constructor scrutinee.
+            Term::PCon {
+                data,
+                name,
+                args,
+                dim: _,
+            } => {
+                let decl = self.sig.get(data).ok_or_else(|| {
+                    TypeError::BadDataDecl(format!("unknown inductive type {data:?}"))
+                })?;
+                let (_, pc) = decl.path_constructor(name).ok_or_else(|| {
+                    TypeError::BadDataDecl(format!(
+                        "{name:?} is not a path constructor of {data:?}"
+                    ))
+                })?;
+                if !decl.params.is_empty() || !decl.indices.is_empty() {
+                    return Err(TypeError::CannotInfer(format!(
+                        "path constructor {name:?} of a parameterized or indexed family is out \
+                         of the implemented HIT fragment (Wave 7/E4); ascribe an explicit type"
+                    )));
+                }
+                if !pc.args.is_empty() || !args.is_empty() {
+                    unimplemented!(
+                        "infer: a path constructor with a non-empty argument telescope is out \
+                         of the implemented HIT fragment (Wave 7/E4: only nullary path \
+                         constructors, e.g. S¹'s `loop`, are supported)"
+                    );
+                }
+                Ok((
+                    Value::Data(data.clone(), vec![], vec![]),
+                    Row::empty(),
+                    Usage::zero(n),
+                ))
+            }
+
             // The dependent eliminator (spec §2.7).
             Term::Elim {
                 data,
@@ -631,19 +732,24 @@ impl Checker {
                 self.check_cofib(ctx, cofib)?;
                 let a0 = self.family_at(ctx, family, crate::term::Interval::I0);
                 let (row, usage) = self.check_g(ctx, base, &a0, sigma)?;
+                let a1 = self.family_at(ctx, family, crate::term::Interval::I1);
                 if crate::kan::is_total(&self.resolve_cofib_at(ctx, cofib)) {
-                    let a1 = self.family_at(ctx, family, crate::term::Interval::I1);
                     if !conv(ctx.len(), &a0, &a1) {
                         return Err(TypeError::BadCubical(
                             "Transp with φ = ⊤ requires a constant type line".into(),
                         ));
                     }
+                } else if !conv(ctx.len(), &a0, &a1)
+                    && !kan_line_grade_skeleton_eq(ctx.len(), &a0, &a1)
+                {
+                    return Err(TypeError::BadCubical(
+                        "Transp along a non-constant type line whose Pi-formers disagree in \
+                         grade would launder the base's usage discipline (obligation 1.3.2, \
+                         docs/metatheory.md §1.3)"
+                            .into(),
+                    ));
                 }
-                Ok((
-                    self.family_at(ctx, family, crate::term::Interval::I1),
-                    row,
-                    usage,
-                ))
+                Ok((a1, row, usage))
             }
 
             // Homogeneous composition (spec §2.6). The carrier is type formation; base and tube carry σ.
@@ -659,6 +765,19 @@ impl Checker {
                 self.check_cofib(ctx, cofib)?;
                 let ctx_dim = ctx.extend_dim();
                 let (row_tube, usage_tube) = self.check_g(&ctx_dim, tube, &ty_val, sigma)?;
+                // Kan adequacy (CCHM's "the box commutes"): on every face where `cofib` holds,
+                // `base` must agree with the tube's own floor there, `tube[j:=0] ≡ base`. Without
+                // this, `base` and `tube@1` are two *independent* arbitrary values of `ty` with no
+                // relation to each other, and `hcomp` would mint a path between them regardless
+                // (a genuine unsoundness — e.g. `hcomp Nat (i=1) (j. Succ Zero) Zero : Path Nat
+                // Zero (Succ Zero)`, confusing distinct constructors). See `check_kan_adequacy` for
+                // why checking every *face* of `cofib` (not unconditionally) is both sound and
+                // faithful to CCHM.
+                self.check_kan_adequacy(ctx, cofib, |env| {
+                    let tube_floor = eval(&env.extend_dim(crate::term::Interval::I0), tube);
+                    let base_val = eval(env, base);
+                    (tube_floor, base_val)
+                })?;
                 Ok((
                     ty_val,
                     row_base.union(&row_tube),
@@ -681,8 +800,33 @@ impl Checker {
                 let fam_at_i =
                     self.family_at(ctx, family, crate::term::Interval::Dim(ctx.dim_len()));
                 let (row_tube, usage_tube) = self.check_g(&ctx_dim, tube, &fam_at_i, sigma)?;
+                // Kan adequacy (mirrors `HComp` above): `comp` is `hcomp`-after-`transp` (CCHM),
+                // so on every face where `cofib` holds, the tube's own floor must equal `base`
+                // *transported* into the family's line there — not `base` itself when the family
+                // genuinely varies. Without this, `base` and the tube's lid are unrelated
+                // arbitrary values and `comp` would mint a path between them regardless (the same
+                // unsoundness `HComp` guards against).
+                self.check_kan_adequacy(ctx, cofib, |env| {
+                    let family_closure = Closure {
+                        env: env.clone(),
+                        body: family.as_ref().clone(),
+                    };
+                    let base_val = eval(env, base);
+                    let transported = crate::kan::transp(&family_closure, &Cofib::Bot, &base_val);
+                    let tube_floor = eval(&env.extend_dim(crate::term::Interval::I0), tube);
+                    (tube_floor, transported)
+                })?;
+                let a1 = self.family_at(ctx, family, crate::term::Interval::I1);
+                if !conv(ctx.len(), &a0, &a1) && !kan_line_grade_skeleton_eq(ctx.len(), &a0, &a1) {
+                    return Err(TypeError::BadCubical(
+                        "Comp along a non-constant type line whose Pi-formers disagree in grade \
+                         would launder the base's usage discipline (obligation 1.3.2, \
+                         docs/metatheory.md §1.3)"
+                            .into(),
+                    ));
+                }
                 Ok((
-                    self.family_at(ctx, family, crate::term::Interval::I1),
+                    a1,
                     row_base.union(&row_tube),
                     usage_base.add(&usage_tube),
                 ))
@@ -814,6 +958,86 @@ impl Checker {
         }
     }
 
+    /// Check a Kan-adequacy ("the box commutes") compatibility condition on *every face* where
+    /// `cofib` holds. CCHM only requires `hcomp`/`comp`'s two sides (`base`, the tube's own floor)
+    /// to agree *on* `φ`; away from `φ` they are free to disagree, so checking them unconditionally
+    /// would reject sound cubical terms (e.g. the standard `hcomp`-based path-composition formula,
+    /// whose tube's floor is the composed-with path's own domain endpoint, not the outer `base`,
+    /// except exactly at the face where the outer cofibration holds).
+    ///
+    /// Real cofibrations here are finite De Morgan combinations of endpoint equations (`Eq0`/`Eq1`
+    /// under `And`/`Or`) over the handful of dimensions in scope, and `Eq0`/`Eq1`/`Min`/`Max`/`Neg`
+    /// constant-fold fully whenever every dimension they mention is itself a literal `I0`/`I1`
+    /// ([`crate::normalize::resolve_cofib`]/`eval_interval`). So the faces where `cofib` holds are
+    /// exactly recovered by enumerating the `2^k` *boundary* assignments (`I0`/`I1`) over the `k`
+    /// dimensions `cofib` actually mentions, leaving every other in-scope dimension bound to its
+    /// ordinary "generic point" neutral (as `env_for` already does) — checking compatibility once
+    /// at a generic point universally quantifies over that dimension for free (NbE parametricity),
+    /// so this is neither unsound nor incomplete, just finite.
+    ///
+    /// `eval_at_face` receives the specialized environment for one candidate face and must return
+    /// `(tube_floor, base)` evaluated under it; the two are required to be convertible whenever that
+    /// face actually satisfies `cofib`.
+    fn check_kan_adequacy(
+        &self,
+        ctx: &Context,
+        cofib: &Cofib,
+        mut eval_at_face: impl FnMut(&Env) -> (Value, Value),
+    ) -> Result<(), TypeError> {
+        fn collect_interval_dims(r: &crate::term::Interval, out: &mut Vec<usize>) {
+            match r {
+                crate::term::Interval::Dim(i) => {
+                    if !out.contains(i) {
+                        out.push(*i);
+                    }
+                }
+                crate::term::Interval::I0 | crate::term::Interval::I1 => {}
+                crate::term::Interval::Neg(r) => collect_interval_dims(r, out),
+                crate::term::Interval::Min(a, b) | crate::term::Interval::Max(a, b) => {
+                    collect_interval_dims(a, out);
+                    collect_interval_dims(b, out);
+                }
+            }
+        }
+        fn collect_cofib_dims(cofib: &Cofib, out: &mut Vec<usize>) {
+            match cofib {
+                Cofib::Top | Cofib::Bot => {}
+                Cofib::Eq0(r) | Cofib::Eq1(r) => collect_interval_dims(r, out),
+                Cofib::And(a, b) | Cofib::Or(a, b) => {
+                    collect_cofib_dims(a, out);
+                    collect_cofib_dims(b, out);
+                }
+            }
+        }
+        let mut dims = Vec::new();
+        collect_cofib_dims(cofib, &mut dims);
+        let base_env = self.env_for(ctx);
+        let face_count = 1u32 << dims.len();
+        for mask in 0..face_count {
+            let mut env = base_env.clone();
+            for (bit, &d) in dims.iter().enumerate() {
+                let endpoint = if (mask >> bit) & 1 == 1 {
+                    crate::term::Interval::I1
+                } else {
+                    crate::term::Interval::I0
+                };
+                env = env.override_dim(d, endpoint);
+            }
+            if !matches!(crate::normalize::resolve_cofib(&env, cofib), Cofib::Top) {
+                continue;
+            }
+            let (floor, base_val) = eval_at_face(&env);
+            if !conv_dim(ctx.len(), ctx.dim_len(), &floor, &base_val) {
+                return Err(TypeError::BadCubical(format!(
+                    "Kan adequacy violated on a face of the cofibration (tube's floor ≢ base there): {:?} ≢ {:?}",
+                    quote_value_at(ctx.len(), ctx.dim_len(), &floor),
+                    quote_value_at(ctx.len(), ctx.dim_len(), &base_val)
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Type the dependent eliminator (spec §2.7) for a non-parameterized inductive. Methods and the
     /// scrutinee are demanded at the ambient `sigma`; the motive is type formation (0-fragment).
     fn infer_elim(
@@ -931,10 +1155,17 @@ impl Checker {
         let _ = motive_lvl;
         let motive_val = eval(&self.env_for(ctx), motive);
 
-        // One method per constructor, in declaration order.
-        if methods.len() != decl.constructors.len() {
+        // One method per constructor, plus one per **path** constructor (spec §2.7, Wave 7/E4
+        // HITs), in declaration order: point methods first, then path methods (see
+        // `DataDecl::path_constructor`'s doc-comment for the index convention).
+        if methods.len() != decl.constructors.len() + decl.path_constructors.len() {
             return Err(TypeError::Mismatch {
-                expected: format!("{} method(s)", decl.constructors.len()),
+                expected: format!(
+                    "{} method(s) ({} point + {} path)",
+                    decl.constructors.len() + decl.path_constructors.len(),
+                    decl.constructors.len(),
+                    decl.path_constructors.len()
+                ),
                 found: format!("{}", methods.len()),
             });
         }
@@ -987,6 +1218,35 @@ impl Checker {
             let (method_row, method_usage) = self.check_g(ctx, method, &method_ty, sigma)?;
             usage = usage.add(&method_usage);
             row = row.union(&method_row);
+        }
+
+        // Path-constructor methods (spec §2.7, Wave 7/E4 HITs): each must produce a *path* in the
+        // motive between the eliminator applied to the constructor's declared `lhs`/`rhs`
+        // boundary. Scope (this Wave's probe, `docs/metatheory.md` §1.3 obligation 3): only a
+        // non-indexed carrier with nullary path constructors is implemented — the classic
+        // circle-style HIT (`S¹` with `base`/`loop`). An indexed carrier or a path constructor with
+        // a non-empty argument telescope fails safe rather than silently mis-elaborating.
+        if !decl.path_constructors.is_empty() {
+            if indexed {
+                unimplemented!(
+                    "infer_elim: a higher inductive type with indices is out of the implemented \
+                     HIT fragment (Wave 7/E4: only non-indexed HITs, e.g. S¹, are supported)"
+                );
+            }
+            for (pc_idx, pc) in decl.path_constructors.iter().enumerate() {
+                if !pc.args.is_empty() {
+                    unimplemented!(
+                        "infer_elim: a path constructor with a non-empty argument telescope is \
+                         out of the implemented HIT fragment (Wave 7/E4: only nullary path \
+                         constructors, e.g. S¹'s `loop`, are supported)"
+                    );
+                }
+                let method = &methods[decl.constructors.len() + pc_idx];
+                let method_ty = self.path_method_type(ctx, &decl, pc, motive, methods);
+                let (method_row, method_usage) = self.check_g(ctx, method, &method_ty, sigma)?;
+                usage = usage.add(&method_usage);
+                row = row.union(&method_row);
+            }
         }
 
         // Result is `P idx1..idxm scrutinee`.
@@ -1230,6 +1490,58 @@ impl Checker {
         }
 
         Ok(eval(&self.env_for(ctx), &body))
+    }
+
+    /// Build the expected type of the method for one **path** constructor of a non-indexed
+    /// higher inductive type (spec §2.7, Wave 7/E4; the caller guards `indexed`/`pc.args.is_empty()`
+    /// before calling — this method assumes both):
+    ///
+    /// `PathP (i. motive (PCon D pc.name [] i)) (Elim D motive methods pc.lhs) (Elim D motive
+    /// methods pc.rhs)`
+    ///
+    /// i.e. a path *in the motive* between the eliminator itself applied to the constructor's two
+    /// declared endpoints — the standard CCHM/HoTT circle-induction shape (`S¹-ind`'s `l : PathP (i
+    /// => P (loop i)) b b`), generalized to distinct (rather than necessarily equal) endpoints.
+    /// The two endpoint values are obtained by evaluating a *synthetic* `Elim` over the same
+    /// `motive`/`methods` at the declared `lhs`/`rhs` scrutinee — reusing the point-constructor ι
+    /// rule (`lhs`/`rhs` are themselves point-constructor terms) rather than re-deriving it, and
+    /// guaranteeing this method's boundary automatically agrees with `eval`'s independent
+    /// endpoint-collapsing `PCon` rule (both ultimately select the same point method — see
+    /// `normalize::do_elim`'s `Value::PCon` arm doc-comment).
+    fn path_method_type(
+        &self,
+        ctx: &Context,
+        decl: &DataDecl,
+        pc: &crate::signature::PathConstructor,
+        motive: &Term,
+        methods: &[Term],
+    ) -> Value {
+        let pcon_term = Term::PCon {
+            data: decl.name.clone(),
+            name: pc.name.clone(),
+            args: vec![],
+            dim: crate::term::Interval::Dim(0),
+        };
+        let family = Closure {
+            env: self.env_for(ctx),
+            body: Term::App(Box::new(motive.clone()), Box::new(pcon_term)),
+        };
+        let elim_at = |scrut: &Term| -> Value {
+            eval(
+                &self.env_for(ctx),
+                &Term::Elim {
+                    data: decl.name.clone(),
+                    motive: Box::new(motive.clone()),
+                    methods: methods.to_vec(),
+                    scrutinee: Box::new(scrut.clone()),
+                },
+            )
+        };
+        Value::PathP {
+            family,
+            lhs: Box::new(elim_at(&pc.lhs)),
+            rhs: Box::new(elim_at(&pc.rhs)),
+        }
     }
 
     // ===================================================================================
@@ -1770,6 +2082,51 @@ impl Checker {
                 Ok((row, usage))
             }
 
+            // Path-constructor intro (spec §2.7, Wave 7/E4 HITs): `PCon D c args r` against
+            // `Data D params indices`. `PCon` also has an infer rule (see the `Term::PCon` arm in
+            // `infer_g`, used e.g. when it appears as an `Elim`'s scrutinee); this checking rule is
+            // the one actually exercised when a `PCon` appears inside a `PLam` body, checked
+            // against the `PathP` the outer `Elim`'s `path_method_type` demands. Scope: only a
+            // nullary path constructor (`args` empty) of a non-parameterized, non-indexed `D` is
+            // implemented; `dim` is a pretype interval term needing no further checking here
+            // (mirrors `PApp`'s `r`).
+            (Term::PCon {
+                data,
+                name,
+                args,
+                dim: _,
+            }, Value::Data(d_name, params, indices)) => {
+                if data != d_name {
+                    return Err(TypeError::Mismatch {
+                        expected: format!("a path constructor of {d_name:?}"),
+                        found: format!("{name:?} (declared on {data:?})"),
+                    });
+                }
+                let decl = self.sig.get(data).ok_or_else(|| {
+                    TypeError::BadDataDecl(format!("unknown inductive type {data:?}"))
+                })?;
+                let (_, pc) = decl.path_constructor(name).ok_or_else(|| {
+                    TypeError::BadDataDecl(format!(
+                        "{name:?} is not a path constructor of {data:?}"
+                    ))
+                })?;
+                if !pc.args.is_empty() || !args.is_empty() {
+                    unimplemented!(
+                        "check_g: a path constructor with a non-empty argument telescope is out \
+                         of the implemented HIT fragment (Wave 7/E4: only nullary path \
+                         constructors, e.g. S¹'s `loop`, are supported)"
+                    );
+                }
+                if !params.is_empty() || !indices.is_empty() {
+                    unimplemented!(
+                        "check_g: a path constructor on a parameterized or indexed higher \
+                         inductive type is out of the implemented HIT fragment (Wave 7/E4: only \
+                         a non-parameterized, non-indexed carrier is supported)"
+                    );
+                }
+                Ok((Row::empty(), Usage::zero(ctx.len())))
+            }
+
             // Path-Intro (spec §2.6): `λ i. t` against `PathP (i. A) x y`; usage flows from the body.
             (Term::PLam(body), Value::PathP { family, lhs, rhs }) => {
                 let ctx_dim = ctx.extend_dim();
@@ -1837,6 +2194,19 @@ impl Checker {
                             "handler clause for unknown operation {op:?}"
                         ))
                     })?;
+                    // Wave 7/E2 scope gate: handling an operation of a *parameterized* effect is
+                    // not yet supported (a generic clause would need to be typed once per
+                    // instantiation, e.g. `Ref Nat`'s `get` vs `Ref Bool`'s `get`; E2 only wires
+                    // declaration + `perform` instantiation). Reject with a clear, dedicated error
+                    // rather than silently mistyping the clause against the *uninstantiated*
+                    // (parameter-open) signature.
+                    if !eff.params.is_empty() {
+                        return Err(TypeError::EffectError(format!(
+                            "handling operation {op:?} of the parameterized effect {:?} is not \
+                             yet supported (Wave 7/E2 scope: perform + typecheck only)",
+                            eff.name
+                        )));
+                    }
                     handled.push(eff.name.clone());
                     let param_ty_term = opsig.param_ty.clone();
                     let result_ty_term = opsig.result_ty.clone();
@@ -1854,6 +2224,9 @@ impl Checker {
                     let c_val_xk = eval(&self.env_for(&ctx_xk), &shift(&c_term, 2));
                     let (clause_row, clause_usage) =
                         self.check_g(&ctx_xk, clause, &c_val_xk, sigma)?;
+                    // Mechanized (Wave 8 / M10): see the identical check's comment in `infer_g`'s
+                    // `Term::Handle` arm above — `mechanization/BlightMeta/Effects.lean`'s
+                    // `HasType.handle`/`handle_abort_never_resumes`/`handle_linear_at_most_once`.
                     let (demand_k, clause_usage) = clause_usage.pop();
                     if !demand_k.leq(cont_grade) {
                         return Err(TypeError::GradeViolation(format!(
@@ -1900,6 +2273,53 @@ fn subtype(lvl: usize, actual: &Value, expected: &Value) -> bool {
         }
     }
     conv(lvl, actual, expected)
+}
+
+/// Obligation 1.3.2 (`docs/metatheory.md` §1.3, the "fully heterogeneous" graded-comp corner):
+/// a Kan line's two endpoints (`a0`, `a1`) may genuinely differ *as types* — that is the entire
+/// point of `transp`/`ua` (e.g. transporting along `Bool ≃ Bool` via negation, or general
+/// univalence). But `Transp`/`Comp` check their `base` **once**, against the *source* endpoint
+/// `a0`, and then hand back the *target* endpoint `a1` as the result type with no further
+/// re-verification. If `a0` and `a1` are both `Pi`-formers that disagree in *declared grade*, this
+/// silently launders the checked value's usage discipline: a closure verified to respect `Pi(ω,
+/// ...)` (its body may use its argument arbitrarily often) can be relabeled `Pi(1, ...)` (claiming
+/// its body uses its argument at most once) purely by riding a heterogeneously-graded `Glue` line,
+/// with zero re-checking. Since a `Pi`'s grade is a promise about the *body already checked*, not
+/// something re-derivable from the value alone, this is a genuine, reachable soundness gap — see
+/// `transp_heterogeneous_pi_grade_glue_line_rejected` for the concrete construction.
+///
+/// The fix is the "committed stratification" mentioned in the metatheory doc, made precise and
+/// minimal: whenever two endpoints of a Kan line are *not* already definitionally equal (`conv`),
+/// any `Pi`-formers occurring at corresponding positions must still agree in grade — the
+/// *quantitative skeleton* of a type line is transport-invariant even when the type itself is not.
+/// `Sigma`-formers (which carry no grade of their own) and any other matching head shape recurse
+/// structurally without imposing a constraint; mismatched head shapes (e.g. `Pi` vs `Data`) are not
+/// this obligation's concern and are left alone.
+///
+/// **Mechanized (Wave 8 / M10):** `mechanization/BlightMeta/GradeSkeleton.lean`'s
+/// `kanLineGradeSkeletonEq` transcribes this check verbatim over the mechanization's `Ty`, and
+/// `grade_skeleton_preserved_by_transp` proves the exact soundness content relied on above —
+/// whenever the check accepts two `Pi`-formers, their declared grades already coincide — as an
+/// independent, machine-checked Lean proof rather than solely the accept/reject test pair. See
+/// `docs/metatheory.md` §1.3's Track M7 section and `docs/metatheory-mechanized.md`.
+fn kan_line_grade_skeleton_eq(lvl: usize, a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Pi(g0, d0, c0), Value::Pi(g1, d1, c1)) => {
+            if g0 != g1 || !kan_line_grade_skeleton_eq(lvl, d0, d1) {
+                return false;
+            }
+            let fresh = Value::Neutral(Neutral::Var(lvl));
+            kan_line_grade_skeleton_eq(lvl + 1, &c0.apply(fresh.clone()), &c1.apply(fresh))
+        }
+        (Value::Sigma(d0, c0), Value::Sigma(d1, c1)) => {
+            if !kan_line_grade_skeleton_eq(lvl, d0, d1) {
+                return false;
+            }
+            let fresh = Value::Neutral(Neutral::Var(lvl));
+            kan_line_grade_skeleton_eq(lvl + 1, &c0.apply(fresh.clone()), &c1.apply(fresh))
+        }
+        _ => true,
+    }
 }
 
 /// Apply a function-valued [`Value`] to an argument, used to compute `P scrutinee`.
@@ -1957,6 +2377,19 @@ fn shift(term: &Term, n: usize) -> Term {
                 motive: Box::new(go(motive, n, cutoff)),
                 methods: methods.iter().map(|t| go(t, n, cutoff)).collect(),
                 scrutinee: Box::new(go(scrutinee, n, cutoff)),
+            },
+            // `dim` is a dimension term (separate de Bruijn space); only `args` can mention term
+            // variables.
+            Term::PCon {
+                data,
+                name,
+                args,
+                dim,
+            } => Term::PCon {
+                data: data.clone(),
+                name: name.clone(),
+                args: args.iter().map(|t| go(t, n, cutoff)).collect(),
+                dim: dim.clone(),
             },
             // Cubical formers. None of these bind a *term* variable (only dimensions, which live in
             // a separate de Bruijn space), so the term cutoff is unchanged when descending.
@@ -2022,9 +2455,15 @@ fn shift(term: &Term, n: usize) -> Term {
             Term::Unglue(p) => Term::Unglue(Box::new(go(p, n, cutoff))),
             // Effects: `Op` arg binds nothing; `Handle`'s return clause binds 1 (the result), each
             // op clause binds 2 (op-arg then continuation `k`); `EffTy`'s row is closed.
-            Term::Op { effect, op, arg } => Term::Op {
+            Term::Op {
+                effect,
+                op,
+                type_args,
+                arg,
+            } => Term::Op {
                 effect: effect.clone(),
                 op: op.clone(),
+                type_args: type_args.iter().map(|t| go(t, n, cutoff)).collect(),
                 arg: Box::new(go(arg, n, cutoff)),
             },
             Term::Handle {
@@ -2124,6 +2563,17 @@ fn subst_var(term: &Term, j: usize, replacement: &Term) -> Term {
                 methods: methods.iter().map(|t| go(t, j, repl)).collect(),
                 scrutinee: Box::new(go(scrutinee, j, repl)),
             },
+            Term::PCon {
+                data,
+                name,
+                args,
+                dim,
+            } => Term::PCon {
+                data: data.clone(),
+                name: name.clone(),
+                args: args.iter().map(|t| go(t, j, repl)).collect(),
+                dim: dim.clone(),
+            },
             Term::PathP { family, lhs, rhs } => Term::PathP {
                 family: Box::new(go(family, j, repl)),
                 lhs: Box::new(go(lhs, j, repl)),
@@ -2136,9 +2586,15 @@ fn subst_var(term: &Term, j: usize, replacement: &Term) -> Term {
             Term::Later(a) => Term::Later(Box::new(go(a, j, repl))),
             Term::Force(a) => Term::Force(Box::new(go(a, j, repl))),
             Term::EffTy(row, a) => Term::EffTy(row.clone(), Box::new(go(a, j, repl))),
-            Term::Op { effect, op, arg } => Term::Op {
+            Term::Op {
+                effect,
+                op,
+                type_args,
+                arg,
+            } => Term::Op {
                 effect: effect.clone(),
                 op: op.clone(),
+                type_args: type_args.iter().map(|t| go(t, j, repl)).collect(),
                 arg: Box::new(go(arg, j, repl)),
             },
             // Remaining cubical/effect formers are not produced by parameterized-data method
@@ -2240,6 +2696,30 @@ pub fn check_top_with(sig: Signature, term: Term, ty: Term) -> Result<Proof, Typ
         )));
     }
     Ok(Proof::trusted_new(Judgement::HasType { term, ty }))
+}
+
+/// Like [`check_top_with`], but with normalization metered at `budget` reduction steps
+/// (Wave 5/N2, see `crate::normalize::run_metered`'s doc-comment for the mechanism): a genuinely
+/// diverging (or just very deep) `conv`/`eval`/`quote` during checking returns
+/// `Err(TypeError::NormalizationBudget)` instead of hanging the caller's thread.
+///
+/// This is strictly **opt-in**. `check_top`/`check_top_with` (used by every existing proof and by
+/// the whole test suite) remain completely unmetered, preserving completeness for a proof that is
+/// merely deep, not diverging. Metering is for interactive callers — an LSP hover, a REPL
+/// evaluation, a `by compute` tactic attempt — that would rather receive a clean, honest error
+/// than block indefinitely. Exceeding the budget can only ever *reject*: the budget check lives
+/// entirely inside `crate::normalize`'s total functions, which decide nothing about whether a term
+/// is accepted, only how many reduction steps they are willing to spend deciding that.
+pub fn check_top_metered(
+    sig: Signature,
+    term: Term,
+    ty: Term,
+    budget: u64,
+) -> Result<Proof, TypeError> {
+    match crate::normalize::run_metered(budget, move || check_top_with(sig, term, ty)) {
+        Ok(result) => result,
+        Err(()) => Err(TypeError::NormalizationBudget),
+    }
 }
 
 #[cfg(test)]
@@ -2469,6 +2949,38 @@ mod tests {
         assert!(check_top(pi, u(1)).is_ok());
     }
 
+    /// `Term::Partial`/`Term::System` (spec §2.6 cubical layer, Wave 7/E3) are parseable at the
+    /// surface (`(Partial φ A)`, `(system (φ t) ...)`) but have **no inference rule**: nothing in
+    /// the prelude/examples/conformance corpus produces or consumes them (the `HComp`/`Comp`/
+    /// `Glue` formers carry their cofibration/tube directly rather than through the general
+    /// `Partial`/`System` machinery), so per the `docs/metatheory.md` §1.5 discipline
+    /// ("implement-exactly-what-the-corpus-reaches + fail-safe otherwise") they are deliberately
+    /// left unimplemented. This pins that the fail-safe is an honest `CannotInfer` **error**
+    /// (matching the independent re-checker's `Declined`), never a panic and never a silent
+    /// acceptance — the same guarantee `from_kernel_declines_partial_and_system` pins on the
+    /// re-checker side.
+    #[test]
+    fn partial_and_system_have_no_inference_rule() {
+        let checker = Checker::new(std::rc::Rc::new(Signature::empty()));
+        let ctx = Context::empty();
+        let partial = Term::Partial(crate::term::Cofib::Top, Box::new(u(0)));
+        assert!(
+            matches!(
+                checker.infer_g(&ctx, &partial, Grade::One),
+                Err(TypeError::CannotInfer(_))
+            ),
+            "`Partial ⊤ (Univ 0)` must fail-safe with CannotInfer, not panic or accept"
+        );
+        let system = Term::System(vec![]);
+        assert!(
+            matches!(
+                checker.infer_g(&ctx, &system, Grade::One),
+                Err(TypeError::CannotInfer(_))
+            ),
+            "an empty `system` must fail-safe with CannotInfer, not panic or accept"
+        );
+    }
+
     /// Row threading is behavior-preserving: a pure program infers the empty (pure) effect row,
     /// and `check_g` on a pure term returns the empty row. (The M2 guard for step 4.)
     #[test]
@@ -2507,6 +3019,7 @@ mod tests {
         let mut sig = Signature::empty();
         let decl = crate::signature::EffDecl {
             name: crate::row::EffName::new("E"),
+            params: vec![],
             ops: vec![crate::signature::OpSig {
                 name: "op".into(),
                 param_ty: u(1),
@@ -2523,6 +3036,7 @@ mod tests {
         Term::Op {
             effect: crate::row::EffName::new("E"),
             op: "op".into(),
+            type_args: vec![],
             arg: Box::new(arg),
         }
     }
@@ -2568,12 +3082,195 @@ mod tests {
         let bad = Term::Op {
             effect: crate::row::EffName::new("E"),
             op: "nope".into(),
+            type_args: vec![],
             arg: Box::new(u(0)),
         };
         assert!(matches!(
             checker.infer_g(&ctx, &bad, Grade::One),
             Err(TypeError::EffectError(_))
         ));
+    }
+
+    // ---- Wave 7 / E2: parameterized effects (perform instantiation) ------------------------
+
+    /// A signature with `Unit`/`Flag` (each a single nullary constructor) and a *parameterized*
+    /// effect `Ref` with one type parameter `A : Type 0`: `get : Unit -> A`, `put : A -> Unit`.
+    /// `param_ty`/`result_ty` reference the effect's own telescope slot via `Term::Var(0)`,
+    /// exactly like a one-parameter `DataDecl`'s constructor field types reference `decl.params`.
+    fn ref_eff_sig() -> Signature {
+        let mut sig = Signature::empty();
+        sig.declare(DataDecl {
+            name: DataName("Unit".into()),
+            params: vec![],
+            indices: vec![],
+            level: 0,
+            constructors: vec![Constructor {
+                name: ConName("tt".into()),
+                args: vec![],
+                result_indices: vec![],
+            }],
+            path_constructors: vec![],
+        });
+        sig.declare(DataDecl {
+            name: DataName("Flag".into()),
+            params: vec![],
+            indices: vec![],
+            level: 0,
+            constructors: vec![Constructor {
+                name: ConName("mk".into()),
+                args: vec![],
+                result_indices: vec![],
+            }],
+            path_constructors: vec![],
+        });
+        let decl = crate::signature::EffDecl {
+            name: crate::row::EffName::new("Ref"),
+            params: vec![u(0)], // A : Type 0
+            ops: vec![
+                crate::signature::OpSig {
+                    name: "get".into(),
+                    param_ty: Term::Data(DataName("Unit".into()), vec![], vec![]),
+                    // `result_ty`'s scope is `[A, x:Unit]` (x innermost = index 0), so `A` itself
+                    // is index 1.
+                    result_ty: Term::Var(1),
+                    cont_grade: Grade::Omega,
+                },
+                crate::signature::OpSig {
+                    name: "put".into(),
+                    // `param_ty`'s scope is just `[A]` (no `x` bound yet): index 0.
+                    param_ty: Term::Var(0),
+                    result_ty: Term::Data(DataName("Unit".into()), vec![], vec![]),
+                    cont_grade: Grade::Omega,
+                },
+            ],
+        };
+        sig.check_effect(&decl).expect("Ref is well-formed");
+        sig.declare_effect(decl);
+        sig
+    }
+
+    fn flag_ty() -> Term {
+        Term::Data(DataName("Flag".into()), vec![], vec![])
+    }
+    fn mk_flag() -> Term {
+        Term::Con(ConName("mk".into()), vec![])
+    }
+
+    /// Wave 7/E2 — Red: a parameterized effect's `perform` site supplies a type argument, which is
+    /// threaded into `param_ty`/`result_ty` exactly like `Data`'s own parameters: `perform (get @
+    /// Flag) tt : Flag`, *not* `Unit` — the type argument (not the value argument's type) drives
+    /// the instantiated result.
+    #[test]
+    fn parameterized_op_instantiates_type_arg() {
+        let checker = Checker::new(std::rc::Rc::new(ref_eff_sig()));
+        let ctx = Context::empty();
+        let get_flag = Term::Op {
+            effect: crate::row::EffName::new("Ref"),
+            op: "get".into(),
+            type_args: vec![flag_ty()],
+            arg: Box::new(tt()),
+        };
+        let (ty, row, _u) = checker
+            .infer_g(&ctx, &get_flag, Grade::One)
+            .expect("get @ Flag infers");
+        assert!(
+            matches!(ty, Value::Data(ref d, ..) if d.0 == "Flag"),
+            "result is instantiated to the type argument Flag, got {ty:?}"
+        );
+        assert_eq!(row.grade_of(&crate::row::EffName::new("Ref")), Grade::One);
+
+        // `put` is contravariant in the same parameter: `perform (put @ Flag) mk_flag : Unit`.
+        let put_flag = Term::Op {
+            effect: crate::row::EffName::new("Ref"),
+            op: "put".into(),
+            type_args: vec![flag_ty()],
+            arg: Box::new(mk_flag()),
+        };
+        let (ty2, _row2, _u2) = checker
+            .infer_g(&ctx, &put_flag, Grade::One)
+            .expect("put @ Flag infers");
+        assert!(matches!(ty2, Value::Data(ref d, ..) if d.0 == "Unit"));
+    }
+
+    /// Wave 7/E2 — Red: a `perform` site for a parameterized operation must supply exactly the
+    /// declared number of type arguments, each well-kinded; a missing or ill-kinded type argument
+    /// is rejected rather than silently ignored or mistyped.
+    #[test]
+    fn perform_at_wrong_type_arg_rejected() {
+        let checker = Checker::new(std::rc::Rc::new(ref_eff_sig()));
+        let ctx = Context::empty();
+
+        // Zero type arguments supplied for a one-parameter effect.
+        let missing = Term::Op {
+            effect: crate::row::EffName::new("Ref"),
+            op: "get".into(),
+            type_args: vec![],
+            arg: Box::new(tt()),
+        };
+        assert!(
+            matches!(
+                checker.infer_g(&ctx, &missing, Grade::One),
+                Err(TypeError::EffectError(_))
+            ),
+            "missing type argument is rejected"
+        );
+
+        // Two type arguments supplied for a one-parameter effect.
+        let extra = Term::Op {
+            effect: crate::row::EffName::new("Ref"),
+            op: "get".into(),
+            type_args: vec![flag_ty(), flag_ty()],
+            arg: Box::new(tt()),
+        };
+        assert!(
+            matches!(
+                checker.infer_g(&ctx, &extra, Grade::One),
+                Err(TypeError::EffectError(_))
+            ),
+            "extra type argument is rejected"
+        );
+
+        // A type argument that is not itself a `Type 0` (ill-kinded: `tt : Unit`) is rejected.
+        let bad_kind = Term::Op {
+            effect: crate::row::EffName::new("Ref"),
+            op: "get".into(),
+            type_args: vec![tt()],
+            arg: Box::new(tt()),
+        };
+        assert!(
+            checker.infer_g(&ctx, &bad_kind, Grade::One).is_err(),
+            "ill-kinded type argument is rejected"
+        );
+    }
+
+    /// Wave 7/E2 — Gate: handling an operation of a parameterized effect is an intentionally
+    /// unmodeled shape (see the module doc on the `Handle` rule) and must be rejected with a clear
+    /// error, not silently mistyped against the parameter-open signature.
+    #[test]
+    fn handling_parameterized_effect_op_rejected() {
+        let checker = Checker::new(std::rc::Rc::new(ref_eff_sig()));
+        let ctx = Context::empty();
+        let body = Term::Op {
+            effect: crate::row::EffName::new("Ref"),
+            op: "get".into(),
+            type_args: vec![flag_ty()],
+            arg: Box::new(tt()),
+        };
+        let term = Term::Handle {
+            body: Box::new(body),
+            return_clause: Box::new(Term::Var(0)),
+            op_clauses: vec![(
+                "get".into(),
+                Box::new(Term::App(Box::new(Term::Var(0)), Box::new(Term::Var(1)))),
+            )],
+        };
+        assert!(
+            matches!(
+                checker.infer_g(&ctx, &term, Grade::One),
+                Err(TypeError::EffectError(_))
+            ),
+            "handling a parameterized effect's operation is rejected"
+        );
     }
 
     /// A pure term still infers the empty row (sanity: `Op` does not pollute pure inference).
@@ -2642,6 +3339,7 @@ mod tests {
         });
         let decl = crate::signature::EffDecl {
             name: crate::row::EffName::new("E"),
+            params: vec![],
             ops: vec![crate::signature::OpSig {
                 name: "op".into(),
                 param_ty: unit_ty(),
@@ -2664,6 +3362,7 @@ mod tests {
         Term::Op {
             effect: crate::row::EffName::new("E"),
             op: "op".into(),
+            type_args: vec![],
             arg: Box::new(arg),
         }
     }
@@ -2755,6 +3454,7 @@ mod tests {
         });
         let decl = crate::signature::EffDecl {
             name: crate::row::EffName::new("E"),
+            params: vec![],
             ops: vec![crate::signature::OpSig {
                 name: "op".into(),
                 param_ty: unit_ty(),
@@ -2833,6 +3533,56 @@ mod tests {
         );
     }
 
+    /// **M16 (actor API safety):** the same continuation-multiplicity discipline that governs
+    /// `State`/exceptions is exactly what makes `std/actor.bl`'s linear `Send`/`Receive` safe. An
+    /// actor's `Send` is a *linear* (`1`-graded) effect — a cooperative scheduler resumes the
+    /// sending actor's continuation **exactly once** after the message is enqueued. A handler that
+    /// resumed it twice (e.g. a buggy scheduler double-delivering) is a `GradeViolation` caught by
+    /// the kernel, not a runtime race. This models that op as a linear effect and shows the
+    /// double-resume clause `send x k. k (k x)` is rejected — i.e. the actor API's resume-once
+    /// contract is *kernel-enforced*, independent of any (untrusted) scheduler.
+    #[test]
+    fn linear_actor_send_double_resume_rejected() {
+        // `Send` modeled as a single-op linear (grade 1) effect, like state.
+        let checker = Checker::new(std::rc::Rc::new(eff_sig_with_cont_grade(Grade::One)));
+        let ctx = Context::empty();
+        // send x k. k (k x): the scheduler resumes the sender twice — illegal at grade 1.
+        let double = Term::App(
+            Box::new(Term::Var(0)),
+            Box::new(Term::App(Box::new(Term::Var(0)), Box::new(Term::Var(1)))),
+        );
+        let term = handle_with_clause(double);
+        match checker.infer_g(&ctx, &term, Grade::One) {
+            Err(TypeError::GradeViolation(_)) => {}
+            other => panic!(
+                "expected GradeViolation for double-resume of a linear actor Send, got {other:?}"
+            ),
+        }
+    }
+
+    /// **M16 (actor API safety, positive):** a `Nondet`/`fork`-style actor op is `ω`-graded — a
+    /// scheduler that explores multiple continuations (speculative/branching execution) resumes `k`
+    /// any number of times and type-checks. This is the multi-shot half of the actor surface that
+    /// `std/actor.bl` declares at the surface (ω) default.
+    #[test]
+    fn nondet_actor_fork_multi_resume_ok() {
+        let checker = Checker::new(std::rc::Rc::new(eff_sig_with_cont_grade(Grade::Omega)));
+        let ctx = Context::empty();
+        let double = Term::App(
+            Box::new(Term::Var(0)),
+            Box::new(Term::App(Box::new(Term::Var(0)), Box::new(Term::Var(1)))),
+        );
+        let term = handle_with_clause(double);
+        let (ty, row, _u) = checker
+            .infer_g(&ctx, &term, Grade::One)
+            .expect("multi-resume of an ω-graded actor fork type-checks");
+        assert!(matches!(ty, Value::Data(ref d, ..) if d.0 == "Unit"));
+        assert!(
+            row.is_empty(),
+            "the handled actor label is discharged → empty row"
+        );
+    }
+
     /// `conv` computes through `Handle`: `handle (perform op tt) { return x. x ; op x k. (k x) }`
     /// resumes the continuation with `tt`, the (empty) spine returns `tt`, and `return` yields `tt`.
     /// So the whole handled computation is definitionally `tt`.
@@ -2854,6 +3604,7 @@ mod tests {
         let mut sig = unit_eff_sig();
         let f = crate::signature::EffDecl {
             name: crate::row::EffName::new("F"),
+            params: vec![],
             ops: vec![crate::signature::OpSig {
                 name: "fop".into(),
                 param_ty: unit_ty(),
@@ -2868,6 +3619,7 @@ mod tests {
         let fop = Term::Op {
             effect: crate::row::EffName::new("F"),
             op: "fop".into(),
+            type_args: vec![],
             arg: Box::new(tt()),
         };
         // Handler only handles `op` (of E), not `fop` (of F).
@@ -2889,6 +3641,7 @@ mod tests {
         let mut sig = unit_eff_sig();
         let f = crate::signature::EffDecl {
             name: crate::row::EffName::new("F"),
+            params: vec![],
             ops: vec![crate::signature::OpSig {
                 name: "fop".into(),
                 param_ty: unit_ty(),
@@ -2903,6 +3656,7 @@ mod tests {
         let fop = Term::Op {
             effect: crate::row::EffName::new("F"),
             op: "fop".into(),
+            type_args: vec![],
             arg: Box::new(tt()),
         };
         let term = handle_resume(fop);
@@ -3188,6 +3942,244 @@ mod tests {
             check_top_with(sig, base, Term::Data(s1, vec![], vec![])).is_ok(),
             "point constructor of the HIT checks"
         );
+    }
+
+    fn bool_name() -> DataName {
+        DataName("Bool".into())
+    }
+    fn bool_false() -> Term {
+        Term::Con(ConName("false".into()), vec![])
+    }
+    fn bool_ty() -> Term {
+        Term::Data(bool_name(), vec![], vec![])
+    }
+    fn s1_name() -> DataName {
+        DataName("S1".into())
+    }
+    fn s1_base() -> Term {
+        Term::Con(ConName("base".into()), vec![])
+    }
+    fn s1_loop(dim: Iv) -> Term {
+        Term::PCon {
+            data: s1_name(),
+            name: ConName("loop".into()),
+            args: vec![],
+            dim,
+        }
+    }
+
+    /// A [`Signature`] declaring both `Bool` (`false`/`true`) and the circle `S¹` (`base`/`loop`),
+    /// for tests eliminating the HIT *into* `Bool` (spec §2.7, Wave 7/E4).
+    fn s1_bool_sig() -> Signature {
+        let mut sig = Signature::empty();
+        sig.declare(DataDecl {
+            name: bool_name(),
+            params: vec![],
+            indices: vec![],
+            level: 0,
+            constructors: vec![
+                Constructor {
+                    name: ConName("false".into()),
+                    args: vec![],
+                    result_indices: vec![],
+                },
+                Constructor {
+                    name: ConName("true".into()),
+                    args: vec![],
+                    result_indices: vec![],
+                },
+            ],
+            path_constructors: vec![],
+        });
+        sig.declare(DataDecl {
+            name: s1_name(),
+            params: vec![],
+            indices: vec![],
+            level: 0,
+            constructors: vec![Constructor {
+                name: ConName("base".into()),
+                args: vec![],
+                result_indices: vec![],
+            }],
+            path_constructors: vec![PathConstructor {
+                name: ConName("loop".into()),
+                args: vec![],
+                lhs: s1_base(),
+                rhs: s1_base(),
+            }],
+        });
+        sig
+    }
+
+    /// `Term::PCon` gets a genuine *infer* rule (mirroring `Term::Con`'s, restricted to this
+    /// Wave's non-parameterized/non-indexed HIT fragment — see the `Term::PCon` arm in `infer_g`):
+    /// a path constructor needs no type ascription to stand as an `Elim`'s scrutinee, exactly like
+    /// a point constructor. This test exercises that directly: `PCon S1 loop [] I0`/`I1` type-checks
+    /// as an `Elim` scrutinee with no wrapping `Ann`, and — since `eval`'s endpoint-collapsing
+    /// `PCon` rule (`normalize::eval`'s `Term::PCon` arm) fires before `do_elim` ever sees a
+    /// `Value::PCon` — computes to *exactly* the same value as eliminating the point constructor
+    /// `base` it collapses to.
+    #[test]
+    fn hit_pcon_endpoint_scrutinee_agrees_with_point_constructor() {
+        let sig = std::rc::Rc::new(s1_bool_sig());
+        let checker = Checker::new(sig);
+        let ctx = Context::empty();
+
+        // motive: λ_. Bool (non-dependent motive into Bool)
+        let motive = Term::Lam(Box::new(bool_ty()));
+        // point method (base ↦ false); path method (loop ↦ the constant path at false)
+        let path_method = Term::PLam(Box::new(bool_false()));
+        let elim = |scrut: Term| Term::Elim {
+            data: s1_name(),
+            motive: Box::new(motive.clone()),
+            methods: vec![bool_false(), path_method.clone()],
+            scrutinee: Box::new(scrut),
+        };
+
+        assert!(
+            check_top_with(s1_bool_sig(), elim(s1_base()), bool_ty()).is_ok(),
+            "Elim on the point constructor `base` checks"
+        );
+
+        for endpoint in [Iv::I0, Iv::I1] {
+            let scrut = elim(s1_loop(endpoint.clone()));
+            assert!(
+                check_top_with(s1_bool_sig(), scrut.clone(), bool_ty()).is_ok(),
+                "Elim on `PCon S1 loop [] {endpoint:?}` must check with no ascription"
+            );
+            let lhs = eval(&checker.env_for(&ctx), &scrut);
+            let rhs = eval(&checker.env_for(&ctx), &elim(s1_base()));
+            assert!(
+                conv(0, &lhs, &rhs),
+                "Elim on `PCon S1 loop [] {endpoint:?}` must compute exactly like `base`"
+            );
+        }
+    }
+
+    /// The eliminator's path-computation rule (spec §2.7, Wave 7/E4 HITs), at a genuinely *free*
+    /// dimension rather than a collapsed endpoint: `λ i. S¹-elim motive m_base m_loop (loop @ i)`
+    /// must itself check as a path in `motive`'s image between the eliminator's two `base`-boundary
+    /// values, because eliminating a free-dimension `PCon` (`normalize::do_elim`'s `Value::PCon`
+    /// arm) applies the *path method* `m_loop` (here the constant path at `false`) to the same
+    /// dimension. This is the genuinely new content a point constructor cannot express — the
+    /// eliminator commuting with the path constructor everywhere along the path, not just at its
+    /// two ends.
+    #[test]
+    fn hit_path_constructor_elim_commutes_along_the_path() {
+        let motive = Term::Lam(Box::new(bool_ty()));
+        let path_method = Term::PLam(Box::new(bool_false()));
+        let elim_of_loop_at = |dim: Iv| Term::Elim {
+            data: s1_name(),
+            motive: Box::new(motive.clone()),
+            methods: vec![bool_false(), path_method.clone()],
+            scrutinee: Box::new(s1_loop(dim)),
+        };
+        // λ i. S¹-elim motive [false, plam _. false] (loop @ i)
+        let proof = Term::PLam(Box::new(elim_of_loop_at(Iv::Dim(0))));
+        // : PathP (_. Bool) false false
+        let path_ty = Term::PathP {
+            family: Box::new(bool_ty()),
+            lhs: Box::new(bool_false()),
+            rhs: Box::new(bool_false()),
+        };
+        assert!(
+            check_top_with(s1_bool_sig(), proof, path_ty).is_ok(),
+            "the eliminator must commute with the path constructor at a free dimension"
+        );
+    }
+
+    /// A negative mirror of `hit_path_constructor_elim_commutes_along_the_path`: if the path
+    /// method disagreed with the declared boundary equations (e.g. claiming `loop` eliminates to a
+    /// path from `false` to `true` while both endpoints actually reduce to `false`), the outer
+    /// `PathP`'s boundary check must reject it — the path method's own `check_g` against
+    /// `path_method_type` (spec §2.7) does not, by itself, protect the *caller's* stated boundary.
+    #[test]
+    fn hit_path_constructor_elim_wrong_boundary_rejected() {
+        let motive = Term::Lam(Box::new(bool_ty()));
+        let path_method = Term::PLam(Box::new(bool_false()));
+        let elim_of_loop_at = |dim: Iv| Term::Elim {
+            data: s1_name(),
+            motive: Box::new(motive.clone()),
+            methods: vec![bool_false(), path_method.clone()],
+            scrutinee: Box::new(s1_loop(dim)),
+        };
+        let proof = Term::PLam(Box::new(elim_of_loop_at(Iv::Dim(0))));
+        // : PathP (_. Bool) false true  — wrong rhs boundary (both actually reduce to `false`).
+        let bad_path_ty = Term::PathP {
+            family: Box::new(bool_ty()),
+            lhs: Box::new(bool_false()),
+            rhs: Box::new(Term::Con(ConName("true".into()), vec![])),
+        };
+        assert!(
+            check_top_with(s1_bool_sig(), proof, bad_path_ty).is_err(),
+            "a mis-stated boundary must be rejected even though the path method itself is fine"
+        );
+    }
+
+    /// A term eliminating `S¹` into `Bool` whose *point* method is the outer λ's own binder `x`
+    /// (`Var 0`) — and whose *path* method is therefore *forced* to be `plam _. x` too: since
+    /// `base` reduces (via the point method) to `x`, `path_method_type` demands a proof of `PathP
+    /// (_.Bool) x x`, and the only way to inhabit that with `x` itself in scope is to mention `x`
+    /// again. Shared by the two `grades_across_hit_path_induction_*` probes below, which differ
+    /// only in the outer `Pi`'s declared grade for `x`.
+    fn hit_elim_using_binder_in_both_point_and_path_method() -> Term {
+        let motive = Term::Lam(Box::new(bool_ty()));
+        let methods = vec![Term::Var(0), Term::PLam(Box::new(Term::Var(0)))];
+        let body = Term::Elim {
+            data: s1_name(),
+            motive: Box::new(motive),
+            methods,
+            scrutinee: Box::new(s1_base()),
+        };
+        Term::Lam(Box::new(body))
+    }
+
+    /// **Probe** (spec's Wave 7/E4 "obligation 3", `docs/metatheory.md` §1.3): does eliminating a
+    /// higher inductive type interact *soundly* with the grade discipline, or can a *path*-method
+    /// "launder" a resource the way a heterogeneous Kan line could (obligation 1.3.2, fixed by
+    /// `kan_line_grade_skeleton_eq`)? At grade `ω` (unrestricted) the shared construction above —
+    /// which references its own binder `x` from *both* the point method and the (forced) path
+    /// method — must be accepted: an unrestricted resource may be looked at as many times as
+    /// needed.
+    #[test]
+    fn grades_across_hit_path_induction_unrestricted_accepted() {
+        let term = hit_elim_using_binder_in_both_point_and_path_method();
+        let ty = Term::Pi(Grade::Omega, Box::new(bool_ty()), Box::new(bool_ty()));
+        assert!(
+            check_top_with(s1_bool_sig(), term, ty).is_ok(),
+            "an unrestricted (ω) resource referenced by both the point and path method must check"
+        );
+    }
+
+    /// The **negative** half of the same probe (and the interesting result): at grade `1`
+    /// (affine — at most once, per `linear_var_dropped_allowed_affine`/`linear_var_used_twice_
+    /// rejected`), the *identical* term is correctly **rejected**. The point method's use of `x`
+    /// (demand `1`) and the path method's *forced* re-use of `x` to inhabit its own boundary
+    /// (another demand `1`) sum to demand `ω` (`1 + 1 = ω`, `semiring::Grade::add`), and `ω ≤ 1`
+    /// is false ⟹ `GradeViolation` — exactly the existing `infer_elim` machinery
+    /// (`usage = usage.add(&method_usage)`, already summing usage across a plain point-constructor
+    /// eliminator's branches) extended, unmodified, to a HIT's path branch.
+    ///
+    /// This is *not* a bug to fix: it is the sound (if conservative) generalization of "grading
+    /// sums usage across every branch, since only one branch runs but the checker cannot know
+    /// which" to a branch that happens to be a coherence proof rather than a plain constructor arm.
+    /// So **obligation 3 resolves negative** for this Wave's implemented fragment: no
+    /// grade-skeleton-style fix (analogous to `kan_line_grade_skeleton_eq`) is needed for
+    /// eliminating a *nullary*, non-indexed, non-parameterized HIT's path constructor. See
+    /// `docs/metatheory.md` §1.3 obligation 3 for the write-up and its documented boundary — a
+    /// path constructor with its own (possibly recursive) argument telescope is out of this Wave's
+    /// scope and could reopen the obligation.
+    #[test]
+    fn grades_across_hit_path_induction_linear_double_use_rejected() {
+        let term = hit_elim_using_binder_in_both_point_and_path_method();
+        let ty = Term::Pi(Grade::One, Box::new(bool_ty()), Box::new(bool_ty()));
+        match check_top_with(s1_bool_sig(), term, ty) {
+            Err(TypeError::GradeViolation(_)) => {}
+            other => panic!(
+                "expected a GradeViolation (the point method's use of `x` plus the path method's \
+                 forced boundary re-use sum to ω, exceeding the declared grade 1); got {other:?}"
+            ),
+        }
     }
 
     // ---- L4: Path typing (spec §2.6) ----
@@ -4046,5 +5038,333 @@ mod tests {
             Grade::Zero,
             "type-line-only A stays erased across transp"
         );
+    }
+
+    // ---- Track M3 (obligation 1.3.2): face-usage for the *general* `comp` over a non-trivial,
+    // graded type line. Every probe above uses `hcomp`/`transp` with a *flat* family (`family =
+    // Var(k)`, an opaque `U0`-typed variable with no internal structure) — before the two tests
+    // below, `Term::Comp`'s grade/usage accounting had *no* coverage at all, constant-family or
+    // otherwise. These give it an accounting probe whose family is itself "graded data": a real,
+    // grade-annotated `Pi` former (`Pi(1, A, A)`), not an abstract type variable — see the doc
+    // comment on the first test for exactly what this does and does not establish toward the
+    // obligation (in particular, this line is still *constant* across the comp's own dimension;
+    // a genuinely *heterogeneous* line, differently graded at each endpoint via an inhabited
+    // `Glue`, remains open — see `docs/metatheory.md` §1.3).
+
+    /// `comp` sums the demand of its *base* and its *tube* exactly like `hcomp`
+    /// (`hcomp_base_and_tube_sum_demand_linear_rejected`), and — the new thing this test adds — the
+    /// same holds when the type line `comp` composes over is a genuine `Pi`-graded former (`Pi(1,
+    /// A, A)`) instead of a bare opaque variable. `f :¹ (Pi 1 A A)` used in *both* `comp`'s base and
+    /// tube is demanded `1 + 1 = ω`, and `ω ≤ 1` is false ⟹ `GradeViolation` — the same additive
+    /// semiring accounting confirmed past the "family is an opaque variable" degenerate shape every
+    /// prior Kan-op grade probe used. This line is still *constant* along the comp's own dimension
+    /// (it does not itself mention the bound `j`) — obligation 1.3.2's *fully heterogeneous* case
+    /// (a line whose grade genuinely differs at each endpoint, which needs an inhabited `Glue`) is
+    /// left open and documented rather than attempted with a faked construction.
+    #[test]
+    fn comp_base_and_tube_over_graded_pi_line_sum_demand_linear_rejected() {
+        // (A :⁰ U0) → (f :¹ (Pi 1 A A)) → (Pi 1 A A), body: comp (j. Pi 1 A A) ⊥ (j. f) f — f in
+        // both the comp's tube and base. `A` is `Var(0)` where only `A` is bound (as in `ty`'s `f`
+        // binder domain) and `Var(1)` once `f` is *also* bound (inside `body`'s two `Lam`s, where
+        // the `Comp`'s `family` itself lives).
+        // `Pi(1, A, A)`'s *own* codomain occurrence of `A` is itself evaluated one binder deeper
+        // than its domain occurrence (under the Pi-former's own, unused, domain binder), so —
+        // exactly like `A` gaining an index between `ty`'s `f` binder and `body`'s two `Lam`s
+        // below — it must be `Var(k+1)` relative to the domain's `Var(k)`, not the same index
+        // twice. `pi_a_a(k)` builds `Pi(1, A, A)` correctly for any context depth `k` where `A`
+        // sits (before that Pi's own domain binder is pushed).
+        fn pi_a_a(k: usize) -> Term {
+            Term::Pi(
+                Grade::One,
+                Box::new(Term::Var(k)),
+                Box::new(Term::Var(k + 1)),
+            )
+        }
+        // `pi1_a_a_outer` is `f`'s *domain* (only `A` in scope there, at index 0); `pi1_a_a_inner`
+        // is both `ty`'s final *codomain* (`A` is now at index 1, since `f`'s own binder is also
+        // in scope for a Pi's codomain) and the `Comp`'s `family` inside `body` (same depth).
+        let pi1_a_a_outer = pi_a_a(0);
+        let pi1_a_a_inner = pi_a_a(1);
+        let ty = Term::Pi(
+            Grade::Zero,
+            Box::new(u(0)),
+            Box::new(Term::Pi(
+                Grade::One,
+                Box::new(pi1_a_a_outer),
+                Box::new(pi1_a_a_inner.clone()),
+            )),
+        );
+        let body = Term::Lam(Box::new(Term::Lam(Box::new(Term::Comp {
+            family: Box::new(pi1_a_a_inner), // i. Pi 1 A A — a real Pi former, not `Var(k)`
+            cofib: Cofib::Bot,
+            tube: Box::new(Term::Var(0)), // f, under the comp's dim binder (term index unchanged)
+            base: Box::new(Term::Var(0)), // f
+        }))));
+        match check_top(body, ty) {
+            Err(TypeError::GradeViolation(_)) => {}
+            other => panic!(
+                "comp base+tube each demand f over a graded Pi-former line, summing to ω on a linear f ⟹ GradeViolation, got {other:?}"
+            ),
+        }
+    }
+
+    /// The accept twin: with `f :^ω (Pi 1 A A)`, the identical `comp` over the identical
+    /// graded-Pi-former line checks (ω absorbs the double demand). Confirms the rejection above is
+    /// the additive grade arithmetic discriminating, not `comp` over this family shape being
+    /// inherently untypable.
+    #[test]
+    fn comp_base_and_tube_over_graded_pi_line_omega_accepted() {
+        fn pi_a_a(k: usize) -> Term {
+            Term::Pi(
+                Grade::One,
+                Box::new(Term::Var(k)),
+                Box::new(Term::Var(k + 1)),
+            )
+        }
+        let pi1_a_a_outer = pi_a_a(0);
+        let pi1_a_a_inner = pi_a_a(1);
+        let ty = Term::Pi(
+            Grade::Zero,
+            Box::new(u(0)),
+            Box::new(Term::Pi(
+                Grade::Omega,
+                Box::new(pi1_a_a_outer),
+                Box::new(pi1_a_a_inner.clone()),
+            )),
+        );
+        let body = Term::Lam(Box::new(Term::Lam(Box::new(Term::Comp {
+            family: Box::new(pi1_a_a_inner),
+            cofib: Cofib::Bot,
+            tube: Box::new(Term::Var(0)),
+            base: Box::new(Term::Var(0)),
+        }))));
+        assert!(
+            check_top(body, ty).is_ok(),
+            "an ω-graded variable may be used in both comp's base and tube over a graded Pi-former line"
+        );
+    }
+
+    // ---- M7 (obligation 1.3.2): the *fully heterogeneous* graded-comp corner. Every probe above
+    // uses a type line that is *constant* across its own dimension (the family term does not
+    // actually mention the bound dimension variable, so `a0 ≡ a1` by `conv` trivially). This
+    // section builds a genuinely non-constant line via an inhabited `Glue`: `i. Glue (Pi ω A A)
+    // (i=0) (Pi 1 A A) e`, whose i=0 face is `Pi(ω,A,A)` and whose i=1 face is `Pi(1,A,A)` — the
+    // *same* Pi-former shape, differing only in declared grade. `Glue`'s CCHM boundary reductions
+    // (`normalize::eval`, `Term::Glue` arm) collapse this to the plain (non-Glue-wrapped) endpoint
+    // type at each face, so `family_at` returns a bare graded `Pi` at both `I0` and `I1` — no
+    // special-casing of `Value::Glue` as an expected type is even needed for this probe.
+    //
+    // Finding: before the fix below, `Transp`/`Comp`'s rule checked `base` *once*, against the
+    // *source* endpoint `a0`, and returned the *target* endpoint `a1` as the result type with **no
+    // requirement that `a0` and `a1` agree in Pi-grade** when the line is genuinely non-constant.
+    // Concretely: `base = λx. (x, x)` type-checks against `Pi(ω, A, Sigma A A)` (its body demands
+    // `x` at `ω = 1+1`, which an `ω` binder permits) — but the *very same* `Transp` expression is
+    // then ascribed the type `Pi(1, A, Sigma A A)` (the i=1 face), a **linear** Pi, with zero
+    // re-verification that the body actually respects grade `1`. This launders a genuinely
+    // ω-consuming closure into a claimed-linear interface purely by riding a heterogeneously-graded
+    // `Glue` line — the reachable instance of obligation 1.3.2 the metatheory doc flags as open.
+    //
+    // The fix (`kan_line_grade_skeleton_eq`, committed stratification, §1.3): when a Kan line's
+    // two endpoints are genuinely distinct (`!conv(a0,a1)`) — which is fine in general, that's the
+    // entire point of `transp`/`ua` — any `Pi`-formers appearing at corresponding positions in the
+    // two endpoints must agree in *grade* (the type itself may differ; the quantitative skeleton
+    // may not). This is the minimal restriction that blocks the laundering above while leaving
+    // every existing (constant-line) Kan probe, and genuine `ua`-style transport between
+    // non-Pi-headed types, untouched.
+
+    /// The malicious construction from the finding above must be REJECTED: a `transp` along a
+    /// non-constant `Pi(ω,A,Σ A A) ⇝ Pi(1,A,Σ A A)` Glue line, given a base whose body genuinely
+    /// demands `ω` on its bound variable, must not be permitted to relabel that value as
+    /// linearly-graded.
+    #[test]
+    fn transp_heterogeneous_pi_grade_glue_line_rejected() {
+        // Domain and codomain are both the constant type `Sigma U0 U0` / `U0` (no data
+        // declarations needed — the probe is entirely about grade bookkeeping, not the
+        // transported value's data shape, and the codomain does not depend on the bound
+        // variable's *value*, only the *term* `Pair(Var 0, Var 0)` uses it — twice).
+        // `Pi(g, U0, Sigma U0 U0)` — the body `(x, x)` below needs `g = ω` to type-check.
+        fn pi_g(g: Grade) -> Term {
+            Term::Pi(
+                g,
+                Box::new(u(0)),
+                Box::new(Term::Sigma(Box::new(u(0)), Box::new(u(0)))),
+            )
+        }
+        let src_pi = pi_g(Grade::Omega); // i = 0 face (the `ty` field of the Glue)
+        let tgt_pi = pi_g(Grade::One); // i = 1 face (the `base` field of the Glue)
+        // `i. Glue (Pi 1 A A) (i=0) (Pi ω A A) e` — `equiv` need only be *inferable*; `Term::Glue`'s
+        // formation rule (`check.rs`, `Term::Glue` arm) does not check it has any particular
+        // `Equiv`-shape, and type-*checking* the `Transp` below never forces `equiv`'s value (no
+        // `kan::transp_glue` reduction happens during `check_g`, only during `eval`/reduction of
+        // the whole expression, which this probe never triggers).
+        let family = Term::Glue {
+            base: Box::new(tgt_pi.clone()),
+            cofib: Cofib::Eq0(crate::term::Interval::Dim(0)),
+            ty: Box::new(src_pi),
+            equiv: Box::new(u(0)),
+        };
+        let base = Term::Lam(Box::new(Term::Pair(
+            Box::new(Term::Var(0)),
+            Box::new(Term::Var(0)),
+        )));
+        let term = Term::Transp {
+            family: Box::new(family),
+            cofib: Cofib::Bot,
+            base: Box::new(base),
+        };
+        match check_top(term, tgt_pi) {
+            Err(TypeError::BadCubical(msg)) => {
+                assert!(
+                    msg.contains("grade") || msg.contains("1.3.2"),
+                    "rejection should explain the grade-skeleton mismatch, got: {msg}"
+                );
+            }
+            other => panic!(
+                "a Transp whose Glue line changes a Pi's grade must be rejected (obligation \
+                 1.3.2 laundering), got {other:?}"
+            ),
+        }
+    }
+
+    /// The accept twin: the *same* Glue line shape, but with BOTH faces declared at grade `ω` (a
+    /// genuinely constant grade skeleton, even though the underlying `A` in each Pi could still
+    /// differ in general) must still be usable — confirms the rejection above is the grade
+    /// *mismatch* discriminating, not `Transp` over any `Glue`-headed family being rejected
+    /// wholesale.
+    #[test]
+    fn transp_homogeneous_pi_grade_glue_line_accepted() {
+        fn pi_g(g: Grade) -> Term {
+            Term::Pi(
+                g,
+                Box::new(u(0)),
+                Box::new(Term::Sigma(Box::new(u(0)), Box::new(u(0)))),
+            )
+        }
+        let src_pi = pi_g(Grade::Omega);
+        let tgt_pi = pi_g(Grade::Omega);
+        let family = Term::Glue {
+            base: Box::new(tgt_pi.clone()),
+            cofib: Cofib::Eq0(crate::term::Interval::Dim(0)),
+            ty: Box::new(src_pi),
+            equiv: Box::new(u(0)),
+        };
+        let base = Term::Lam(Box::new(Term::Pair(
+            Box::new(Term::Var(0)),
+            Box::new(Term::Var(0)),
+        )));
+        let term = Term::Transp {
+            family: Box::new(family),
+            cofib: Cofib::Bot,
+            base: Box::new(base),
+        };
+        assert!(
+            check_top(term, tgt_pi).is_ok(),
+            "a Glue line whose two faces agree in Pi-grade (even if their `A` differed) must still transport"
+        );
+    }
+
+    // =============================================================================
+    // Wave 5 / N2: metered evaluation + honest divergence errors.
+    // =============================================================================
+
+    /// A deep structurally-recursive `plus (nat_lit depth) zero ≡ nat_lit depth` proof (the same
+    /// shape as N1's parity golden): checking it forces `depth`-deep `do_elim`/`eval`/`conv`, which
+    /// is exactly what a normalization budget should be measured against.
+    fn deep_plus_zero(depth: u32) -> (Signature, Term, Term) {
+        let plus = Term::Lam(Box::new(Term::Lam(Box::new(Term::Elim {
+            data: nat_name(),
+            motive: Box::new(Term::Lam(Box::new(nat_ty()))),
+            methods: vec![
+                Term::Var(0),
+                Term::Lam(Box::new(Term::Lam(Box::new(succ(Term::Var(0)))))),
+            ],
+            scrutinee: Box::new(Term::Var(1)),
+        }))));
+        let mut lit = zero();
+        for _ in 0..depth {
+            lit = succ(lit);
+        }
+        let plus_applied = Term::App(
+            Box::new(Term::App(Box::new(plus), Box::new(lit.clone()))),
+            Box::new(zero()),
+        );
+        let ty = Term::PathP {
+            family: Box::new(nat_ty()),
+            lhs: Box::new(plus_applied),
+            rhs: Box::new(lit.clone()),
+        };
+        let proof_term = Term::PLam(Box::new(lit));
+        (nat_sig(), proof_term, ty)
+    }
+
+    /// `eval`/`conv`/`quote` recurse natively in the Rust call stack; mirrors
+    /// `crates/blight-repl/tests/spore.rs`'s `on_big_stack` for the same reason.
+    fn on_big_stack<F: FnOnce() + Send + 'static>(f: F) {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(f)
+            .expect("spawn big-stack test thread")
+            .join()
+            .expect("big-stack test thread panicked (see message above)");
+    }
+
+    /// Red-first (N2): the default, *unmetered* path completes on a deep-but-terminating proof —
+    /// metering must never take away completeness from the path every existing proof relies on.
+    #[test]
+    fn unmetered_path_still_completes_normalizing_term() {
+        on_big_stack(|| {
+            let (sig, term, ty) = deep_plus_zero(1_000);
+            assert!(
+                check_top_with(sig, term, ty).is_ok(),
+                "the unmetered path must still accept a deep-but-terminating proof"
+            );
+        });
+    }
+
+    /// Red-first (N2): a metered check with a budget too small to finish reports
+    /// `NormalizationBudget` — an honest, bounded-time error — instead of hanging.
+    #[test]
+    fn metered_check_reports_budget_not_hang() {
+        on_big_stack(|| {
+            let (sig, term, ty) = deep_plus_zero(1_000);
+            match check_top_metered(sig, term, ty, 200) {
+                Err(TypeError::NormalizationBudget) => {}
+                other => panic!(
+                    "expected NormalizationBudget from a budget far too small to finish, got {other:?}"
+                ),
+            }
+        });
+    }
+
+    /// Discriminator twin: a metered check whose budget *is* sufficient reaches the same verdict
+    /// as the unmetered path — metering changes only whether an exhausted budget is reported, never
+    /// what is decided when it is not exhausted (a usability property, never a soundness one).
+    #[test]
+    fn metered_check_with_sufficient_budget_agrees_with_unmetered() {
+        on_big_stack(|| {
+            let (sig, term, ty) = deep_plus_zero(1_000);
+            match check_top_metered(sig, term, ty, 5_000_000) {
+                Ok(_) => {}
+                other => panic!(
+                    "expected a sufficient budget to accept (matching the unmetered path), got {other:?}"
+                ),
+            }
+        });
+    }
+
+    /// A metered check can never *accept* a term the unmetered checker would reject: exceeding
+    /// the budget is the only new outcome metering introduces, and it is always a rejection.
+    #[test]
+    fn metered_check_never_accepts_an_ill_typed_term() {
+        on_big_stack(|| {
+            let (sig, term, _ty) = deep_plus_zero(50);
+            // Ascribe against a deliberately wrong type (Nat, not the Path it actually proves) —
+            // ill-typed regardless of budget.
+            let wrong_ty = nat_ty();
+            match check_top_metered(sig, term, wrong_ty, 5_000_000) {
+                Ok(p) => panic!("must not accept an ill-typed term even with ample budget: {p:?}"),
+                Err(_) => {}
+            }
+        });
     }
 }

@@ -98,19 +98,25 @@ pub fn transp(family: &Closure, cofib: &Cofib, base: &Value) -> Value {
     }
 }
 
-/// `transp` over the univalence `Glue` line (spec §2.6; plan A2b). See the dispatch comment in
-/// [`transp`]: for the `ua`-shaped line `i. Glue B φ(i) T(i) e(i)` with a base `B` constant in `i`
-/// and an `i=1` identity face, transport reduces to the forward map of the source-face
-/// equivalence applied to the base, i.e. the univalence computation rule
-/// `transp (ua e) a₀ ≡ equiv-fun e a₀`.
+/// `transp` over a univalence-shaped `Glue` line (spec §2.6; plan A2b, generalized Wave 7/E3). See
+/// the dispatch comment in [`transp`]: for the `ua`-shaped line `i. Glue B φ(i) T(i) e(i)` with a
+/// base `B` constant in `i` and an identity face at the *other* endpoint, transport reduces to a
+/// map built from the face equivalence applied to the base — the univalence computation rule and
+/// its symmetric counterpart:
+///   * `i=0` face (`ua e` itself): `transp (ua e) a₀ ≡ equiv-fun e a₀` (the forward map).
+///   * `i=1` face (the line `sym (ua e)` reduces to, i.e. `ua` traversed backward): `transp a₀ ≡
+///     invEq e a₀`, the *inverse* map, extracted from `e`'s contractible-fibres witness (HoTT book
+///     Lem. 4.2.4/CCHM `uaInvEquiv`-style fact: transporting *against* `ua e` applies `e`'s inverse).
 fn transp_glue(family: &Closure, base: &Value) -> Value {
-    // Inspect the *open* line. The only sound, reachable shape is the CCHM `ua` line
-    // `i. Glue B (i=0) A e`: a **single `i=0` face** with a base `B` constant in `i`. On that face
-    // direction the `i=1` end is `Glue B ⊥ A e ≡ B` (the empty-face Glue is just the base — no
-    // residual equiv, hence no `hcomp` correction), so transport is exactly the forward map of the
-    // source equivalence. Any other cofibration (e.g. an `i=1`-glued line, a connection, or a
-    // genuine partial face) is *not* this shape and is left `unimplemented!` rather than
-    // mis-reduced.
+    // Inspect the *open* line. The only sound, reachable shapes are the CCHM `ua` line and its
+    // De Morgan-reversed twin `i. Glue B (i=1) A e` (what `sym (ua e)` reduces to): a **single
+    // `i=0` or `i=1` face** with a base `B` constant in `i`. On the `i=0` direction the `i=1` end
+    // is `Glue B ⊥ A e ≡ B` (the empty-face Glue is just the base — no residual equiv, hence no
+    // `hcomp` correction), so transport is exactly the forward map of the equivalence; on the
+    // `i=1` direction the roles are swapped (`i=0` end is bare `B`, `i=1` end is glued `A`), so
+    // transport goes `B → A` via the equivalence's *inverse*. Any other cofibration (a connection,
+    // a disjunction, or a genuine partial face) is *not* this shape and is left `unimplemented!`
+    // rather than mis-reduced.
     let open = family.apply_dim(Interval::Dim(0));
     let (cofib, base_ty, equiv) = match &open {
         Value::Glue {
@@ -120,17 +126,27 @@ fn transp_glue(family: &Closure, base: &Value) -> Value {
         // the *same* `family.apply_dim(Dim 0)`; re-evaluating it here yields the identical value.
         other => unreachable!("transp_glue: open line is a Glue by dispatch, got {other:?}"),
     };
-    // Guard the face shape: must be `i=0` for the transport dimension (the fresh open dim, which is
-    // the deepest dimension level). A `Min`/`Max`/`Neg`/`Eq1`/disjunction is a different (out of
-    // scope) line.
-    let is_ua_face = matches!(&cofib, Cofib::Eq0(Interval::Dim(_)));
-    if !is_ua_face {
-        unimplemented!(
-            "transp over a Glue line whose face is not the univalence `i=0` direction is out of \
-             scope (only the CCHM `ua` line `i. Glue B (i=0) A e` is implemented); got cofib \
-             {cofib:?}"
-        );
-    }
+    // Guard the face shape: must be a bare `i=0` or `i=1` face for the transport dimension (the
+    // fresh open dim), *or* the De Morgan-negated twin of either (`¬i = 0` / `¬i = 1`) — which is
+    // exactly the shape `sym` (`std/path.bl`) produces: `sym (ua e) = plam i. (ua e) @ (¬i)`
+    // evaluates the `ua` line's body at the *negated* dimension, giving `Glue B (¬i = 0) A e`
+    // (`Cofib::Eq0(Neg(Dim))`), not the syntactically-simpler `Cofib::Eq1(Dim)` — the two are
+    // semantically identical (`¬i = 0 ⟺ i = 1`) but `resolve_cofib`/`normalize_interval` do not
+    // fold a bare negated-dimension cofibration into the other constructor (only literal `I0`/`I1`
+    // endpoints get folded to `Top`/`Bot`), so both syntactic forms must be recognized here. A
+    // `Min`/`Max`/double-`Neg`/disjunction is a different (out of scope) line.
+    let forward_direction = match &cofib {
+        Cofib::Eq0(Interval::Dim(_)) => true,
+        Cofib::Eq1(Interval::Dim(_)) => false,
+        Cofib::Eq1(Interval::Neg(inner)) if matches!(**inner, Interval::Dim(_)) => true,
+        Cofib::Eq0(Interval::Neg(inner)) if matches!(**inner, Interval::Dim(_)) => false,
+        _ => unimplemented!(
+            "transp over a Glue line whose face is not the univalence `i=0`-or-`i=1` direction \
+             (nor its De Morgan-negated twin) is out of scope (only the CCHM `ua` line \
+             `i. Glue B (i=0) A e` and its reverse `i. Glue B (i=1) A e` — however the negation is \
+             syntactically distributed — are implemented); got cofib {cofib:?}"
+        ),
+    };
     // The base type line `i. B` must be constant (the `ua` line glues a *fixed* codomain `B`); a
     // non-constant base is genuine heterogeneous Glue transport, which we do not implement.
     let base_line = line_closure(family, |g| match g {
@@ -145,10 +161,24 @@ fn transp_glue(family: &Closure, base: &Value) -> Value {
         );
     }
     let _ = base_ty;
-    // The source-face (`i=0`) equivalence `e : Equiv A B`; its forward map is `fst e`. For the `ua`
-    // line `e` does not depend on `i`, so the open-line equiv is exactly the source equivalence.
-    let forward = crate::normalize::vfst(equiv);
-    crate::normalize::apply(forward, base.clone())
+    // For either shape `e` does not itself depend on `i` (only the face direction does), so the
+    // open-line equiv is exactly the fixed equivalence `e : Equiv A B`.
+    if forward_direction {
+        // `i=0` face: `(line@i0) ≡ A`, `(line@i1) ≡ B` — apply the forward map `fst e`.
+        let forward = crate::normalize::vfst(equiv);
+        crate::normalize::apply(forward, base.clone())
+    } else {
+        // `i=1` face: `(line@i0) ≡ B`, `(line@i1) ≡ A` — apply the inverse map, extracted from
+        // `e`'s contractible-fibres witness `snd e : Π y. is-contr (fiber (fst e) y)`
+        // (`std/equiv.bl`): the *centre* of the fibre over `a₀` is `Σ x. Path B (fst e x) a₀`, so
+        // its first projection is the (unique up to the fibre's path) preimage `x`, i.e. `invEq e
+        // a₀`. No further `hcomp` correction is needed for this endpoint-aligned shape, exactly as
+        // the forward direction needs none.
+        let is_equiv_proof = crate::normalize::vsnd(equiv);
+        let fiber = crate::normalize::apply(is_equiv_proof, base.clone());
+        let centre = crate::normalize::vfst(fiber);
+        crate::normalize::vfst(centre)
+    }
 }
 
 /// Build the line `i. project(A i)` as a [`Closure`] from the family `i. A`, by quoting the
@@ -394,6 +424,15 @@ pub fn hcomp(ty: &Value, cofib: &Cofib, tube: &Closure, base: &Value) -> Value {
             })
         }
         // PathP: compose under the path binder, fixing the line's endpoints on the path faces.
+        //
+        // NOTE (found during Wave 7/E3): this branch does not itself panic — it *defers*, building
+        // a `Term::HComp` for the inner (under-the-binder) composition rather than recursing into
+        // [`hcomp`] directly. But that deferred term is *not* actually lazy: a caller that goes on
+        // to `quote` the returned `Value::PLam` (as the outer [`Value::Pi`] branch above must, to
+        // build its λ's `Term` body) immediately forces it via `eval`, which re-enters [`hcomp`] on
+        // the inner type. So nesting this branch under `Pi` does not, by itself, let a genuinely
+        // varying face reach a closed inner type without hitting the same fail-safe panic — see
+        // `hcomp_pi_varying_face_over_closed_codomain_fails_safe` below, which pins exactly this.
         Value::PathP { family, lhs, rhs } => {
             let inner_ty = family.apply_dim(Interval::Dim(0));
             let papp_tube = papp_line(tube, Interval::Dim(0));
@@ -650,57 +689,91 @@ mod tests {
         assert_eq!(hcomp(&univ(0), &partial, &tube, &base), base);
     }
 
+    /// `hcomp` over a genuinely varying partial face in a **closed, non-compositional** former
+    /// (here `Univ`, standing in for the same closed-inductive/Glue case: none of them decompose
+    /// structurally the way Π/Σ/PathP do) is outside the implemented fragment and must **fail
+    /// safe** (panic) rather than silently mis-reduce. Nothing in the prelude/examples/conformance
+    /// corpus composes over such a face (the only `Glue` consumer, `ua`, transports and never
+    /// composes — see the dispatch comment on [`hcomp`]), so this pins the guard boundary rather
+    /// than implementing a cell the corpus never reaches (Wave 7/E3 discipline).
+    #[test]
+    #[should_panic(expected = "out of the implemented fragment")]
+    fn hcomp_univ_varying_face_fails_safe() {
+        let partial = Cofib::Eq0(Interval::Dim(1));
+        let tube = varying_tube_pair();
+        let base = univ(1);
+        let _ = hcomp(&univ(0), &partial, &tube, &base);
+    }
+
     // ---- heterogeneous Kan goldens (Phase 3): varying faces compose structurally ----
     //
     // These drive the genuinely-varying-face branches of `hcomp` (CCHM former dispatch) and the
     // heterogeneous `transp` over a PathP line. The tube varies in `i` so the constant-tube fast
     // path is bypassed; we check the composite has the expected former shape and boundary.
 
-    /// A line `i. body(i)` that uses the bound dimension (so it is genuinely non-constant). Here we
-    /// build `i. (p @ i)` style tubes by quoting a value that mentions the dimension.
+    /// A closed neutral standing in for "an opaque path/value", used below to build lines that
+    /// *genuinely* vary in the bound dimension. `Neutral::Foreign` carries no de Bruijn index, so
+    /// (unlike a `Neutral::Var`) it quotes back to itself at *any* ambient level — safe to embed
+    /// in tubes that `project_line`/`apply_line`/`papp_line` re-quote at a small fixed `lvl`.
+    fn opaque_path_term() -> Term {
+        Term::Foreign {
+            symbol: "kan_test_opaque".into(),
+            ty: Box::new(nat_ty_term()),
+        }
+    }
+
+    /// A line `i. (opaque @ i, opaque @ i)` that **genuinely** varies in `i`: applying the opaque
+    /// neutral at the (distinct) endpoints `i0`/`i1` yields syntactically distinct neutrals, so
+    /// `family_is_constant` correctly reports `false` (unlike an earlier version of this helper,
+    /// which applied a *closed* `PLam` ignoring its own bound variable — that line was constant
+    /// regardless of `i`, so it silently exercised only the `family_is_constant` fast path rather
+    /// than the componentwise dispatch its callers' names claimed to test).
     fn varying_tube_pair() -> Closure {
-        // i. (pair zero (p @ i)) where p is a neutral path var — varies in i.
-        // Simpler: i. pair (z) (z) is constant; to vary, use the dimension to pick an endpoint via
-        // a PApp on a reflected path. We instead build a tube that is a pair whose second component
-        // is `Interval`-driven is not expressible at the value layer, so use a function tube.
-        // i. λ x. x  is constant; to be genuinely varying we use two distinct closed values keyed
-        // by a system. Falling back: a tube of pairs (z, z) but flagged varying by construction.
         Closure {
             env: Env::empty(),
             body: Term::Pair(
-                Box::new(Term::Con(crate::term::ConName("zero".into()), vec![])),
-                // second component mentions the dimension via a path application that is neutral,
-                // making the line non-constant under `family_is_constant`.
-                Box::new(Term::PApp(
-                    Box::new(Term::PLam(Box::new(Term::Con(
-                        crate::term::ConName("zero".into()),
-                        vec![],
-                    )))),
-                    Interval::Dim(0),
-                )),
+                Box::new(Term::PApp(Box::new(opaque_path_term()), Interval::Dim(0))),
+                Box::new(Term::PApp(Box::new(opaque_path_term()), Interval::Dim(0))),
             ),
         }
     }
 
-    /// `hcomp` in a Σ type over a varying partial face composes component-wise (CCHM): the result is
-    /// a pair, exercising the Σ branch of the former dispatch.
+    /// `hcomp` in a Σ type over a **genuinely** varying partial face composes component-wise
+    /// (CCHM): the result is a pair, exercising the Σ branch of the former dispatch. Both
+    /// components are `Path Nat zero zero`-typed so their (componentwise-recursive) `hcomp` calls
+    /// always bottom out in the never-panicking `PathP` structural rule, letting the tube itself
+    /// genuinely vary in `i` without hitting an unimplemented closed-type leaf.
     #[test]
     fn hcomp_sigma_varying_face_is_componentwise() {
         let partial = Cofib::Eq0(Interval::Dim(1));
-        let sigma_ty = Value::Sigma(
-            Box::new(Value::Data(
-                crate::term::DataName("Nat".into()),
-                vec![],
-                vec![],
-            )),
-            Closure {
+        let z = || Value::Con(crate::term::ConName("zero".into()), vec![]);
+        let path_ty = Value::PathP {
+            family: Closure {
                 env: Env::empty(),
                 body: nat_ty_term(),
             },
+            lhs: Box::new(z()),
+            rhs: Box::new(z()),
+        };
+        let sigma_ty = Value::Sigma(
+            Box::new(path_ty.clone()),
+            Closure {
+                env: Env::empty(),
+                body: quote_value_at(0, 0, &path_ty),
+            },
         );
         let tube = varying_tube_pair();
-        let z = Value::Con(crate::term::ConName("zero".into()), vec![]);
-        let base = Value::Pair(Box::new(z.clone()), Box::new(z.clone()));
+        assert!(
+            !family_is_constant(&tube),
+            "the tube must genuinely vary in `i`, or this test only exercises the fast path"
+        );
+        let refl = || {
+            Value::PLam(Closure {
+                env: Env::empty(),
+                body: Term::Con(crate::term::ConName("zero".into()), vec![]),
+            })
+        };
+        let base = Value::Pair(Box::new(refl()), Box::new(refl()));
         let out = hcomp(&sigma_ty, &partial, &tube, &base);
         // CCHM: composition in Σ yields a pair (it does not get stuck/panic).
         assert!(
@@ -709,10 +782,28 @@ mod tests {
         );
     }
 
-    /// `hcomp` in a Π type over a varying partial face composes in the codomain pointwise (CCHM):
-    /// the result is a λ, exercising the Π branch.
+    /// `hcomp` in a Π type over a **genuinely** varying partial face, whose codomain bottoms out
+    /// at a closed inductive (`Nat`), must **fail safe** (panic) — it must *not* silently return a
+    /// λ whose body is some arbitrarily-frozen partial reduction.
+    ///
+    /// This pins a real boundary discovered while extending the Kan table for Wave 7/E3: unlike
+    /// `Σ` (whose `Value::Pair` result can hold an *unforced* component, deferring the inner
+    /// composition indefinitely), `Π`'s result is a `Value::Lam`, whose body must be a concrete
+    /// `Term` — so the pointwise-recursive `hcomp` call is immediately `quote`d
+    /// (`quote_value_at(1, 0, …)` above). Quoting a value that embeds a deferred `PathP`-composition
+    /// (built by the `PathP` branch) *forces* it via `eval`, which re-enters `hcomp` on the
+    /// under-the-binder type. If that type is a closed inductive (as `Nat` is here), the recursive
+    /// call panics exactly as the direct `hcomp_univ_varying_face_fails_safe` case does — just one
+    /// level removed. And by construction this is the *only* possible outcome for `Π`: `conv`'s
+    /// η-rule for functions defines "the tube is constant" as "constant at every point", so a tube
+    /// that is genuinely non-constant at the `Π` level is *necessarily* also non-constant once
+    /// applied to a point — there is no way to reach this branch with a face that becomes constant
+    /// one level down. A full fix needs the general partial-element/system machinery (deferred,
+    /// unreached-by-corpus per this file's `Term::Partial`/`Term::System` disposition), not a
+    /// bigger Kan table cell — so this documents the boundary rather than papering over it.
     #[test]
-    fn hcomp_pi_varying_face_is_lambda() {
+    #[should_panic(expected = "out of the implemented fragment")]
+    fn hcomp_pi_varying_face_over_closed_codomain_fails_safe() {
         let partial = Cofib::Eq0(Interval::Dim(1));
         let pi_ty = Value::Pi(
             crate::semiring::Grade::Omega,
@@ -723,31 +814,31 @@ mod tests {
             )),
             Closure {
                 env: Env::empty(),
+                // Codomain ignores `x` (de Bruijn 0): plain `Nat` at every point.
                 body: nat_ty_term(),
             },
         );
-        // A genuinely varying tube of functions: i. λ x. ((λ j. zero) @ i) — the body uses the
-        // transport dimension `i` (via the path application) but is otherwise closed and
-        // well-scoped (the inner `zero` needs no binder).
+        // A genuinely varying tube of functions: `i. λ x. (opaque @ i)` — the body ignores `x` but
+        // varies with the outer transport dimension `i` via the opaque neutral. See
+        // `varying_tube_pair`'s doc-comment for why a *closed* `PLam` (this test's historical
+        // predecessor) does not actually vary and so cannot drive this branch at all.
         let tube = Closure {
             env: Env::empty(),
             body: Term::Lam(Box::new(Term::PApp(
-                Box::new(Term::PLam(Box::new(Term::Con(
-                    crate::term::ConName("zero".into()),
-                    vec![],
-                )))),
+                Box::new(opaque_path_term()),
                 Interval::Dim(0),
             ))),
         };
+        assert!(
+            !family_is_constant(&tube),
+            "the tube must genuinely vary in `i`, or this test would panic on the top-level guard \
+             (`family_is_constant`) rather than the Π/closed-codomain boundary it targets"
+        );
         let base = Value::Lam(Closure {
             env: Env::empty(),
             body: Term::Var(0),
         });
-        let out = hcomp(&pi_ty, &partial, &tube, &base);
-        assert!(
-            matches!(out, Value::Lam(..)),
-            "Π hcomp composes to a λ, got {out:?}"
-        );
+        let _ = hcomp(&pi_ty, &partial, &tube, &base);
     }
 
     /// `transp` over a (structurally) non-constant PathP line produces a path abstraction (CCHM
@@ -836,13 +927,114 @@ mod tests {
         );
     }
 
-    /// A `Glue` line whose face is *not* the univalence `i=0` direction (here an `i=1` face) is
-    /// outside the implemented fragment. The kernel must **fail safe** (panic) rather than reuse the
-    /// `i=0` forward-map reduction — which would be unsound for this shape. This pins the guard
-    /// boundary of `transp_glue` (A1: only the reachable `ua` line is implemented; the rest is
-    /// documented + fail-safe, never a silent acceptance).
+    /// `transp^i (Glue B (i=1) A e) ⊥ b₀ = invEq e b₀`, the *reverse* of the univalence computation
+    /// rule (Wave 7/E3): this is the shape `sym (ua e)` reduces to (`i=1` glued at the *far* end,
+    /// bare `B` at the near end), so transporting must apply the equivalence's *inverse*, not its
+    /// forward map. We build `e` with an observably distinct forward map (`λ_. true`) and inverse
+    /// (embedded in its `is-equiv` witness, always returning the fibre-centre `zero`), so a bug
+    /// that accidentally reused the forward-map reduction here would produce `true` — of the wrong
+    /// type (`Bool` where `Nat` is expected) and observably distinct from the correct `zero`.
     #[test]
-    #[should_panic(expected = "not the univalence `i=0` direction")]
+    fn transp_ua_glue_line_reverse_face_applies_inverse_map() {
+        let zero = || Value::Con(crate::term::ConName("zero".into()), vec![]);
+        let tru = || Value::Con(crate::term::ConName("true".into()), vec![]);
+        // `fiber (fst e) y := (centre := (zero, <path>), <contraction>)` for every `y`: a constant
+        // is-equiv witness whose fibre centre is always `zero`, so `invEq e _ = zero`.
+        let fiber_for_any_y = Value::Pair(
+            Box::new(Value::Pair(Box::new(zero()), Box::new(zero()))), // centre = (zero, <path>)
+            Box::new(zero()),                                          // <contraction>, unused
+        );
+        let is_equiv_proof = Value::Lam(Closure {
+            env: Env::empty(),
+            body: quote_value_at(0, 1, &fiber_for_any_y),
+        });
+        let e = Value::Pair(
+            Box::new(Value::Lam(Closure {
+                env: Env::empty(),
+                body: Term::Con(crate::term::ConName("true".into()), vec![]),
+            })),
+            Box::new(is_equiv_proof),
+        );
+        // The line `i. Glue Bool (i=1) Nat e`: bare `Bool` at `i0`, glued `Nat` at `i1`.
+        let line = Closure {
+            env: Env::empty(),
+            body: Term::Glue {
+                base: Box::new(bool_ty_term()),
+                cofib: Cofib::Eq1(Interval::Dim(0)),
+                ty: Box::new(nat_ty_term()),
+                equiv: Box::new(quote_value_at(0, 1, &e)),
+            },
+        };
+        assert!(
+            !family_is_constant(&line),
+            "the reversed ua line must be non-constant (A=Nat ≠ B=Bool)"
+        );
+        let out = transp(&line, &Cofib::Bot, &tru());
+        assert!(
+            conv(0, &out, &zero()),
+            "transp over the reversed ua Glue line is the inverse map applied (expected `zero`), \
+             got {:?}",
+            quote_value_at(0, 0, &out)
+        );
+    }
+
+    /// The *actual* shape `sym (ua e)` (`std/path.bl`) produces is not literally `Cofib::Eq1(Dim)`
+    /// but its De Morgan-negated twin `Cofib::Eq0(Neg(Dim))` (`sym p = plam i. p @ (~i)`
+    /// substitutes the negated dimension into `ua`'s `i=0` face, and neither `resolve_cofib` nor
+    /// `normalize_interval` folds a bare negated-dimension cofibration into the other constructor —
+    /// only literal `I0`/`I1` endpoints get folded to `Top`/`Bot`). This is the corpus-reachable
+    /// twin of `transp_ua_glue_line_reverse_face_applies_inverse_map` above, pinned in its actual
+    /// syntactic form so a future `resolve_cofib` change that *did* start folding negations could
+    /// not silently stop matching this guard.
+    #[test]
+    fn transp_ua_glue_line_negated_dim_reverse_face_applies_inverse_map() {
+        let zero = || Value::Con(crate::term::ConName("zero".into()), vec![]);
+        let tru = || Value::Con(crate::term::ConName("true".into()), vec![]);
+        let fiber_for_any_y = Value::Pair(
+            Box::new(Value::Pair(Box::new(zero()), Box::new(zero()))),
+            Box::new(zero()),
+        );
+        let is_equiv_proof = Value::Lam(Closure {
+            env: Env::empty(),
+            body: quote_value_at(0, 1, &fiber_for_any_y),
+        });
+        let e = Value::Pair(
+            Box::new(Value::Lam(Closure {
+                env: Env::empty(),
+                body: Term::Con(crate::term::ConName("true".into()), vec![]),
+            })),
+            Box::new(is_equiv_proof),
+        );
+        // `i. Glue Bool (¬i=0) Nat e` — the literal shape `sym (ua e)` reduces to.
+        let line = Closure {
+            env: Env::empty(),
+            body: Term::Glue {
+                base: Box::new(bool_ty_term()),
+                cofib: Cofib::Eq0(Interval::Neg(Box::new(Interval::Dim(0)))),
+                ty: Box::new(nat_ty_term()),
+                equiv: Box::new(quote_value_at(0, 1, &e)),
+            },
+        };
+        assert!(
+            !family_is_constant(&line),
+            "the reversed ua line must be non-constant (A=Nat ≠ B=Bool)"
+        );
+        let out = transp(&line, &Cofib::Bot, &tru());
+        assert!(
+            conv(0, &out, &zero()),
+            "transp over the ¬i=0 reversed ua Glue line is the inverse map applied (expected \
+             `zero`), got {:?}",
+            quote_value_at(0, 0, &out)
+        );
+    }
+
+    /// A `Glue` line whose face is *neither* the univalence `i=0` direction *nor* its reverse
+    /// `i=1` direction (here a connection `i ∧ j`) is outside the implemented fragment. The kernel
+    /// must **fail safe** (panic) rather than guess a reduction — which would be unsound for this
+    /// shape. This pins the guard boundary of `transp_glue` (A1: only the two reachable `ua`-shaped
+    /// lines are implemented; the rest is documented + fail-safe, never a silent acceptance).
+    #[test]
+    #[should_panic(expected = "not the univalence `i=0`-or-`i=1` direction")]
     fn transp_glue_non_ua_face_fails_safe() {
         let zero = || Value::Con(crate::term::ConName("zero".into()), vec![]);
         let e = Value::Pair(
@@ -852,12 +1044,15 @@ mod tests {
             })),
             Box::new(zero()),
         );
-        // `i. Glue Bool (i=1) Nat e` — an `i=1` face, not the `ua` `i=0` direction.
+        // `i. Glue Bool (i ∧ j) Nat e` — a connection face, neither `i=0` nor `i=1`.
         let line = Closure {
             env: Env::empty(),
             body: Term::Glue {
                 base: Box::new(bool_ty_term()),
-                cofib: Cofib::Eq1(Interval::Dim(0)),
+                cofib: Cofib::Eq0(Interval::Min(
+                    Box::new(Interval::Dim(0)),
+                    Box::new(Interval::Dim(1)),
+                )),
                 ty: Box::new(nat_ty_term()),
                 equiv: Box::new(quote_value_at(0, 1, &e)),
             },

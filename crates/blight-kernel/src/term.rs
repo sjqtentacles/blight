@@ -98,6 +98,29 @@ pub enum Term {
         methods: Vec<Term>,
         scrutinee: Box<Term>,
     },
+    /// `PCon D c args r` — a **path constructor** `c` of the higher inductive type `D`, applied
+    /// to its arguments, at interval `r` (spec §2.7 cubical layer; Wave 7/E4). At the interval
+    /// endpoints (`r = 0`/`r = 1`) this is definitionally the path constructor's declared
+    /// `lhs`/`rhs` (spec §2.7's boundary equations, [`crate::signature::PathConstructor`]); at a
+    /// free `r` it denotes the genuinely new point on the HIT's path that a point constructor
+    /// alone cannot express. `D` is carried explicitly (like [`Term::Elim`]'s `data` field, and
+    /// unlike [`Term::Con`], which recovers its data type from an expected `Value::Data`) because
+    /// `eval`'s endpoint-collapsing rule (unlike plain `Con`, which never inspects the signature at
+    /// `eval` time) must look the constructor up *unconditionally*, independent of any expected
+    /// type, to decide whether `r` has collapsed to a boundary.
+    ///
+    /// Scope (Wave 7/E4 probe; see `docs/metatheory.md` §1.3 obligation 3): only *nullary* path
+    /// constructors (`args` empty, matching the declared [`crate::signature::PathConstructor`]'s
+    /// own empty argument telescope) over a *non-indexed* `D` are implemented — enough for the
+    /// classic circle-style HIT (`S¹` with `base`/`loop`). A non-empty argument telescope, an
+    /// indexed carrier, or a recursive path-constructor argument is fail-safe (`unimplemented!`),
+    /// never silently mis-elaborated.
+    PCon {
+        data: DataName,
+        name: ConName,
+        args: Vec<Term>,
+        dim: Interval,
+    },
 
     // ---- cubical layer (spec §2.6) ----
     /// An interval term lifted into the term grammar (only valid in dimension position).
@@ -161,6 +184,12 @@ pub enum Term {
     Op {
         effect: crate::row::EffName,
         op: crate::signature::OpName,
+        /// Type-argument instantiation for a parameterized effect's operation (Wave 7/E2): one
+        /// term per entry in the declaring `EffDecl`'s parameter telescope (checked in the
+        /// 0-fragment against the corresponding declared parameter type, exactly like a `Data`'s
+        /// own parameters — see the `Term::Data` rule). Empty for a non-parameterized effect (all
+        /// effects declared before E2, and still the overwhelmingly common case).
+        type_args: Vec<Term>,
         arg: Box<Term>,
     },
     /// `handle body { return x. r ; (op x k. e)... }` (spec §4.3). The handler interprets each
@@ -200,7 +229,7 @@ pub enum Term {
     /// code that cannot be re-verified. Codegen lowers it to a direct call to the C symbol.
     Foreign { symbol: String, ty: Box<Term> },
 
-    // ---- primitive machine integers (M11 — int-codegen; TCB-growing, user-approved) ----
+    // ---- primitive machine integers (M10 — int-codegen; TCB-growing, user-approved) ----
     /// `Int` — the type of 64-bit signed machine integers (`i64`). A primitive kernel type:
     /// `IntTy : Univ 0`. It is *not* an inductive `Data`; it is a built-in base type with native
     /// arithmetic, so the kernel grows its trusted base to include `i64` semantics.
@@ -236,7 +265,7 @@ pub struct DataName(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConName(pub String);
 
-/// A primitive `Int` operation (M11). Arithmetic (`Add/Sub/Mul/Div`) returns `Int`; comparisons
+/// A primitive `Int` operation (M10). Arithmetic (`Add/Sub/Mul/Div`) returns `Int`; comparisons
 /// (`Eq/Lt`) return `Int` (`1`/`0`). Division (and `Sub` producing a negative, etc.) are total on
 /// `i64` with wrapping/`0`-on-div-by-zero semantics handled in `eval` (see [`crate::normalize`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

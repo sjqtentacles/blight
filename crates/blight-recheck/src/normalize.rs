@@ -118,14 +118,25 @@ pub fn eval(sig: &Signature, env: &Env, t: &RTerm) -> RValue {
         RTerm::Later(d) => RValue::Later(Box::new(eval(sig, env, d))),
         RTerm::Force(d) => do_force(eval(sig, env, d)),
 
-        // ---- effects and handlers (spec §4): modeled at the type level. `! E A` is a type value
-        // carrying only its payload. `perform`/`handle` appear in term position; the re-checker does
-        // not run effect semantics, so they evaluate to *stuck* neutrals that only need to
-        // round-trip through `quote` (they are never reduced or compared by reduction). ----
-        RTerm::EffTy(a) => RValue::EffTy(Box::new(eval(sig, env, a))),
-        RTerm::Op { effect, op, arg } => RValue::Neutral(Neutral::Op {
+        // ---- effects and handlers (spec §4) ----
+        // `! E A` is *definitionally its payload* `A` at the value level: it evaluates to `eval A`,
+        // dropping the wrapper exactly as the kernel does (`normalize.rs`'s `EffTy(_row, a) => eval a`).
+        // The effect row `E` is not part of the value — it is tracked separately as the threaded
+        // `RRow` (B2). This is what makes an `! E A`-annotated definition whose body is a bare
+        // `perform`/pure value re-check: the body infers payload type `A` (with row `E`), and `A`
+        // converts against the collapsed annotation `A` rather than against a spurious `EffTy A`.
+        // `perform`/`handle` appear in term position; the re-checker does not run effect semantics, so
+        // they evaluate to *stuck* neutrals that only round-trip through `quote`.
+        RTerm::EffTy(a) => eval(sig, env, a),
+        RTerm::Op {
+            effect,
+            op,
+            type_args,
+            arg,
+        } => RValue::Neutral(Neutral::Op {
             effect: effect.clone(),
             op: op.clone(),
+            type_args: type_args.iter().map(|t| eval(sig, env, t)).collect(),
             arg: Box::new(eval(sig, env, arg)),
         }),
         RTerm::Handle {
@@ -416,7 +427,6 @@ pub fn quote(sig: &Signature, lvl: usize, dlvl: usize, v: &RValue) -> RTerm {
         RValue::Now(a) => RTerm::Now(Box::new(quote(sig, lvl, dlvl, a))),
         RValue::Later(d) => RTerm::Later(Box::new(quote(sig, lvl, dlvl, d))),
         RValue::Force(d) => RTerm::Force(Box::new(quote(sig, lvl, dlvl, d))),
-        RValue::EffTy(a) => RTerm::EffTy(Box::new(quote(sig, lvl, dlvl, a))),
         RValue::IntTy => RTerm::IntTy,
         RValue::IntLit(n) => RTerm::IntLit(*n),
     }
@@ -470,9 +480,18 @@ fn quote_neutral(sig: &Signature, lvl: usize, dlvl: usize, n: &Neutral) -> RTerm
             scrutinee: Box::new(quote_neutral(sig, lvl, dlvl, scrutinee)),
         },
         Neutral::Force(d) => RTerm::Force(Box::new(quote_neutral(sig, lvl, dlvl, d))),
-        Neutral::Op { effect, op, arg } => RTerm::Op {
+        Neutral::Op {
+            effect,
+            op,
+            type_args,
+            arg,
+        } => RTerm::Op {
             effect: effect.clone(),
             op: op.clone(),
+            type_args: type_args
+                .iter()
+                .map(|t| quote(sig, lvl, dlvl, t))
+                .collect(),
             arg: Box::new(quote(sig, lvl, dlvl, arg)),
         },
         Neutral::Handle {

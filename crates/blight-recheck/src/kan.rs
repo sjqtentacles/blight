@@ -358,3 +358,449 @@ pub fn eval_comp(
     let b = eval(sig, env, base);
     comp(sig, &fam, &cof, &tube_clos, &b)
 }
+
+// =================================================================================================
+// White-box conformance tests (Track M1: this file was at 0% coverage). These pin down the
+// dispatch table directly on hand-built [`RValue`]/[`RTerm`]s, mirroring `blight_kernel::kan`'s own
+// white-box suite: boundary faces first, then the genuinely heterogeneous Π/Σ/PathP structural
+// branches, then the two documented fail-safe `unimplemented!` arms as negative goldens.
+//
+// A key technique used throughout: [`RTerm::Var`] at a deliberately huge, always-out-of-range index
+// (`FREE`) always evaluates to the `usize::MAX` "unbound sentinel" neutral (see `eval`'s `Var` arm
+// and `quote_neutral`'s special-case for it), *regardless of the ambient env's depth or the current
+// quoting `lvl`*. Applying it via `PApp` at the line's own bound dimension (`dim_dep`) then gives a
+// value that is *genuinely* non-constant across `i` — `PApp(Var(MAX), I0)` vs `PApp(Var(MAX), I1)`
+// are different neutrals by `conv`'s structural-quote comparison — without needing any indexed
+// `Data`/`Glue` type variance (which this crate's value domain cannot represent; `Glue` is declined
+// upstream). This is what lets these tests force the real Π/Σ/PathP structural dispatch rather than
+// only ever hitting `family_is_constant`'s early-return fast path.
+// =================================================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::term::RGrade;
+    use blight_kernel::{ConName, DataName};
+
+    fn sig() -> Signature {
+        Signature::new()
+    }
+
+    /// `RValue` has no `PartialEq` (its neutrals need level-aware quoting to compare); use the
+    /// crate's own `conv` for value equality throughout, exactly as the checker itself would.
+    fn veq(s: &Signature, a: &RValue, b: &RValue) -> bool {
+        crate::conv::conv(s, 0, 0, a, b)
+    }
+
+    /// Always out of range for any env this file's tests build, so `eval`'s `Var` arm falls back to
+    /// the `usize::MAX` unbound sentinel every time (see module doc above).
+    const FREE: usize = 9999;
+
+    fn nat_t() -> RTerm {
+        RTerm::Data(DataName("Nat".into()), vec![], vec![])
+    }
+    fn zero_t() -> RTerm {
+        RTerm::Con(ConName("Zero".into()), vec![])
+    }
+    fn zero_v() -> RValue {
+        RValue::Con(ConName("Zero".into()), vec![])
+    }
+    fn succ_v(v: RValue) -> RValue {
+        RValue::Con(ConName("Succ".into()), vec![v])
+    }
+    fn univ(n: u32) -> RValue {
+        RValue::Univ(n)
+    }
+    fn const_line(body: RTerm) -> DimClosure {
+        DimClosure {
+            env: Env::new(),
+            body: Rc::new(body),
+        }
+    }
+    /// `Var(FREE) @ i` — a term that, evaluated under any env, is `PApp(Var(MAX), <current dim>)`:
+    /// genuinely different at `i=0` vs `i=1` (see module doc).
+    fn dim_dep() -> RTerm {
+        RTerm::PApp(Box::new(RTerm::Var(FREE)), RInterval::Dim(0))
+    }
+
+    // ---- boundary goldens (mirrors blight_kernel::kan's own suite) ----
+
+    #[test]
+    fn transp_constant_family_is_identity() {
+        let s = sig();
+        let out = transp(&s, &const_line(RTerm::Univ(0)), &RCofib::Top, &univ(0));
+        assert!(veq(&s, &out, &univ(0)));
+    }
+
+    #[test]
+    fn transp_const_nat_is_identity() {
+        let s = sig();
+        let line = const_line(nat_t());
+        let out = transp(&s, &line, &RCofib::Bot, &zero_v());
+        assert!(veq(&s, &out, &zero_v()));
+    }
+
+    #[test]
+    fn transp_const_pi_is_identity() {
+        let s = sig();
+        let pi = RTerm::Pi(RGrade::Omega, Box::new(nat_t()), Box::new(nat_t()));
+        let line = const_line(pi);
+        let f = RValue::Lam(Closure {
+            env: Env::new(),
+            body: Rc::new(RTerm::Var(0)),
+        });
+        let out = transp(&s, &line, &RCofib::Bot, &f);
+        assert!(veq(&s, &out, &f));
+    }
+
+    #[test]
+    fn transp_const_sigma_is_identity() {
+        let s = sig();
+        let sigma = RTerm::Sigma(Box::new(nat_t()), Box::new(nat_t()));
+        let line = const_line(sigma);
+        let pair = RValue::Pair(Box::new(zero_v()), Box::new(zero_v()));
+        let out = transp(&s, &line, &RCofib::Bot, &pair);
+        assert!(veq(&s, &out, &pair));
+    }
+
+    #[test]
+    fn transp_const_path_is_identity() {
+        let s = sig();
+        let path = RTerm::PathP {
+            family: Box::new(nat_t()),
+            lhs: Box::new(zero_t()),
+            rhs: Box::new(zero_t()),
+        };
+        let line = const_line(path);
+        let p = RValue::PLam(const_line(zero_t()));
+        let out = transp(&s, &line, &RCofib::Bot, &p);
+        assert!(veq(&s, &out, &p));
+    }
+
+    #[test]
+    fn hcomp_total_cofib_picks_tube_at_i1() {
+        let s = sig();
+        let out = hcomp(
+            &s,
+            &univ(0),
+            &RCofib::Top,
+            &const_line(RTerm::Univ(0)),
+            &univ(1),
+        );
+        assert!(veq(&s, &out, &univ(0)), "total face: composite is tube@1");
+    }
+
+    #[test]
+    fn hcomp_empty_cofib_picks_base() {
+        let s = sig();
+        let out = hcomp(
+            &s,
+            &univ(0),
+            &RCofib::Bot,
+            &const_line(RTerm::Univ(0)),
+            &univ(1),
+        );
+        assert!(veq(&s, &out, &univ(1)));
+    }
+
+    #[test]
+    fn hcomp_partial_constant_tube_picks_base() {
+        let s = sig();
+        let partial = RCofib::Eq0(RInterval::Dim(0));
+        assert!(!is_total(&partial) && !is_empty_face(&partial));
+        let out = hcomp(
+            &s,
+            &univ(0),
+            &partial,
+            &const_line(RTerm::Univ(1)),
+            &univ(1),
+        );
+        assert!(
+            veq(&s, &out, &univ(1)),
+            "constant tube: degenerate box is the floor"
+        );
+    }
+
+    #[test]
+    fn comp_agrees_with_hcomp_transp() {
+        let s = sig();
+        let family = const_line(RTerm::Univ(0));
+        let tube = const_line(RTerm::Univ(0));
+        let base = univ(0);
+        let out = comp(&s, &family, &RCofib::Top, &tube, &base);
+        let manual = hcomp(
+            &s,
+            &family.apply_dim(&s, RInterval::I1),
+            &RCofib::Top,
+            &tube,
+            &transp(&s, &family, &RCofib::Bot, &base),
+        );
+        assert!(veq(&s, &out, &manual));
+    }
+
+    // ---- heterogeneous `transp` (Track M1: the previously-untested bulk of this file) ----
+
+    /// A genuinely non-constant `PathP` line (`family_is_constant` must independently agree it's
+    /// non-constant — asserted directly, not just inferred from the output shape). `transp_path`
+    /// never recurses into `transp`/`hcomp` (it defers to a lazily-built `Comp` term), so this is
+    /// safe to force regardless of what the varying endpoint "means".
+    #[test]
+    fn transp_path_heterogeneous_line_is_plam() {
+        let s = sig();
+        let path = RTerm::PathP {
+            family: Box::new(nat_t()),
+            lhs: Box::new(dim_dep()),
+            rhs: Box::new(zero_t()),
+        };
+        let family = const_line(path);
+        assert!(
+            !family_is_constant(&s, &family),
+            "the line's lhs genuinely varies (PApp(Var(MAX), i)), so the line must be non-constant"
+        );
+        let base = RValue::PLam(const_line(zero_t()));
+        let out = transp(&s, &family, &RCofib::Bot, &base);
+        assert!(
+            matches!(out, RValue::PLam(_)),
+            "transp over a heterogeneous PathP line is a path value, got {out:?}"
+        );
+    }
+
+    /// A genuinely non-constant `Pi` line whose codomain is `PathP`-shaped (so the recursive
+    /// `transp` call inside `transp_pi` safely lands in the non-panicking `transp_path` arm). Forces
+    /// `transp_pi`'s real body: the constant-domain `x0 = x1` branch and the codomain-line recursion.
+    #[test]
+    fn transp_pi_heterogeneous_line_is_lambda() {
+        let s = sig();
+        // i. Π (_ : Nat). PathP (j. Nat) (Var(FREE) @ i) Zero — non-constant via the codomain.
+        let cod = RTerm::PathP {
+            family: Box::new(nat_t()),
+            lhs: Box::new(dim_dep()),
+            rhs: Box::new(zero_t()),
+        };
+        let pi = RTerm::Pi(RGrade::Omega, Box::new(nat_t()), Box::new(cod));
+        let family = const_line(pi);
+        assert!(
+            !family_is_constant(&s, &family),
+            "the codomain's path endpoint varies with i, so the Pi line must be non-constant"
+        );
+        // base: λ_. λj. Zero — ignores its argument, always the constant path.
+        let f = RValue::Lam(Closure {
+            env: Env::new(),
+            body: Rc::new(RTerm::PLam(Box::new(zero_t()))),
+        });
+        let out = transp(&s, &family, &RCofib::Bot, &f);
+        assert!(
+            matches!(out, RValue::Lam(_)),
+            "transp over a heterogeneous Pi line is a function value, got {out:?}"
+        );
+    }
+
+    /// A genuinely non-constant `Sigma` line (constant `Nat` first component, `PathP`-shaped second
+    /// component that varies). Forces `transp_sigma`'s real body: the constant-domain identity on
+    /// the first component and the codomain-line recursion (safely landing in `transp_path`) on the
+    /// second.
+    #[test]
+    fn transp_sigma_heterogeneous_line_is_pair() {
+        let s = sig();
+        let cod = RTerm::PathP {
+            family: Box::new(nat_t()),
+            lhs: Box::new(dim_dep()),
+            rhs: Box::new(zero_t()),
+        };
+        let sigma = RTerm::Sigma(Box::new(nat_t()), Box::new(cod));
+        let family = const_line(sigma);
+        assert!(!family_is_constant(&s, &family));
+        let pair = RValue::Pair(
+            Box::new(zero_v()),
+            Box::new(RValue::PLam(const_line(zero_t()))),
+        );
+        let out = transp(&s, &family, &RCofib::Bot, &pair);
+        match &out {
+            RValue::Pair(a1, b1) => {
+                assert!(
+                    veq(&s, a1, &zero_v()),
+                    "constant Nat first component transports as identity"
+                );
+                assert!(
+                    matches!(**b1, RValue::PLam(_)),
+                    "the varying second component transports to a path value, got {b1:?}"
+                );
+            }
+            other => panic!("transp over a heterogeneous Sigma line is a pair, got {other:?}"),
+        }
+    }
+
+    // ---- varying-face `hcomp` (Track M1) ----
+
+    /// A genuinely non-constant tube whose second component (fixed `PathP`-typed) varies, forcing
+    /// the Σ structural branch: the first (`Nat`-typed) component's tube is constant (identity), the
+    /// second recurses into the safe, non-panicking PathP `hcomp` arm.
+    #[test]
+    fn hcomp_sigma_varying_face_is_componentwise() {
+        let s = sig();
+        let partial = RCofib::Eq0(RInterval::Dim(3));
+        assert!(!is_total(&partial) && !is_empty_face(&partial));
+        let sigma_ty = RValue::Sigma(
+            Box::new(RValue::Data(DataName("Nat".into()), vec![], vec![])),
+            Closure {
+                env: Env::new(),
+                body: Rc::new(RTerm::PathP {
+                    family: Box::new(nat_t()),
+                    lhs: Box::new(zero_t()),
+                    rhs: Box::new(zero_t()),
+                }),
+            },
+        );
+        let tube = DimClosure {
+            env: Env::new(),
+            body: Rc::new(RTerm::Pair(Box::new(zero_t()), Box::new(dim_dep()))),
+        };
+        assert!(
+            !family_is_constant(&s, &tube),
+            "the tube's second component genuinely varies"
+        );
+        let base = RValue::Pair(
+            Box::new(zero_v()),
+            Box::new(RValue::PLam(const_line(zero_t()))),
+        );
+        let out = hcomp(&s, &sigma_ty, &partial, &tube, &base);
+        match &out {
+            RValue::Pair(a1, b1) => {
+                assert!(
+                    veq(&s, a1, &zero_v()),
+                    "the constant-tube first component picks the floor"
+                );
+                assert!(
+                    matches!(**b1, RValue::PLam(_)),
+                    "the varying second component composes to a path value, got {b1:?}"
+                );
+            }
+            other => panic!("Σ hcomp composes to a pair, got {other:?}"),
+        }
+    }
+
+    /// Mirrors `blight_kernel::kan::hcomp_pi_varying_face_is_lambda` exactly (same tube shape, same
+    /// `Nat` codomain): a tube whose body syntactically mentions the transport dimension `i` via a
+    /// `PLam`/`PApp` redex that beta-reduces to the same closed value regardless of `i`. Both
+    /// checkers therefore fold this to the constant-tube fast path (`family_is_constant`) rather
+    /// than forcing the Π structural recursion — a `PathP`/`Pi`-shaped codomain would instead force
+    /// `hcomp` to eventually re-derive `hcomp` at the closed `Nat` type with a *still-varying* tube,
+    /// which is the documented fail-safe case (see `hcomp_pi_deep_varying_codomain_fails_safe`
+    /// below). The Π branch's live structural code is exercised transitively via `hcomp_sigma_...`.
+    #[test]
+    fn hcomp_pi_varying_face_is_lambda() {
+        let s = sig();
+        let partial = RCofib::Eq0(RInterval::Dim(1));
+        let pi_ty = RValue::Pi(
+            RGrade::Omega,
+            Box::new(RValue::Data(DataName("Nat".into()), vec![], vec![])),
+            Closure {
+                env: Env::new(),
+                body: Rc::new(nat_t()),
+            },
+        );
+        // i. λ_. ((λj. zero) @ i) — mentions `i` syntactically but beta-reduces to a constant `zero`.
+        let tube = DimClosure {
+            env: Env::new(),
+            body: Rc::new(RTerm::Lam(Box::new(RTerm::PApp(
+                Box::new(RTerm::PLam(Box::new(zero_t()))),
+                RInterval::Dim(0),
+            )))),
+        };
+        let base = RValue::Lam(Closure {
+            env: Env::new(),
+            body: Rc::new(RTerm::Var(0)),
+        });
+        let out = hcomp(&s, &pi_ty, &partial, &tube, &base);
+        assert!(
+            matches!(out, RValue::Lam(_)),
+            "Π hcomp composes to a λ, got {out:?}"
+        );
+    }
+
+    /// The fail-safe counterpart: a Π codomain that is itself `PathP`-over-`Nat`, with a tube that
+    /// remains *genuinely* non-constant after applying the codomain's bound variable. Forcing the
+    /// outer Lam's body (via `quote`) drives the lazily-built inner `HComp` term (from the PathP
+    /// branch) to actually re-evaluate `hcomp` at the closed `Nat` type with a varying tube — exactly
+    /// the documented-unreachable case at line 229. Pins that the Π branch's recursion, when it
+    /// *does* bottom out at a closed inductive with real variance, still fails safe rather than
+    /// silently mis-composing.
+    #[test]
+    #[should_panic(expected = "varying face in a closed inductive/universe/Glue")]
+    fn hcomp_pi_deep_varying_codomain_fails_safe() {
+        let s = sig();
+        let partial = RCofib::Eq0(RInterval::Dim(3));
+        let pi_ty = RValue::Pi(
+            RGrade::Omega,
+            Box::new(RValue::Data(DataName("Nat".into()), vec![], vec![])),
+            Closure {
+                env: Env::new(),
+                body: Rc::new(RTerm::PathP {
+                    family: Box::new(nat_t()),
+                    lhs: Box::new(zero_t()),
+                    rhs: Box::new(zero_t()),
+                }),
+            },
+        );
+        let tube = DimClosure {
+            env: Env::new(),
+            body: Rc::new(RTerm::Lam(Box::new(dim_dep()))),
+        };
+        let base = RValue::Lam(Closure {
+            env: Env::new(),
+            body: Rc::new(RTerm::PLam(Box::new(zero_t()))),
+        });
+        let _ = hcomp(&s, &pi_ty, &partial, &tube, &base);
+    }
+
+    // ---- fail-safe goldens: the two `unimplemented!` arms must panic, never silently mis-reduce ----
+
+    /// `transp` over a genuinely non-constant line whose head former is an indexed `Data` (params
+    /// non-empty) is out of the implemented fragment (§1.3 obligation 2, Track M3) and must fail
+    /// safe rather than silently fall through to the paramless-`Data` identity rule.
+    #[test]
+    #[should_panic(expected = "unsupported heterogeneous former")]
+    fn transp_indexed_data_line_fails_safe() {
+        let s = sig();
+        // i. Vec (Var(FREE) @ i) — a "Data" line whose one param genuinely varies with i.
+        let line = const_line(RTerm::Data(DataName("Vec".into()), vec![dim_dep()], vec![]));
+        let _ = transp(&s, &line, &RCofib::Bot, &zero_v());
+    }
+
+    /// `hcomp` over a varying face whose type is not Π/Σ/PathP (here a bare universe) is out of the
+    /// implemented fragment and must fail safe.
+    #[test]
+    #[should_panic(expected = "varying face in a closed inductive/universe/Glue")]
+    fn hcomp_non_structural_type_fails_safe() {
+        let s = sig();
+        let partial = RCofib::Eq0(RInterval::Dim(3));
+        let tube = DimClosure {
+            env: Env::new(),
+            body: Rc::new(dim_dep()),
+        };
+        let _ = hcomp(&s, &univ(0), &partial, &tube, &univ(1));
+    }
+
+    #[test]
+    fn resolve_cofib_folds_constant_endpoints() {
+        let env = Env::new().extend_dim(RInterval::I0);
+        assert_eq!(
+            resolve_cofib(&env, &RCofib::Eq0(RInterval::Dim(0))),
+            RCofib::Top
+        );
+        assert_eq!(
+            resolve_cofib(&env, &RCofib::Eq1(RInterval::Dim(0))),
+            RCofib::Bot
+        );
+    }
+
+    #[test]
+    fn succ_v_helper_builds_a_con() {
+        // Sanity for the `succ_v` test helper itself (kept for potential future Nat-shaped goldens).
+        let s = sig();
+        assert!(veq(
+            &s,
+            &succ_v(zero_v()),
+            &RValue::Con(ConName("Succ".into()), vec![zero_v()])
+        ));
+    }
+}

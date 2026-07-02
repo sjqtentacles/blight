@@ -26,6 +26,17 @@ pub enum Value {
     Pair(Box<Value>, Box<Value>),
     Data(DataName, Vec<Value>, Vec<Value>),
     Con(ConName, Vec<Value>),
+    /// The value-level counterpart of [`crate::term::Term::PCon`] (spec §2.7, Wave 7/E4): a path
+    /// constructor applied to its arguments, at a *non-endpoint* dimension. [`crate::normalize::eval`]
+    /// collapses an endpoint `dim` (`I0`/`I1`) to the constructor's declared boundary value
+    /// directly, so this variant's `dim` is never `I0`/`I1` — it is a genuine new canonical value
+    /// (analogous to [`Value::Con`], but indexed by a dimension rather than only by term args).
+    PCon {
+        data: DataName,
+        name: ConName,
+        args: Vec<Value>,
+        dim: Interval,
+    },
     PathP {
         family: Closure,
         lhs: Box<Value>,
@@ -75,6 +86,11 @@ pub enum Value {
     OpNode {
         effect: crate::row::EffName,
         op: crate::signature::OpName,
+        /// The operation's type-argument instantiation (Wave 7/E2), carried through evaluation so
+        /// two effectful-neutrals of a *differently-instantiated* parameterized operation are never
+        /// misjudged convertible (see `conv_at`'s `OpNode` rule) — the value-level analogue of
+        /// [`Value::Data`]'s `params`. Empty for a non-parameterized effect.
+        type_args: Vec<Value>,
         arg: Box<Value>,
         /// Pending eliminations to replay on resume, in application order (index 0 first).
         cont: Vec<Frame>,
@@ -193,12 +209,84 @@ pub enum Neutral {
     },
 }
 
+/// A persistent, structurally-shared stack of bound values (head = most-recently-bound, matching
+/// de Bruijn index 0).
+///
+/// This exists purely for performance, and is the core of Wave 5/N1's "NbE-with-sharing": storing
+/// bindings in a `Vec<Value>` (the previous representation) makes [`Env::extend`] — invoked on
+/// every β/ι step — an O(n) copy of every previously-bound value, so a computation `n` binders
+/// deep pays O(n²) in environment bookkeeping alone. That cost then multiplies *again* every time
+/// a closure capturing such an environment is itself cloned, which `do_elim`'s recursive-argument
+/// case does once per constructor argument (`motive.clone()`/`methods.clone()` in `normalize.rs`).
+/// This compounding "no sharing across reduction steps" cost is exactly what
+/// `crates/blight-prelude/spore_reader.bl` documents as the normalizer performance wall.
+///
+/// A persistent cons-list makes `extend`/`clone` an O(1) `Rc` bump instead: everything below the
+/// new binding is shared, not copied, so an environment's cost is paid once when built, not once
+/// per snapshot taken of it. Lookup by index walks the list — O(index) instead of the `Vec`'s
+/// O(1) — but a de Bruijn index is bounded by *lexical* nesting depth at its use site, not by
+/// total reduction depth, so this is the right trade for a normalizer that recurses far deeper
+/// than any single term ever binds.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ValueChain(Option<Rc<ValueNode>>);
+
+#[derive(Debug, PartialEq, Eq)]
+struct ValueNode {
+    head: Value,
+    tail: ValueChain,
+    /// Cached so `ValueChain::len` (hence `Env::len`) stays O(1) rather than walking the list.
+    len: usize,
+}
+
+impl ValueChain {
+    fn len(&self) -> usize {
+        self.0.as_ref().map_or(0, |node| node.len)
+    }
+
+    fn push(&self, head: Value) -> ValueChain {
+        ValueChain(Some(Rc::new(ValueNode {
+            head,
+            tail: self.clone(),
+            len: self.len() + 1,
+        })))
+    }
+
+    fn get(&self, mut index: usize) -> Option<&Value> {
+        let mut cur = self;
+        loop {
+            let node = cur.0.as_ref()?;
+            if index == 0 {
+                return Some(&node.head);
+            }
+            index -= 1;
+            cur = &node.tail;
+        }
+    }
+
+    /// Rebuild the chain with the value at list-position `index` (0 = head) replaced, sharing
+    /// every node below it (only the O(index) path from the head down is reallocated). A no-op
+    /// (returns an unchanged clone) once the chain is exhausted before `index` is reached, mirroring
+    /// [`Env::set_level`]'s existing "out-of-range level is a no-op" contract.
+    fn set(&self, index: usize, v: Value) -> ValueChain {
+        match &self.0 {
+            None => self.clone(),
+            Some(node) => {
+                if index == 0 {
+                    node.tail.push(v)
+                } else {
+                    node.tail.set(index - 1, v).push(node.head.clone())
+                }
+            }
+        }
+    }
+}
+
 /// An evaluation environment: values for the de Bruijn variables in scope, plus a shared handle
 /// to the inductive [`Signature`] so that `eval` can perform ι-reduction on `Elim` without an
 /// extra threaded parameter. The signature is shared (`Rc`) and captured into closures.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Env {
-    values: Vec<Value>,
+    values: ValueChain,
     /// Interpretations of dimension (interval) variables, indexed like `values` (most-recent
     /// binding first). Dimension variables live in a separate de Bruijn space from term vars.
     dims: Vec<Interval>,
@@ -208,7 +296,7 @@ pub struct Env {
 impl Env {
     pub fn empty() -> Self {
         Env {
-            values: Vec::new(),
+            values: ValueChain::default(),
             dims: Vec::new(),
             sig: None,
         }
@@ -217,7 +305,7 @@ impl Env {
     /// An empty environment carrying a signature (used by the checker/normalizer entry points).
     pub fn with_sig(sig: Rc<Signature>) -> Self {
         Env {
-            values: Vec::new(),
+            values: ValueChain::default(),
             dims: Vec::new(),
             sig: Some(sig),
         }
@@ -229,12 +317,12 @@ impl Env {
     }
 
     /// Extend the environment with a value for the newly bound variable, preserving the sig.
+    ///
+    /// O(1): this is a single `Rc` bump on the shared [`ValueChain`], not a copy of every
+    /// previously-bound value (see `ValueChain`'s doc-comment for why that matters).
     pub fn extend(&self, value: Value) -> Self {
-        let mut values = Vec::with_capacity(self.values.len() + 1);
-        values.push(value);
-        values.extend(self.values.iter().cloned());
         Env {
-            values,
+            values: self.values.push(value),
             dims: self.dims.clone(),
             sig: self.sig.clone(),
         }
@@ -257,6 +345,19 @@ impl Env {
         self.dims.get(index)
     }
 
+    /// Rebind an already-bound dimension variable to a specific interval (used to specialize a
+    /// "generic point" environment to one face/vertex of a cofibration while leaving every other
+    /// dimension's binding untouched). Panics if `index` is out of range.
+    pub fn override_dim(&self, index: usize, dim: Interval) -> Self {
+        let mut dims = self.dims.clone();
+        dims[index] = dim;
+        Env {
+            values: self.values.clone(),
+            dims,
+            sig: self.sig.clone(),
+        }
+    }
+
     pub fn dim_len(&self) -> usize {
         self.dims.len()
     }
@@ -266,18 +367,23 @@ impl Env {
         self.values.get(index)
     }
 
-    /// Replace the value bound at de Bruijn *level* `lvl` (0 = outermost) with `v`. The internal
-    /// store is innermost-first (de Bruijn-index order), so level `lvl` lives at index
+    /// Replace the value bound at de Bruijn *level* `lvl` (0 = outermost) with `v`. The logical
+    /// store is innermost-first (de Bruijn-index order), so level `lvl` lives at chain position
     /// `len - 1 - lvl`. Used to apply a per-branch index specialization during dependent
     /// pattern-match refinement (see the kernel's `infer_elim` refinement path). Out-of-range
-    /// levels are a no-op.
+    /// levels are a no-op. Shares every chain node except the O(lvl) path rebuilt down to the
+    /// replaced position.
     pub fn set_level(&self, lvl: usize, v: Value) -> Env {
-        let mut e = self.clone();
-        let n = e.values.len();
+        let n = self.values.len();
         if lvl < n {
-            e.values[n - 1 - lvl] = v;
+            Env {
+                values: self.values.set(n - 1 - lvl, v),
+                dims: self.dims.clone(),
+                sig: self.sig.clone(),
+            }
+        } else {
+            self.clone()
         }
-        e
     }
 
     pub fn len(&self) -> usize {
@@ -285,6 +391,6 @@ impl Env {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.values.is_empty()
+        self.values.len() == 0
     }
 }

@@ -49,9 +49,10 @@ pub enum RValue {
     /// `Neutral::Force`; only the `later` case lands here).
     Force(Box<RValue>),
 
-    // ---- effects and handlers (spec §4): modeled at the TYPE LEVEL only ----
-    /// `! E A` as a type value (the row `E` is dropped; only the payload type `A` is kept).
-    EffTy(Box<RValue>),
+    // ---- effects and handlers (spec §4) ----
+    // `! E A` has no value of its own: it is *definitionally its payload* `A` at the value level
+    // (`normalize.rs` collapses `RTerm::EffTy(a)` to `eval a`, mirroring the kernel), with the effect
+    // row tracked separately as the threaded `RRow` (B2). So there is no `EffTy` value variant.
 
     // ---- primitive machine integers (M11) ----
     /// `Int` as a type value.
@@ -82,6 +83,9 @@ pub enum Neutral {
     Op {
         effect: blight_kernel::row::EffName,
         op: blight_kernel::signature::OpName,
+        /// Type-argument instantiation (Wave 7/E2), threaded so two stuck `perform`s of a
+        /// differently-instantiated parameterized operation are never misjudged convertible.
+        type_args: Vec<RValue>,
         arg: Box<RValue>,
     },
     /// A *stuck* `handle …`: the re-checker does not run handler semantics, so a `handle`
@@ -117,10 +121,69 @@ pub struct DimClosure {
     pub body: Rc<RTerm>,
 }
 
+/// A persistent, structurally-shared stack of bound values (head = most-recently-bound). Mirrors
+/// `blight_kernel::value`'s `ValueChain` for the same reason: a `Vec`-backed environment makes
+/// `Env::extend` — invoked on every β/ι step — an O(n) copy of every previously-bound value, so a
+/// deeply-recursive term pays O(n²) in environment bookkeeping alone, compounding further whenever
+/// a closure capturing such an environment is itself cloned (e.g. `do_elim`'s per-constructor-arg
+/// `motive.clone()`/`methods.clone()`). Since the two checkers must independently agree on *every*
+/// decision, this crate's `conv`/`eval` must independently finish on the same terms the kernel's
+/// does (Wave 5/N1's re-checker-parity requirement) — hence the identical representation fix here.
+#[derive(Debug, Clone, Default)]
+struct TermChain(Option<Rc<TermNode>>);
+
+#[derive(Debug)]
+struct TermNode {
+    head: RValue,
+    tail: TermChain,
+    len: usize,
+}
+
+impl TermChain {
+    fn len(&self) -> usize {
+        self.0.as_ref().map_or(0, |node| node.len)
+    }
+
+    fn push(&self, head: RValue) -> TermChain {
+        TermChain(Some(Rc::new(TermNode {
+            head,
+            tail: self.clone(),
+            len: self.len() + 1,
+        })))
+    }
+
+    fn get(&self, mut index: usize) -> Option<&RValue> {
+        let mut cur = self;
+        loop {
+            let node = cur.0.as_ref()?;
+            if index == 0 {
+                return Some(&node.head);
+            }
+            index -= 1;
+            cur = &node.tail;
+        }
+    }
+
+    /// Rebuild the chain with the value at list-position `index` (0 = head) replaced, sharing
+    /// every node below it; a no-op past the end, mirroring `Env::set_level`'s contract.
+    fn set(&self, index: usize, v: RValue) -> TermChain {
+        match &self.0 {
+            None => self.clone(),
+            Some(node) => {
+                if index == 0 {
+                    node.tail.push(v)
+                } else {
+                    node.tail.set(index - 1, v).push(node.head.clone())
+                }
+            }
+        }
+    }
+}
+
 /// An evaluation environment: term bindings and dimension bindings, innermost last.
 #[derive(Debug, Clone, Default)]
 pub struct Env {
-    terms: Vec<RValue>,
+    terms: TermChain,
     dims: Vec<RInterval>,
 }
 
@@ -129,10 +192,12 @@ impl Env {
         Env::default()
     }
 
+    /// O(1): a single `Rc` bump on the shared chain, not a copy of every previously-bound value.
     pub fn extend(&self, v: RValue) -> Env {
-        let mut e = self.clone();
-        e.terms.push(v);
-        e
+        Env {
+            terms: self.terms.push(v),
+            dims: self.dims.clone(),
+        }
     }
 
     pub fn extend_dim(&self, r: RInterval) -> Env {
@@ -143,22 +208,22 @@ impl Env {
 
     /// Look up term de Bruijn *index* `i` (0 = innermost).
     pub fn lookup(&self, i: usize) -> Option<&RValue> {
-        let n = self.terms.len();
-        if i < n {
-            self.terms.get(n - 1 - i)
-        } else {
-            None
-        }
+        self.terms.get(i)
     }
 
     /// Replace the term bound at de Bruijn *level* `lvl` (0 = outermost) with `v`, used to apply a
-    /// per-branch index specialization during dependent pattern matching.
+    /// per-branch index specialization during dependent pattern matching. Shares every chain node
+    /// except the O(lvl) path rebuilt down to the replaced position.
     pub fn set_level(&self, lvl: usize, v: RValue) -> Env {
-        let mut e = self.clone();
-        if lvl < e.terms.len() {
-            e.terms[lvl] = v;
+        let n = self.terms.len();
+        if lvl < n {
+            Env {
+                terms: self.terms.set(n - 1 - lvl, v),
+                dims: self.dims.clone(),
+            }
+        } else {
+            self.clone()
         }
-        e
     }
 
     /// Look up dimension de Bruijn *index* `i` (0 = innermost).
