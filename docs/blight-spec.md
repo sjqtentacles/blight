@@ -2,9 +2,12 @@
 
 > **Blight** — "Scheme's soul, a proof assistant's spine, grown from one spore."
 
-Status: **Design draft (v0).** No compiler exists yet. This document is the canonical
-specification we design against and later implement from. It is deliberately precise about
-the *trusted core* (the spore) and deliberately open-ended about the *tower* grown above it.
+Status: **Design v0, implemented.** This document is the canonical specification the
+implementation was designed against; see [README.md](../README.md) for current build/milestone
+status (M0–M24 and beyond) and [docs/roadmap-post-m6.md](roadmap-post-m6.md) for what has shipped
+since. It remains deliberately precise about the *trusted core* (the spore) and deliberately
+open-ended about the *tower* grown above it — most of §9's roadmap below is historical narrative
+for milestones that are now implemented and tested, not a forward-looking plan.
 
 - **Language:** Blight
 - **The trusted kernel:** "the spore" — the tiny thing the blight grows from
@@ -58,9 +61,13 @@ The name is the thesis. A blight begins as a microscopic spore and silently spre
 it has consumed the whole organism. That is precisely how the language is built:
 
 - **The spore** is the trusted kernel — small enough to audit, the only thing you must
-  believe.
+  believe. "Trusted" here is the precise, load-bearing sense: *implicitly trusted* — relied on
+  without any external check. That is a liability, not a compliment: a bug in it could silently
+  certify something false.
 - **The blight** is everything the spore grows into — an unbounded tower of features, none
-  of which is privileged, all of which spread *from* the spore and can never contradict it.
+  of which is privileged, all of which spread *from* the spore and can never contradict it. The
+  tower is *untrusted* in the equally precise sense: *explicitly checked* — every term it produces
+  is re-verified by the spore, so its bugs are caught rather than believed.
 
 A buggy thing in the tower is not a soundness hole; it is, at worst, a feature that *fails
 to grow* (fails to produce a `Proof`). It can never grow something *false*, because the
@@ -1335,7 +1342,9 @@ flowchart TD
 ### 8.3 The trusted base and auditing
 
 The whole point of the spore is that the **trusted computing base (TCB)** is small and
-auditable. The TCB consists of exactly:
+auditable. "Trusted" is meant precisely: *implicitly trusted* — believed without any external
+check (a bug there is silent and could mint a false `Proof`), as opposed to the tower, which is
+*explicitly re-checked* (a bug there is caught). The TCB consists of exactly:
 
 1. the Stage-0 kernel (§2–§4): term rep, normalizer, inference rules, Kan table, grading
    arithmetic, effect judgement;
@@ -1433,6 +1442,18 @@ asymmetry), evidence-backed metatheory notes (§10.3/§10.4), and the intrinsica
 sketch — is tracked with per-milestone acceptance tests in
 [docs/roadmap-post-m6.md](roadmap-post-m6.md). The only deliberate TCB growth in this band is
 primitive ints (M10) and dependent-match refinement (M12), both reviewed and isolated.
+
+### M15–M19 — multicore + distributed runtime
+
+Share-nothing concurrency and a data-only distributed transport, built entirely in the untrusted
+tower/runtime: per-thread runtime state (M15, `BL_THREAD_LOCAL`), a `std/actor.bl` actor/CSP surface
+as graded effects whose resume-once safety is kernel-enforced (M16), a native share-nothing worker
+pool (M17), a structural data-only (de)serializer (M18), and an untrusted Rust TCP transport
+(`blight-net`, M19) reusing the serializer's wire format. **Zero TCB growth and zero new `foreign`
+axioms** — the kernel never sees a thread or a socket. Per-milestone acceptance tests (including the
+`worker_pool_scales_with_cores` and `serializer_throughput_reported` performance proofs) are in
+[docs/roadmap-post-m6.md](roadmap-post-m6.md); see also [docs/performance.md](performance.md)
+§"Multicore".
 
 ### Dependency view
 
@@ -1618,5 +1639,6 @@ even in the conservative configuration.
 
 ---
 
-*End of specification (v0). The next concrete step is M0 (§9): implement the spore and a REPL
-that checks the cubical `plus-zero` of §5.3.*
+*End of specification (v0). M0 (§9) — the spore and a REPL that checks the cubical `plus-zero` of
+§5.3 — and the milestones after it are implemented; see [README.md](../README.md) for current
+status.*

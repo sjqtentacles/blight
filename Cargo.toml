@@ -5,8 +5,14 @@ members = [
     "crates/blight-recheck",
     "crates/blight-elab",
     "crates/blight-codegen",
+    "crates/blight-prelude-embed",
     "crates/blight-repl",
+    "crates/blight-lsp",
+    "crates/blight-net",
 ]
+# The cargo-fuzz crate is a separate, nightly-only package (libFuzzer); keep it out of the normal
+# `--workspace` build so `cargo build`/`cargo test` on stable never touch it.
+exclude = ["fuzz"]
 
 [workspace.package]
 edition = "2021"

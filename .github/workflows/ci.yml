@@ -26,6 +26,11 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --workspace
+      # Wave 9 / T2: the Blight-source formatter must be a no-op on the whole `.bl` corpus (the
+      # same idempotence/semantics-preservation guarantee `blight-elab/tests/fmt_corpus.rs` proves
+      # at the unit level, gated here as a real pass/fail CI check on every PR).
+      - name: blight fmt --check (.bl corpus)
+        run: cargo run -p blight-repl --bin blight -- fmt --check examples crates/blight-prelude bench/games
 
   # The native/WASM backend path, gated behind the `llvm` feature (LLVM 18 + clang).
   llvm:
@@ -43,7 +48,87 @@ jobs:
           chmod +x llvm.sh
           sudo ./llvm.sh 18
           echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+          # Wave 10 / P3: the wasm32 target link (`driver::link_wasm`, exercised by
+          # `blight-codegen/tests/wasm_exec.rs`) needs a wasm-capable `clang` (llvm.sh's `clang-18`
+          # already is one — unlike distro/Apple clang, apt.llvm.org builds every target in) and
+          # `wasm-ld` (shipped in the versioned `lld-18` package, not installed by `llvm.sh` itself).
+          sudo apt-get install -y lld-18
+          echo "BLIGHT_WASM_CC=$(command -v clang-18)" >> "$GITHUB_ENV"
+          echo "BLIGHT_WASM_LD=$(command -v wasm-ld-18)" >> "$GITHUB_ENV"
       - name: Clippy (llvm)
         run: cargo clippy --workspace --all-targets --features blight-codegen/llvm,blight-repl/llvm -- -D warnings
       - name: Test (llvm)
         run: cargo test --workspace --features blight-codegen/llvm,blight-repl/llvm
+      # B1: the *full* differential bit-identity matrix (every fast-path on/off vs. the slow
+      # reference). It is `#[ignore]`d in the normal run because it builds many native binaries; here
+      # we run it explicitly so a miscompiling optimization is caught on every PR.
+      - name: Differential matrix (full, bit-identity)
+        run: cargo test -p blight-repl --features blight-codegen/llvm,blight-repl/llvm differential -- --ignored --nocapture
+      # Bench *correctness* gate: each Blight benchmark impl must still print its committed golden.
+      - name: Bench goldens
+        run: bash bench/goldens.sh
+      # ThreadSanitizer over the share-nothing multicore runtime (workers, pools). The threaded C
+      # harnesses are rebuilt with `-fsanitize=thread` when `BL_TSAN` is set, catching data races in
+      # the thread-local GC / worker pool that the normal run cannot see. (The `runtime` module is
+      # gated on the `llvm` feature, so this lives in the llvm job where LLVM is already installed.)
+      - name: ThreadSanitizer (multicore runtime)
+        env:
+          BL_TSAN: "1"
+        run: cargo test -p blight-codegen --features llvm -- share_nothing worker_pool --nocapture
+
+  # Wave 10 / P2: the `graphics` cargo feature (runtime/graphics.c + SDL2), gated in its own job so
+  # the default `llvm` job above never needs SDL2 dev headers. `SDL_VIDEODRIVER=dummy` (SDL's
+  # headless backend, no real display/GPU needed) is exported for the whole job so every graphics
+  # test — the C `graphics_test.c` harness and `example_graphics_scratch_builds_and_runs` alike —
+  # runs identically on a GUI-less CI runner as it would against a real window.
+  graphics:
+    name: clippy + test (llvm + graphics)
+    runs-on: ubuntu-latest
+    env:
+      SDL_VIDEODRIVER: dummy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install LLVM 18 + SDL2
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 18
+          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+          sudo apt-get install -y libsdl2-dev
+      - name: Clippy (llvm + graphics)
+        run: cargo clippy --workspace --all-targets --features blight-codegen/graphics,blight-repl/graphics -- -D warnings
+      - name: Test (llvm + graphics)
+        run: cargo test --workspace --features blight-codegen/graphics,blight-repl/graphics
+
+  # D1: a *deterministic* gate on the committed fuzz seed corpus (Track D). `-runs=0` replays every
+  # committed corpus file exactly once against the current build and exits non-zero on any crash —
+  # "no previously-found input regresses" — without the flakiness/time-variance of fresh, time-boxed
+  # fuzzing (that stays informational in fuzz.yml, on a nightly schedule). Corpus files are small
+  # (committed, `fuzz/corpus/*`), so this finishes in seconds and is safe to gate every PR on.
+  fuzz-corpus-replay:
+    name: fuzz corpus replay (deterministic gate)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [reader, elab, kernel]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - name: Replay committed corpus (${{ matrix.target }})
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -runs=0
+      - name: Upload any crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-replay-crash-${{ matrix.target }}
+          path: fuzz/artifacts

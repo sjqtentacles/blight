@@ -1,0 +1,75 @@
+name: Mutation testing
+
+# Mutation testing of the trusted base (Track D): inject small bugs into the kernel + re-checker and
+# require the test suite to catch them. Scope and timeouts are pinned in `.cargo/mutants.toml`.
+#
+# Two modes, because a strict whole-base gate would block on historical gaps:
+#   * `incremental` (pull_request, GATING): runs `--in-diff` over the PR, so any *new or changed*
+#     line of trusted-base code must have its mutants killed. This ratchets coverage upward without
+#     requiring the entire historical base to be 100% mutation-covered first.
+#   * `nightly` (schedule, INFORMATIONAL): a full mutation run over the whole trusted base, uploaded
+#     as an artifact so the surviving-mutant backlog is visible and shrinking. Non-blocking.
+on:
+  pull_request:
+  schedule:
+    - cron: "0 7 * * *" # 07:00 UTC nightly
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  incremental:
+    name: cargo-mutants (PR diff, gating)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need the base ref to diff against
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - name: Compute PR diff
+        run: |
+          git diff "origin/${{ github.base_ref }}"...HEAD > pr.diff
+          echo "Changed hunks:"; wc -l pr.diff
+      # Only mutants on lines touched by this PR (intersected with the kernel/recheck scope in
+      # `.cargo/mutants.toml`). Exits non-zero if any such mutant survives — the gate.
+      - name: Mutation-test changed trusted-base lines
+        run: cargo mutants --in-place -j 2 --in-diff pr.diff
+      - name: Upload mutants report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-incremental
+          path: mutants.out
+
+  nightly:
+    name: cargo-mutants (full base, informational)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      # Full trusted-base run. Non-blocking: it tracks the surviving-mutant backlog over time rather
+      # than failing the build on a pre-existing gap. The PR `incremental` job is the actual gate.
+      - name: Mutation-test the whole trusted base
+        continue-on-error: true
+        run: cargo mutants --in-place -j 2 --no-shuffle
+      - name: Upload mutants report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-nightly
+          path: mutants.out

@@ -9,11 +9,18 @@ small, trusted core checks both. That core is the **spore**: a tiny kernel that 
 allowed to certify that a term is well-typed. Everything else is built on top of it.
 
 **The one big idea: trust is bounded, power is not.** The kernel is deliberately microscopic and is
-the *only* code that can mint a `Proof`. Data types, pattern matching, traits, ML-style modules and
-functors, effect handlers, tactics, the standard library, and the package manager are all
-*untrusted "tower" code* written in the language itself — every one of them ultimately bottoms out
-in the kernel. A second, independently-written **re-checker** can re-verify any kernel-accepted
-proof, so the soundness argument is "two small checkers agree," not "trust one large compiler."
+the *only* code that can mint a `Proof`. "Trusted" here means *implicitly trusted* — relied on
+without any external check, so a bug in it could silently certify something false; that is a
+liability, not a badge. Data types, pattern matching, traits, ML-style modules and functors, effect
+handlers, tactics, the standard library, and the package manager are all *"tower" code*: the
+*untrusted, explicitly-checked* layer. "Tower" is a role, not a folder — it spans both the untrusted
+Rust crates and the `.bl` standard library, and its defining property is that the kernel re-verifies
+everything it produces. So a tower bug at worst *fails to produce* a `Proof` (it is caught), never
+mints a false one. Building *on top of* the kernel is a dependency relationship; it does not make
+tower code trusted, because the kernel it depends on is precisely the checker that re-derives every
+verdict. A second, independently-written **re-checker** can re-verify any kernel-accepted proof, so
+the soundness argument is "two small checkers agree (or the second honestly, countably *declines*) —
+never silently disagree," not "trust one large compiler."
 
 **How it compares.** If you know other languages: Blight takes its dependent, *cubical* type theory
 from the Cubical Agda family, its quantitative `0/1/ω` grading from Idris 2's QTT, and adds
@@ -28,7 +35,7 @@ syntax, and compiles checked terms to native (or WebAssembly) code.
 - Tutorial: [docs/tutorial.md](docs/tutorial.md) — a hands-on walk from `Nat` to a tactic proof.
 - Implementation notes: [docs/implementation.md](docs/implementation.md) — host architecture, the TCB boundary, the milestone map.
 - Performance: [docs/performance.md](docs/performance.md) — cost model, benchmarks, advantages/disadvantages.
-- Benchmarks game: [docs/benchmarks-game.md](docs/benchmarks-game.md) — scaling tables + one honest cross-language comparison.
+- Benchmarks game: [docs/benchmarks-game.md](docs/benchmarks-game.md) — scaling tables + a measured cross-language table (fib/sum/factorial vs C/Rust/OCaml/Haskell/Python) where Blight-Int lands in the C/Rust/OCaml cluster.
 - Roadmap: [docs/roadmap.md](docs/roadmap.md) — can we build games / be fast / do I/O, and what each costs the trusted kernel.
 - Examples: [examples/](examples/) — small runnable programs and a sample package.
 
@@ -115,8 +122,10 @@ literal desugars into a cons-list of `Nat` codepoints — no primitive string ty
 ## Architecture and the trust boundary
 
 Only `blight-kernel` is trusted (TCB); its Cargo manifest sets `[lints.rust] unsafe_code = "forbid"`,
-so the trusted base contains no `unsafe`. Every other crate is untrusted and can only *propose*
-terms that the kernel must independently accept.
+so the trusted base contains no `unsafe`. "Trusted" is meant in the precise sense: *implicitly
+trusted* — believed without any external check. Every other crate is *untrusted* in the equally
+precise sense: *explicitly checked* — it can only *propose* terms that the kernel must independently
+accept, so its bugs are caught rather than believed.
 
 ```mermaid
 flowchart TD
@@ -140,9 +149,11 @@ flowchart TD
 | [`blight-elab`](crates/blight-elab) | Untrusted | The s-expression reader, bidirectional elaborator, macros, tactics, and the `spores` package manager. |
 | [`blight-codegen`](crates/blight-codegen) | Untrusted | The backend: erasure, closure conversion, monomorphization, ANF, and LLVM codegen to a native binary or a WebAssembly object. |
 | [`blight-repl`](crates/blight-repl) | Untrusted | The `blight` CLI binary: read, elaborate, check, report, build. |
+| [`blight-net`](crates/blight-net) | Untrusted | Data-only distributed transport: serialized values over TCP, using the runtime serializer's wire format. **No `blight-kernel` dependency and no `foreign` axioms** — it only moves bytes, so it does not grow the trusted base. |
 
 The standard library and the self-model live as `.bl` sources in
-[`crates/blight-prelude`](crates/blight-prelude) (tower code, not a compiled crate).
+[`crates/blight-prelude`](crates/blight-prelude) — tower code (the untrusted, explicitly-checked
+role described above), not a compiled crate.
 
 ## Build
 
@@ -165,6 +176,11 @@ cargo test --workspace --features blight-codegen/llvm,blight-repl/llvm
 ```
 
 ## Quickstart
+
+**Getting started:** the fastest path from zero to a checked proof is
+[`docs/tutorial.md`](docs/tutorial.md) — install, REPL, your first `define`, a `Nat` program, an
+interactive `Console`-effect program, and a tactic proof, all runnable as you go. The rest of this
+section is the terse reference version.
 
 ### REPL
 
@@ -261,6 +277,18 @@ cargo run -p blight-repl --features llvm -- build examples/hello_nat.bl -o hello
 - **Self-model** — [spore.bl](crates/blight-prelude/spore.bl) models the kernel's own core term
   language in Blight, and [spore_meta.bl](crates/blight-prelude/spore_meta.bl) proves small
   metatheorems about it (re-checked through the kernel door).
+- **Concurrency, parallelism, and distribution** — the actor/CSP surface
+  ([std/actor.bl](crates/blight-prelude/std/actor.bl)) declares `spawn`/`send`/`receive`/`yield` as
+  *graded* algebraic effects, so resume-once safety is enforced by the kernel's continuation grades
+  (a double-resume of a linear `send` is a `GradeViolation`, not a runtime race; see
+  [actor_pingpong.bl](examples/actor_pingpong.bl)). Underneath, the C runtime is **share-nothing
+  multicore**: each OS-thread worker gets its own thread-local heap/stack, and a native worker pool
+  runs independent computations in parallel — messages cross heaps by structural copy of immutable
+  values. The same serializer feeds a **data-only distributed transport**
+  ([`blight-net`](crates/blight-net)) over TCP, with an M24 remote-addressing layer
+  (`NodeId`/`Router`) that routes the same `send`/`receive` ops to named remote nodes (a
+  two-OS-process ping/pong over loopback). All of this is untrusted tower/runtime: zero TCB
+  growth, no new `foreign` axioms. Measured speedup/throughput: `bench/multicore.sh`.
 - **Independent re-checking** — `--recheck`, backed by [`blight-recheck`](crates/blight-recheck).
 
 ## Examples
@@ -299,31 +327,40 @@ commands and expected outputs.
 | [functor.bl](examples/functor.bl) | load-only | an ML-style functor over an `ORD` module |
 | [redblacktree.bl](examples/redblacktree.bl) | load-only | the `RedBlackTree` functor |
 | [effects_demo.bl](examples/effects_demo.bl) | load-only | a `State` effect + handler |
+| [actor_pingpong.bl](examples/actor_pingpong.bl) | buildable → `5` | the actor/CSP surface ([std/actor.bl](crates/blight-prelude/std/actor.bl)): `spawn`/`send`/`yield`/`receive` as graded effects under an inline cooperative scheduler |
 
 ## Performance
 
 Blight's priorities are soundness (a tiny trusted kernel plus an independent re-checker) and
 predictable, bounded-stack execution — not peak throughput. The headline trade-offs:
 
-- **Advantages** — two small checkers agreeing is the soundness story; deep recursion runs in bounded
+- **Advantages** — two small checkers agreeing (or the second honestly, countably *declining* —
+  never silently disagreeing) is the soundness story; deep recursion runs in bounded
   stack via the `Later`/`Fix` trampoline; `(region …)` arenas reclaim in O(1) and bypass the GC; the
   GC is precise (no leaks mid-run) and `musttail` calls are guaranteed.
-- **Disadvantages** — `Nat` is unary, so arithmetic is O(n) heap allocations (use the primitive
-  machine `Int` for numeric scale); every value is boxed; LLVM optimization passes are available via
-  `--opt` but buy no measurable runtime gain on the current C-runtime/GC-bound architecture (no
-  cross-object LTO); the trampoline allocates
-  a thunk per step; the wasm runtime is bump-only (no GC, no `Later`/effects/regions); the native
-  heap is a fixed 64 MiB.
+- **Disadvantages** — `Nat` is unary, so arithmetic on *user-defined* numeric functions is O(n) heap
+  allocations; the backend recognizer (M20) rewrites the prelude `plus`/`mult`/`pred`/`sub` (and the
+  M23 untrusted `Float`) to O(1) machine-word ops, and the primitive machine `Int` is O(1) throughout,
+  but a bespoke recursion over `Succ` still pays the unary cost. Every value is boxed (M21 unboxes
+  machine-word `Nat`/`Int` and nullary cons into tagged pointers, but compound data stays heap-boxed);
+  LLVM optimization passes (`--opt`) now pay off via M22 cross-object LTO (the runtime helpers inline
+  into hot Blight code, ~1.15x on allocation-heavy loops, bit-identical output); the trampoline
+  allocates a thunk per step; the wasm runtime is bump-only (no GC, no `Later`/effects/regions); the
+  native heap starts at 64 MiB and grows (doubling semi-spaces) under pressure, so only a true
+  host-OOM aborts.
 
 Full cost model, measured numbers, and reproduction instructions are in
 [docs/performance.md](docs/performance.md). The in-tree harness is criterion benches
 (`cargo bench -p blight-codegen --bench pipeline`, and `--features llvm --bench runtime` for runtime
-+ GC/arena counters) plus `bench/run.sh` (hyperfine over `blight build` and the built binaries).
++ GC/arena counters) plus `bench/run.sh` (hyperfine over `blight build` and the built binaries) and
+`bench/multicore.sh` (worker-pool scaling + serializer throughput for the share-nothing runtime).
 
 ## Status
 
 All milestones M0-M6 are implemented and green (`cargo test --workspace`, with and without the
-`llvm` feature).
+`llvm` feature), as is the post-M6 work: M7-M14 (capability + soundness hardening), M15-M19
+(share-nothing multicore + distributed runtime), and M20-M24 (a max-performance sweep — fast-`Nat`,
+unboxing, cross-object LTO, untrusted `Float`, distributed-actor addressing — all zero TCB growth).
 
 | Milestone | Deliverable |
 |---|---|
@@ -334,14 +371,23 @@ All milestones M0-M6 are implemented and green (`cargo test --workspace`, with a
 | M4 | Native backend (LLVM) |
 | M5 | Region elision from grades + GC maturation |
 | M6 | Self-hosting model + ecosystem (std tree, spores, WASM, extended re-checker) |
+| M7-M14 | Post-M6 hardening: console/foreign/heap/int codegen, re-checker completeness, dependent-match refinement into the kernel, metatheory notes, intrinsic self-host sketch |
+| M15-M19 | Share-nothing multicore + distributed runtime: thread-local runtime, `std/actor.bl` graded actor/CSP API, native worker pool, structural serializer, `blight-net` TCP transport (zero TCB growth, no new `foreign` axioms) |
+| M20-M24 | Max-performance sweep, all untrusted: backend fast-`Nat` recognizer (O(n)→O(1) arithmetic, differential-tested), tagged-pointer unboxing, cross-object LTO, untrusted fixed-point `Float` (no kernel `FloatTy`), distributed-actor remote addressing (`NodeId`/`Router`). Zero TCB growth, no new `foreign` axioms |
 
-See the [milestone map](docs/implementation.md#7-milestone-map-m0m6) and the
-[M6 status](docs/implementation.md#9-m6-status-self-hosting--ecosystem) for detail.
+See the [milestone map](docs/implementation.md#7-milestone-map-m0m6), the
+[M6 status](docs/implementation.md#9-m6-status-self-hosting--ecosystem), and the
+[post-M6 roadmap (M7-M24)](docs/roadmap-post-m6.md) for detail.
 
 ### Honest caveats
 
 - The *combination* of cubical + grading + effects in one kernel has no published end-to-end
   normalization proof; M0 soundness rests on the component results plus extensive testing (spec §10).
+  An external, machine-checked (Lean 4) mechanization of a scoped, non-cubical fragment — the QTT
+  grade semiring plus weakening and substitution for a graded simply-typed core, zero `sorry` — lives
+  in [`mechanization/`](mechanization) (see [docs/metatheory-mechanized.md](docs/metatheory-mechanized.md));
+  it is a genuine independent proof, not a restatement of the kernel's own checking, but it does not
+  yet cover the cubical layer or attempt full SN/canonicity.
 - The cubical layer ships `transp`/`hcomp`/`comp` and `Glue`/`unglue`. Both `funext` and `ua` are
   exported from [std/path.bl](crates/blight-prelude/std/path.bl): `funext` re-checks, and `ua` is
   built from a single-face `Glue` line. The univalence *computation* rule (`transp` over `ua e`
@@ -359,15 +405,19 @@ See the [milestone map](docs/implementation.md#7-milestone-map-m0m6) and the
   the cubical Kan table (transp/hcomp/comp), native `Int`, and effects/handlers + partiality
   *at the type level* (a genuine second opinion, not a blanket decline). It honestly *declines*
   (rather than rejects) only the genuinely out-of-fragment forms: cubical `Glue`/`ua`/partial
-  elements, `foreign` postulates (trusted FFI), and universe-*level* variables. Declines are counted
+  elements, `foreign` postulates (an FFI *axiom* you must believe — it genuinely grows the trusted
+  base, since the kernel cannot re-verify a foreign symbol), and universe-*level* variables. Declines
+  are counted
   and reported, never silently skipped.
-- Performance is correctness-first, not throughput-first: `Nat` is unary (arithmetic is O(n)
-  allocations — use the primitive machine `Int` for numeric scale; see
-  [docs/benchmarks-game.md](docs/benchmarks-game.md)), every value is heap-boxed, LLVM optimization
-  passes can be enabled with `--opt` but currently buy no measurable runtime gain (the runtime is
-  C-runtime/GC-bound and there is no cross-object LTO; see [docs/performance.md](docs/performance.md)
-  §2d), the trampoline allocates a thunk per step, and the native heap is a fixed 64 MiB that aborts
-  on exhaustion. The
+- Performance is correctness-first, not throughput-first: `Nat` is unary (so a bespoke recursion over
+  `Succ` is O(n) allocations — though the backend recognizer (M20) makes the prelude `plus`/`mult`/etc.
+  and the untrusted `Float` (M23) O(1) machine-word ops, and the primitive machine `Int` is O(1); see
+  [docs/benchmarks-game.md](docs/benchmarks-game.md)), values are heap-boxed (M21 unboxes machine-word
+  `Nat`/`Int` and nullary cons into tagged pointers), LLVM optimization passes (`--opt`) now pay off
+  via M22 cross-object LTO (~1.15x on allocation-heavy loops, bit-identical; see
+  [docs/performance.md](docs/performance.md) §2f), the trampoline allocates a thunk per step, and the
+  native heap starts at 64 MiB and grows
+  (doubling semi-spaces) under pressure, so only a true host-OOM aborts. The
   wasm runtime is a bump allocator only and omits the GC, `Later`/effects, and regions. See
   [docs/performance.md](docs/performance.md) for the full picture.
 

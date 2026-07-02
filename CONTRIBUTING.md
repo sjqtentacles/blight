@@ -5,10 +5,13 @@ Thanks for your interest in Blight. This document covers the project's one non-n
 
 ## The one rule: protect the trusted kernel
 
-Blight's entire value proposition is that **only `crates/blight-kernel` is trusted**. It is the
+Blight's entire value proposition is that **only `crates/blight-kernel` is trusted**. "Trusted" is
+the precise, load-bearing sense: *implicitly trusted* — relied on without any external check, so a
+bug there is silent and could mint a false `Proof`. It is the
 "spore": the sole way to construct a `Proof` (a well-typed term). Everything else — the elaborator,
-tactics, the package manager, the backend, the REPL — is *untrusted tower code* that can only
-*propose* terms the kernel must independently accept.
+tactics, the package manager, the backend, the REPL — is *untrusted tower code*, meaning *explicitly
+checked*: it can only *propose* terms the kernel must independently accept, so its bugs are caught
+rather than believed.
 
 Concretely:
 
@@ -22,6 +25,13 @@ Concretely:
 - **The re-checker is independent.** `crates/blight-recheck` is a deliberately separate, minimal
   implementation. Don't share code with the kernel that would couple their bugs; the point is that
   two independently-written checkers agree.
+- **`foreign` is the only TCB-growing hatch — avoid it.** A `foreign` postulate is an FFI *axiom*
+  the kernel must believe (it cannot re-verify an external symbol), so it genuinely grows the trusted
+  base and the re-checker honestly *declines* any program using it. New runtime capabilities should
+  avoid it: the share-nothing multicore + distributed runtime (M15-M19) — the worker pool, the
+  serializer, and the `blight-net` TCP transport — adds **zero new `foreign` axioms**. The transport
+  in particular is untrusted Rust with **no `blight-kernel` dependency**; it only moves serialized
+  bytes, so the kernel never sees a thread or a socket and the TCB does not grow.
 
 If you are unsure whether a change belongs in the kernel, it almost certainly does not.
 

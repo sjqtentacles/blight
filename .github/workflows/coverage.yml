@@ -1,0 +1,55 @@
+name: Coverage
+
+# Line-coverage measurement with a hard floor (Track D). Runs the no-LLVM workspace test suite under
+# instrumentation (`cargo-llvm-cov`) and fails if line coverage drops below the floor, so a change
+# that adds untested code is caught. The native/WASM backend (codegen) needs the LLVM toolchain and
+# is exercised by the separate `llvm` CI job; it is intentionally not part of this floor.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  coverage:
+    name: cargo-llvm-cov (line floor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      # Collect instrumentation once, then emit reports from it (cheap): an lcov artifact and a
+      # summary that enforces the floor. The floor is set ~5 points below the measured baseline
+      # (70% lines) so normal churn does not flap CI, while a real regression still trips it. Raise
+      # it as coverage improves.
+      - name: Run instrumented test suite
+        run: cargo llvm-cov --workspace --no-report
+      - name: Emit lcov report
+        run: cargo llvm-cov report --lcov --output-path lcov.info
+      - name: Enforce the line-coverage floor
+        run: cargo llvm-cov report --fail-under-lines 65
+      # D1: `--fail-under-lines` is a *global* workspace gate, so it cannot express a stricter floor
+      # for just the soundness-critical trusted base. Emit a second, scoped report (same
+      # instrumentation data, no re-run) over blight-kernel + blight-recheck only, gated higher than
+      # the workspace floor since this is exactly the code an unsound bug would live in. Measured
+      # baseline at the time of writing is ~77% lines combined; set a few points below that so normal
+      # churn does not flap CI (mirrors the workspace floor's own margin below its baseline), and raise
+      # it as kernel/recheck coverage improves (see docs/testing.md).
+      - name: Enforce the trusted-base (kernel + recheck) line-coverage floor
+        run: cargo llvm-cov report -p blight-kernel -p blight-recheck --fail-under-lines 75
+      - name: Upload lcov report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: lcov.info

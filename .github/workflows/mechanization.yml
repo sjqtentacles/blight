@@ -1,0 +1,34 @@
+name: Mechanization
+
+# Track M4 (docs/metatheory-mechanized.md): builds the external Lean 4 mechanization in
+# mechanization/ on every push/PR. This is a proof-engineering regression guard, independent of the
+# Rust workspace: a green build here means every theorem in BlightMeta/ still type-checks against
+# Lean's own kernel with zero `sorry`/`admit`/`native_decide` — the grep step makes that a hard CI
+# fact rather than an eyeballed one.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lean-build:
+    name: lake build (BlightMeta)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mechanization
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install elan (Lean toolchain manager)
+        run: |
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Reject sorry/admit/native_decide
+        run: |
+          if grep -rn --include='*.lean' -E '\b(sorry|admit|native_decide)\b' BlightMeta BlightMeta.lean; then
+            echo "::error::found a sorry/admit/native_decide placeholder in the mechanization"
+            exit 1
+          fi
+      - name: lake build
+        run: lake build

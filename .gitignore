@@ -11,3 +11,7 @@ Cargo.lock
 *.o
 *.ll
 *.dSYM/
+
+# cargo-mutants output
+/mutants.out/
+/mutants.out.old/

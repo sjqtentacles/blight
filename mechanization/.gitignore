@@ -1,0 +1,6 @@
+.lake/
+BlightMeta/*.olean
+BlightMeta/*.ilean
+BlightMeta/*.c
+*.olean
+*.ilean

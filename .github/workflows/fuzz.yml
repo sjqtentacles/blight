@@ -1,0 +1,47 @@
+name: Fuzz smoke
+
+# Nightly *exploratory* fuzzing (Track D): fresh, time-boxed, randomized runs that search for new
+# crashes. Deliberately INFORMATIONAL (the job does not block merges) because time-boxed fuzzing is
+# inherently non-deterministic — a slow CI runner can simply fail to hit a crash within the budget,
+# which is not a real regression signal. A known pre-existing limitation is that term-position
+# string/char literals desugar to unary-Peano `Nat` codepoints, so an adversarially large codepoint
+# can exhaust the stack during elaboration — a front-end resource bound, not a soundness issue (see
+# docs/testing.md). Crash inputs found here are uploaded as artifacts for triage and, once minimized
+# and fixed, belong permanently in the *committed* `fuzz/corpus/*` seed corpus, which IS gated on
+# every PR (deterministic `-runs=0` replay — see the `fuzz-corpus-replay` job in `ci.yml`) so a fix
+# can never silently regress.
+on:
+  schedule:
+    - cron: "0 8 * * *" # 08:00 UTC nightly
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: cargo-fuzz smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [reader, elab, kernel]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - name: Smoke-run ${{ matrix.target }}
+        continue-on-error: true
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=120 -rss_limit_mb=4096
+      - name: Upload any crash artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts
+          if-no-files-found: ignore

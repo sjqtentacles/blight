@@ -1,0 +1,6 @@
+name = "BlightMeta"
+defaultTargets = ["BlightMeta"]
+
+[[lean_lib]]
+name = "BlightMeta"
+globs = ["BlightMeta.+"]

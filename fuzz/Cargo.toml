@@ -1,0 +1,43 @@
+# cargo-fuzz crate (Track D). Nightly-only (libFuzzer); excluded from the main workspace.
+# Build/run with: `cargo +nightly fuzz run <target>`.
+[package]
+name = "blight-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+blight-elab = { path = "../crates/blight-elab" }
+blight-kernel = { path = "../crates/blight-kernel" }
+
+# Fuzz targets find *panics* (and UB/timeouts): a well-typed program reports errors via `Result`, so
+# any panic the fuzzer triggers is a bug. Each target only feeds bytes in and asserts nothing — the
+# oracle is "does not crash".
+
+[[bin]]
+name = "reader"
+path = "fuzz_targets/reader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "elab"
+path = "fuzz_targets/elab.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kernel"
+path = "fuzz_targets/kernel.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1

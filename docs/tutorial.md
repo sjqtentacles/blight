@@ -7,7 +7,27 @@ end by *proving a theorem* and having the kernel re-verify it.
 Everything below is real, tested syntax. Each `.bl` snippet loads through the `blight` REPL or
 `blight build`; the standard-library modules live under `crates/blight-prelude/std/`.
 
-## 0. Running the REPL
+## 0. Installing
+
+Blight is a Rust workspace; there is no separate installer yet, so you build it from source with
+[Cargo](https://rustup.rs/) (stable Rust; no nightly features are required for the checker/REPL):
+
+```bash
+git clone <this repo> && cd loonglang
+cargo build -p blight-repl                       # checker + REPL, no native codegen
+cargo build -p blight-repl --features llvm        # + `blight build` (needs a system LLVM matching
+                                                   #   the `llvm-sys` crate's expected version)
+```
+
+The `llvm` feature is only needed to compile checked programs to a native binary or object file
+(`blight build`); the REPL, type-checking, and proof-checking all work without it. If you don't
+have LLVM installed, skip straight to §1 — everything through §7 (the first proof) runs in the
+plain REPL.
+
+An editor extension (`editors/vscode-blight`) adds diagnostics, hover, and go-to-definition for
+`.bl` files via `blight-lsp`; see its `README.md` to build and load it.
+
+## 1. Running the REPL
 
 ```bash
 cargo run -p blight-repl            # the checker/REPL (no native backend)
@@ -27,7 +47,7 @@ blight> :quit
 
 `:type <expr>` infers and pretty-prints a type; `:load <file>` checks a file of forms.
 
-## 1. Data and functions: the natural numbers
+## 2. Data and functions: the natural numbers
 
 A datatype is declared with `defdata`. `Nat` is the unary (Peano) encoding the kernel's
 structural-recursion checker understands directly:
@@ -60,7 +80,7 @@ blight> :type (plus (Succ Zero) (Succ Zero))
 Nat
 ```
 
-## 2. Parameters and indices
+## 3. Parameters and indices
 
 Datatypes can take **parameters** (uniform across all constructors) and **indices** (which vary per
 constructor). Blight handles full telescopes of each.
@@ -96,7 +116,7 @@ field `(xs (Vec a m))` records its own index.
 These all live in the standard library (`std/maybe.bl`, `std/either.bl`, `std/vec.bl`) and are
 re-checked by the *independent* re-checker, not just the kernel.
 
-## 3. Eliminating by `match`
+## 4. Eliminating by `match`
 
 A non-dependent fold over `Vec` that recovers its length as a plain `Nat`:
 
@@ -107,16 +127,65 @@ A non-dependent fold over `Vec` that recovers its length as a plain `Nat`:
     [(vcons m x xs) (Succ (vec-length A m xs))])))
 ```
 
-## 4. Paths: equality in the cubical kernel
+## 5. Paths: equality in the cubical kernel
 
 Blight's kernel is cubical: propositional equality is the **path** type `Path A x y` (a function out
 of the interval). `refl` is the constant path; paths compute under the Kan operations
 (`transp`/`hcomp`/`comp`), which the kernel implements for the full heterogeneous cases and the
 re-checker mirrors.
 
-You rarely write raw paths; you prove them. That is the next step.
+You rarely write raw paths; you prove them. That is the next step (§7) — but first, a program that
+actually talks to the outside world.
 
-## 5. Proving a theorem by tactics
+## 6. Effects: an interactive `Console` program
+
+Everything so far is pure. Blight programs that do I/O use **algebraic effects with handlers**: a
+`perform` suspends the computation and hands control to whichever `handle` (or, at the top level,
+the native runtime) is running it, which decides how to resume. `Console` (`std/io.bl`) is the
+`print`/`read` effect; a `main : (! Console Unit)` is a *computation*, not a value, and the native
+top-level handler drives it against real stdio.
+
+[`examples/game/guess.bl`](../examples/game/guess.bl) is a small turn-based guessing game built
+this way — each turn prints a prompt, `perform read tt` blocks for a line of stdin, and the guess is
+compared against a secret word, recursing on one less unit of fuel (a `Nat`) so the loop is
+structurally total:
+
+```
+(load "std/io.bl")
+
+(define secret String "dog")
+
+; A Bool-selector kept non-recursive so the recursive `play` call stays outside `match`.
+(deftotal console-if (Pi ((t (! Console Unit)) (e (! Console Unit)) (b Bool)) (! Console Unit))
+  (lam (t e b) (match b [(true) t] [(false) e])))
+
+(define-rec play (Pi ((attempts Nat)) (! Console Unit))
+  (lam (attempts) (match attempts
+    [(Zero) (perform print "out of guesses!\n")]
+    [(Succ k)
+      (let ((_ (perform print "guess: ")))
+        (let ((g (perform read tt)))
+          (console-if
+            (perform print "you win!\n")
+            (let ((_ (perform print "nope, try again.\n"))) (play k))
+            (string-eq g secret))))])))
+
+(define main (! Console Unit) (play (Succ (Succ (Succ Zero)))))
+```
+
+Build and run it, feeding it guesses on stdin:
+
+```bash
+cargo run -p blight-repl --features llvm -- build examples/game/guess.bl -o guess
+printf 'cat\ndog\n' | ./guess
+# guess: nope, try again.
+# guess: you win!
+```
+
+Effects are modeled at the type level, so `--recheck` (§8) agrees with the seed kernel on this
+program too — an interactive program is just as re-checkable as a pure one.
+
+## 7. Proving a theorem by tactics
 
 `plus n Zero` is *not* definitionally `n` (because `plus` recurses on its first argument, so with `n`
 a variable it is stuck). Proving `plus n Zero = n` needs a genuine induction.
@@ -149,7 +218,7 @@ cargo test -p blight-repl --test examples plus_zero_proof_example_loads
 
 The proof is recorded as the global `plus-zero`, re-checked by the kernel.
 
-## 6. Building a binary
+## 8. Building a binary
 
 Any `main : Nat` is buildable:
 
