@@ -1,0 +1,22 @@
+; elim_accum.bl — a tail-accumulator structural fold (the P3 (3a) elim-loop shape).
+;
+; `sum-go fuel idx acc` is a `deftotal` whose motive is a *function* type: it recurses on `fuel`
+; while threading the `idx`/`acc` accumulators. Lowered eagerly the induction hypothesis is a
+; non-tail self-call; the P3 (3a) elim-loop transform rewrites it to a bounded-stack `Tail::Jump`
+; accumulator loop. `n` is kept modest (built via `mult` from small literals, so the source stays
+; shallow) so the un-transformed reference arm — the `BL_NO_ELIMLOOP` baseline used by the
+; differential matrix — also runs without overflowing; both arms must print the identical value.
+; `n` is kept small (20) so that even the all-slow-paths-off reference (generic unary `plus`, whose
+; eager eliminator recurses to a depth of the running `acc`) stays comfortably within the C stack;
+; the elim-loop transform fires on the *pattern*, independent of `n`, so the A/B is still exercised.
+
+(load "std/nat.bl")
+
+(deftotal sum-go (Pi ((fuel Nat) (idx Nat) (acc Nat)) Nat)
+  (lam (fuel idx acc) (match fuel [(Zero) acc] [(Succ f) (sum-go f (Succ idx) (plus acc idx))])))
+
+(define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+; n = 10 * 2 = 20; sum 0..19 = 190.
+(define n Nat (mult ten (Succ (Succ Zero))))
+
+(define main Nat (sum-go n Zero Zero))

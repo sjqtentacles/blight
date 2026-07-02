@@ -4,36 +4,27 @@
 ; multi-parameter cap (the kernel and the independent re-checker both handle N parameters now).
 ; Loadable in isolation.
 
-(defdata Either ((a (Type 0)) (b (Type 0)))
-  (left (x a))
-  (right (y b)))
+(defdata Either ((a (Type 0)) (b (Type 0))) (left (x a)) (right (y b)))
 
 ; The case eliminator: `either f g e` applies `f` to a `left` payload and `g` to a `right` payload.
 (deftotal either
-  (Pi ((A (Type 0)) (B (Type 0)) (C (Type 0))
-       (f (Pi ((x A)) C)) (g (Pi ((y B)) C)) (e (Either A B))) C)
-  (lam (A B C f g e) (match e
-    [(left x) (f x)]
-    [(right y) (g y)])))
+  (Pi
+    ((A (Type 0)) (B (Type 0)) (C (Type 0)) (f (Pi ((x A)) C)) (g (Pi ((y B)) C)) (e (Either A B)))
+    C)
+  (lam (A B C f g e) (match e [(left x) (f x)] [(right y) (g y)])))
 
 ; Map over the right payload (the `Either` functor in its second parameter).
 (deftotal either-map-right
   (Pi ((A (Type 0)) (B (Type 0)) (C (Type 0)) (f (Pi ((y B)) C)) (e (Either A B))) (Either A C))
-  (lam (A B C f e) (match e
-    [(left x) (left x)]
-    [(right y) (right (f y))])))
+  (lam (A B C f e) (match e [(left x) (left x)] [(right y) (right (f y))])))
 
 ; Map over the left payload (the functor in its first parameter).
 (deftotal either-map-left
   (Pi ((A (Type 0)) (B (Type 0)) (C (Type 0)) (f (Pi ((x A)) C)) (e (Either A B))) (Either C B))
-  (lam (A B C f e) (match e
-    [(left x) (left (f x))]
-    [(right y) (right y)])))
+  (lam (A B C f e) (match e [(left x) (left (f x))] [(right y) (right y)])))
 
 ; Monadic bind on the right: `left` short-circuits (carrying its payload), `right y` continues.
 (deftotal either-bind
-  (Pi ((A (Type 0)) (B (Type 0)) (C (Type 0))
-       (e (Either A B)) (f (Pi ((y B)) (Either A C)))) (Either A C))
-  (lam (A B C e f) (match e
-    [(left x) (left x)]
-    [(right y) (f y)])))
+  (Pi ((A (Type 0)) (B (Type 0)) (C (Type 0)) (e (Either A B)) (f (Pi ((y B)) (Either A C))))
+    (Either A C))
+  (lam (A B C e f) (match e [(left x) (left x)] [(right y) (f y)])))

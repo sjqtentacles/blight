@@ -1,0 +1,113 @@
+; std/lexer.bl — a self-hosted byte scanner over the C1 `FileIO` + C2 `Bytes` substrate (C3).
+;
+; UNTRUSTED tower code, written entirely in Blight. This is the first piece of self-hosting: a
+; lexer that walks a source buffer's *bytes* (via the C2 `Bytes` effect) rather than rebuilding a
+; unary-`Nat` cons-list per character. The pipeline is:
+;
+;   read-file  (C1)  : a path        -> the file's text as a `String` (cons-list of codepoints)
+;   string->bytes    : that `String` -> a runtime-backed `Bytes` buffer (copied in once)
+;   scan         (C3): the buffer     -> a result computed by O(1) `get-byte` index reads
+;
+; The scanners here recurse on a structural `Nat` FUEL (the buffer length, descending each step) —
+; the same terminating-loop shape `examples/game/guess.bl` uses — while the byte INDEX `i` ascends as
+; ordinary data. (The index cannot be the recursion scrutinee: it grows, and the kernel's structural
+; checker only descends on an immediate sub-term. Fuel = the length bound makes the loop total.)
+;
+; Everything stays inside the established fragment: a non-recursive `Bytes`-computation selector
+; (`bytes-if`, mirroring `guess.bl`'s `console-if` / `std/list`'s `list-if`) keeps each recursive
+; call out of a `match` method position, and multi-argument recursion descends on the first
+; (`Nat`) argument exactly like `std/nat`'s `plus`.
+;
+; Effects are now MODELED at the type level by the independent re-checker (not declined), so a
+; `main` using these `Bytes` ops re-checks and agrees with the seed kernel, which type-checks it;
+; it runs natively under the same top-level handler the `Console`/`FileIO` examples use.
+
+(load "std/bytes.bl")
+(load "std/string.bl")  ; String, string-length — transitively loads std/order (nat-le, nat-eq) + std/bool
+
+; ── Byte-class helpers ───────────────────────────────────────────────────────────────────────────
+; The ASCII codes we care about, as `Nat`s. The reader's `?x` char-literal sugar only handles a
+; single non-delimiter character (parens/whitespace can't be written `?(`), so we build the codes
+; arithmetically from small `Succ`-chains via std/nat's `plus`/`mult` — still ordinary, total `Nat`s.
+
+(define n5 Nat (Succ (Succ (Succ (Succ (Succ Zero))))))
+(define n8 Nat (Succ (Succ (Succ n5))))
+(define n9 Nat (Succ n8))
+(define n10 Nat (Succ n9))
+
+(define byte-tab Nat n9)  ; '\t' = 9
+(define byte-lf Nat n10)  ; '\n' = 10
+(define byte-cr Nat (Succ (Succ (Succ n10))))  ; '\r' = 13
+(define byte-space Nat (mult n8 (Succ (Succ (Succ (Succ Zero))))))  ; ' ' = 32 = 8*4
+(define byte-lparen Nat (plus byte-space n8))  ; '(' = 40 = 32+8
+(define byte-rparen Nat (Succ byte-lparen))  ; ')' = 41
+(define byte-d0 Nat (plus byte-lparen n8))  ; '0' = 48 = 40+8
+(define byte-d9 Nat (plus byte-d0 n9))  ; '9' = 57 = 48+9
+
+; `is-space b` : is byte `b` ASCII whitespace (space / tab / LF / CR)?
+(deftotal is-space (Pi ((b Nat)) Bool)
+  (lam (b)
+    (or (nat-eq b byte-space) (or (nat-eq b byte-tab) (or (nat-eq b byte-lf) (nat-eq b byte-cr))))))
+
+; `is-digit b` : is byte `b` an ASCII decimal digit '0'..'9'?
+(deftotal is-digit (Pi ((b Nat)) Bool) (lam (b) (and (nat-le byte-d0 b) (nat-le b byte-d9))))
+
+; ── String -> Bytes: copy a codepoint cons-list into a runtime buffer ──────────────────────────────
+; `fill-from s h i` writes each codepoint of `s` into buffer `h` starting at index `i`, descending
+; structurally on the spine of `s` (the kernel's induction hypothesis). The *scrutinee* `s` is the
+; FIRST parameter and the running index `i` is the *trailing* accumulator: that ordering is load-
+; bearing. The structural eliminator fixes the parameters that PRECEDE the scrutinee and can only
+; *vary* the ones that FOLLOW it (the motive abstracts them), so an accumulator that changes each
+; step (`i` -> `(Succ i)`) must sit after `s`. Put the accumulator *before* the scrutinee and the
+; eliminator would have to fix it: the changed argument is then rejected as non-structural and the
+; call falls back to the partial `later`-step. The elaborator now *enforces* this for effectful
+; recursors (`has_effectful_conclusion` -> verbatim-leading check in `elaborate_rec`): a varying
+; leading argument can no longer be silently folded into the eager induction hypothesis (which would
+; reorder/drop the per-step `perform`), so a mis-ordered effectful loop fails safe rather than
+; miscompiling. Returns Unit; the buffer is mutated in place.
+(define-rec fill-from (Pi ((s String) (h Int) (i Nat)) (! Bytes Unit))
+  (lam (s h i)
+    (match s
+      [(empty) (perform set-byte (mk-pair h (mk-pair i Zero)))]  ; no-op write past end is harmless; keeps the arm a Bytes-comp
+      [(push c rest)
+        (let ((_ (perform set-byte (mk-pair h (mk-pair i c))))) (fill-from rest h (Succ i)))])))
+
+; `string->bytes s` allocates a buffer of `s`'s length and fills it with `s`'s codepoints, returning
+; the handle.
+(define string->bytes (Pi ((s String)) (! Bytes Int))
+  (lam (s)
+    (let ((n (string-length s)))
+      (let ((h (perform new-bytes n))) (let ((_ (fill-from s h Zero))) h)))))
+
+; ── Scanner: maximum parenthesis-nesting depth ─────────────────────────────────────────────────────
+; A non-recursive selector over three `Bytes`-computations, picked by a `Nat` tag (0/1/other), so the
+; recursive `scan-depth` call never sits in a `match` method position (the `bytes-if`/`console-if`
+; trick). We encode the byte's "paren action" as a small `Nat` and dispatch on it.
+
+; `paren-step b cur best` : given current depth `cur` and best-so-far `best`, return the (cur', best')
+; *pair* after seeing byte `b`:  '(' -> (cur+1, max best (cur+1)); ')' -> (pred cur, best); else
+; unchanged. Pure (no effect); the effectful loop calls it on each scanned byte.
+(deftotal paren-step (Pi ((b Nat) (cur Nat) (best Nat)) (Pair Nat Nat))
+  (lam (b cur best)
+    (match (nat-eq b byte-lparen) [(true) (mk-pair (Succ cur) (max best (Succ cur)))]
+      [(false)
+        (match (nat-eq b byte-rparen) [(true) (mk-pair (pred cur) best)]
+          [(false) (mk-pair cur best)])])))
+
+; `scan-depth fuel h i cur best` scans buffer `h` from index `i`, threading current depth `cur` and
+; best-so-far `best`, for at most `fuel` more bytes; returns the maximum nesting depth reached.
+; Structural recursion on `fuel`. Each step reads one byte, updates (cur,best) via `paren-step`, and
+; recurses on `fuel-1`, `i+1`. When fuel hits Zero (the buffer length is exhausted) it returns `best`.
+(define-rec scan-depth (Pi ((fuel Nat) (h Int) (i Nat) (cur Nat) (best Nat)) (! Bytes Nat))
+  (lam (fuel h i cur best)
+    (match fuel [(Zero) best]
+      [(Succ rest)
+        (let ((b (perform get-byte (mk-pair h i))))
+          (let ((stepped (paren-step b cur best)))
+            (scan-depth rest h (Succ i) (pair-fst Nat Nat stepped) (pair-snd Nat Nat stepped))))])))
+
+; `max-paren-depth s` : the maximum parenthesis nesting depth of source string `s`. Copies `s` into a
+; byte buffer, then scans it. Fuel = the byte length, so the loop visits every byte exactly once.
+(define max-paren-depth (Pi ((s String)) (! Bytes Nat))
+  (lam (s)
+    (let ((h (string->bytes s))) (let ((n (perform bytes-len h))) (scan-depth n h Zero Zero Zero)))))

@@ -9,8 +9,9 @@
 ; with the pending work composed onto its continuation, exactly mirroring the kernel's value-based
 ; semantics (`apply`/`replay` in normalize.rs). The deep handler (`bl_handle_clo`) then resumes it.
 ;
-; Effects sit OUTSIDE the independent re-checker's fragment, so `--recheck` *declines* (not rejects)
-; this program; the seed kernel fully type-checks it and it compiles and runs natively.
+; Effects are now MODELED at the type level by the independent re-checker (not declined): `--recheck`
+; re-derives this program and AGREES with the seed kernel, which fully type-checks it; it compiles
+; and runs natively.
 ;
 ; The handler resumes every `get` with 2, so `plus 2 2 = 4`.
 
@@ -21,6 +22,4 @@
 (effect State (get Unit Nat) (put Nat Unit))
 
 (define main Nat
-  (handle (plus (perform get tt) (perform get tt))
-    (return x x)
-    (get x k (k (Succ (Succ Zero))))))
+  (handle (plus (perform get tt) (perform get tt)) (return x x) (get x k (k (Succ (Succ Zero))))))

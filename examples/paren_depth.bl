@@ -1,0 +1,25 @@
+; paren_depth.bl — a self-hosted byte scanner over the C2 `Bytes` substrate (C3, std/lexer.bl).
+;
+; `main : (! Bytes Nat)` copies a literal source `String` into a runtime-backed byte buffer and scans
+; it byte-by-byte (O(1) `get-byte` index reads) to compute the maximum parenthesis-nesting depth —
+; the first piece of self-hosting: a lexer-style scanner written entirely in `.bl`, walking *bytes*
+; rather than re-folding a unary-`Nat` cons-list per character.
+;
+; The scanner (`std/lexer.bl`'s `scan-depth`) recurses on a structural `Nat` FUEL (the buffer length,
+; descending) while the byte index ascends as data — the terminating-loop shape from
+; examples/game/guess.bl. The whole thing runs under the same native top-level handler the
+; `Console`/`FileIO` examples use (`bl_run_console`, extended with the C2 byte ops).
+;
+; The source `"(a (b (c) d) (e))"` nests deepest at `(c)` inside `(b …)` inside the outer list — 3
+; levels — so `main` returns **3**. Effects are now MODELED at the type level by the independent
+; re-checker (not declined), so `--recheck` AGREES with the seed kernel on this program; it compiles
+; and runs natively.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/paren_depth.bl -o paren_depth
+;   ./paren_depth            # => 3
+
+(load "std/lexer.bl")
+
+(define source String "(a (b (c) d) (e))")
+
+(define main (! Bytes Nat) (max-paren-depth source))

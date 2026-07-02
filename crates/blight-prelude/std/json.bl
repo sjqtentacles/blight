@@ -1,0 +1,164 @@
+; std/json.bl — a JSON value tree and a total, structural encoder (roadmap Wave 2 / L1).
+;
+; UNTRUSTED tower code, entirely pure and total. `BJson` mirrors `std/parser.bl`'s `BSexp` design
+; choice: arrays and objects are encoded as their OWN directly-recursive spine constructors WITHIN
+; `BJson` (`j-arr-nil`/`j-arr-cons`, `j-obj-nil`/`j-obj-cons`) rather than as fields of type
+; `List BJson`/`List (Pair String BJson)`. This is not just stylistic — a single `BJson -> String`
+; encoder needs to walk into an array/object tail and recurse back into itself on each element, and
+; there is no way to express that "recurse on X, calling back into the function being defined" shape
+; over a *different* datatype (`List BJson`) in this kernel: `(mutual …)` requires every member of
+; the group to share one common scrutinee TYPE (`crates/blight-elab/src/mutual.rs`'s header comment),
+; and a bare (unapplied) reference to a function's own name is not representable at all — only an
+; applied, structural self-call is (`crates/blight-elab/src/elab.rs`, `elab` on `Surface::Var`) — so
+; passing `json-encode` itself as a first-class value to `std/list.bl`'s `map` does not elaborate
+; either. Making arrays/objects spines of `BJson` itself means the encoder's THREE mutually-calling
+; pieces (`json-encode`, "the rest of an array", "the rest of an object") all scrutinize the SAME
+; type, which is exactly what `(mutual …)` supports — see the group below.
+;
+; SCOPE (explicit, not an oversight):
+;   * `j-num` carries a `Nat`, not a general signed/fractional number. `Int` (std/int.bl) has NO
+;     eliminator (it is a primitive kernel base type, not inductive) — a program cannot `match` on
+;     it, so there is no way to render an arbitrary `Int` to decimal without branching on its sign.
+;     Negative/fractional JSON numbers are out of scope until/unless an `Int` eliminator is added (a
+;     deliberate, tracked, future TCB decision — see std/time.bl's header for the same caveat).
+;   * String escaping on encode covers `"` and `\` only (control-character `\uXXXX` escaping is not
+;     implemented) — correct and total for the ASCII-printable subset this module targets.
+;   * DECODING (JSON text -> `BJson`) is NOT implemented in this pass. A recursive-descent JSON
+;     parser needs an explicit-frame-stack machine distinguishing array vs. object frames (a real
+;     step up in complexity from `std/parser.bl`'s uniform s-expression frames, which does not need
+;     that distinction), and shipping a half-verified version would violate the roadmap's "Honest
+;     scope" invariant more than shipping the (fully tested) encoder alone and naming this
+;     explicitly. Tracked as the natural next increment for this module, not silently dropped.
+;
+; Depends on std/nat, std/bool, std/string, std/list, std/pair. NOTE: deliberately does NOT
+; `(load "std/char.bl")` — `std/char.bl` itself `(load "std/order.bl")`, and `std/string.bl` (below)
+; already does the same internally for `string-eq`. `(load …)` never deduplicates (only
+; `(import …)` does; see `crates/blight-elab/src/program.rs`), so loading both would register
+; `order.bl`'s `(instance (Show Nat) …)` a second time and fail as an overlapping-instance error.
+; The handful of ASCII constants this module needs are inlined below instead, computed identically
+; to `std/char.bl` (which needs `order.bl` only for `is-lower`/`is-upper`, neither used here).
+
+(load "std/nat.bl")
+(load "std/bool.bl")
+(load "std/string.bl")
+(load "std/list.bl")
+(load "std/pair.bl")
+
+(define char-two Nat (Succ (Succ Zero)))
+(define char-eight Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))
+(define char-ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+(define char-space Nat (mult char-eight (plus char-two char-two)))
+(define char-A Nat (Succ (mult char-eight char-eight)))
+(define char-Z Nat (plus char-A (plus char-ten (plus char-ten (plus char-two char-two)))))
+(deftotal digit-char (Pi ((n Nat)) Nat)
+  (lam (n) (plus (mult char-eight (plus char-two (plus char-two char-two))) n)))  ; '0' + n = 48 + n
+
+; ---- Nat -> decimal String (needed to render `j-num`; general-purpose, not JSON-specific) ---------
+;
+; The digit list is built LEAST-significant-digit-first by incrementing a base-10 counter one `Succ`
+; at a time (`inc-digits`), rather than by repeated division: `n / 10` is not a *structural*
+; sub-term of `n`, so a division-based renderer would need non-structural recursion; incrementing a
+; digit list once per `Succ` keeps every step structural, at the honest cost of an O(n) counter
+; rather than O(log n) — the same "unary Peano is slow but structurally certified" tradeoff every
+; other std/nat.bl function already makes.
+(define nine Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero))))))))))  ; 9
+
+(deftotal inc-digits (Pi ((ds (List Nat))) (List Nat))
+  (lam (ds)
+    (match ds [(nil) (cons (Succ Zero) nil)]
+      [(cons d rest)
+        (match (nat-eq d nine) [(true) (cons Zero (inc-digits rest))] [(false) (cons (Succ d) rest)])])))
+
+(deftotal nat-to-digits-acc (Pi ((n Nat) (ds (List Nat))) (List Nat))
+  (lam (n)
+    (match n [(Zero) (lam (ds) ds)] [(Succ k) (lam (ds) (nat-to-digits-acc k (inc-digits ds)))])))
+
+; Least-significant-digit-first; `Zero` renders as the empty digit list (handled specially below).
+(deftotal nat-to-digits (Pi ((n Nat)) (List Nat)) (lam (n) (nat-to-digits-acc n nil)))
+
+(deftotal digits-to-string (Pi ((ds (List Nat))) String)
+  (lam (ds) (match ds [(nil) empty] [(cons d rest) (push (digit-char d) (digits-to-string rest))])))
+
+; `nat-to-string n` — the decimal rendering of `n` (e.g. `Zero` -> `"0"`, three `Succ`s -> `"3"`).
+(deftotal nat-to-string (Pi ((n Nat)) String)
+  (lam (n)
+    (match (nat-to-digits n) [(nil) "0"]
+      [(cons d rest) (digits-to-string (reverse Nat (cons d rest)))])))
+
+; ---- the JSON value tree, directly self-recursive (see header) ------------------------------------
+(defdata BJson () (j-null) (j-bool (b Bool)) (j-num (n Nat)) (j-str (s String)) (j-arr-nil)
+  (j-arr-cons (head BJson) (tail BJson))
+  (j-obj-nil)
+  (j-obj-cons (key String) (val BJson) (tail BJson)))
+
+; Build a `j-arr-cons` spine from an ordinary `List BJson` — a plain structural fold on the LIST
+; spine that only ever calls `BJson` CONSTRUCTORS, never `json-encode`, so it has no mutual-recursion
+; entanglement with the encoder below.
+(deftotal j-arr (Pi ((xs (List BJson))) BJson)
+  (lam (xs) (match xs [(nil) j-arr-nil] [(cons x rest) (j-arr-cons x (j-arr rest))])))
+
+; The `Pair String BJson`-keyed counterpart for objects.
+(deftotal j-obj (Pi ((xs (List (Pair String BJson)))) BJson)
+  (lam (xs)
+    (match xs [(nil) j-obj-nil]
+      [(cons p rest) (match p [(mk-pair k v) (j-obj-cons k v (j-obj rest))])])))
+
+; `"` = 34 = 32 ('space') + 2; `\` = 92 = 90 ('Z') + 2.
+(define char-quote-code Nat (Succ (Succ char-space)))
+(define char-backslash-code Nat (Succ (Succ char-Z)))
+
+; Escape `"` and `\` for a JSON string body; every other codepoint passes through unchanged (see the
+; header's escaping-scope note).
+(deftotal escape-one (Pi ((c Nat)) String)
+  (lam (c)
+    (match (nat-eq c char-quote-code) [(true) "\\\""]
+      [(false) (match (nat-eq c char-backslash-code) [(true) "\\\\"] [(false) (push c empty)])])))
+
+(define-rec json-escape-string (Pi ((s String)) String)
+  (lam (s)
+    (match s [(empty) empty]
+      [(push c rest) (string-append (escape-one c) (json-escape-string rest))])))
+
+; ---- the encoder: THREE mutually-recursive walks, all over `BJson` (see header) --------------------
+; `json-encode` renders a value; `json-array-rest`/`json-object-rest` render the *continuation* of an
+; already-opened array/object (a leading `,elem…`/`,"key":val…` with no brackets of their own) — the
+; two non-`json-encode` members only ever recurse into a `tail` field, so their non-`*-cons` arms are
+; unreachable in practice, but `match` still requires them written out exhaustively.
+(mutual
+  (define-rec json-encode (Pi ((j BJson)) String)
+    (lam (j)
+      (match j [(j-null) "null"] [(j-bool b) (match b [(true) "true"] [(false) "false"])]
+        [(j-num n) (nat-to-string n)]
+        [(j-str s) (string-append "\"" (string-append (json-escape-string s) "\""))]
+        [(j-arr-nil) "[]"]
+        [(j-arr-cons head tail)
+          (string-append "["
+            (string-append (json-encode head) (string-append (json-array-rest tail) "]")))]
+        [(j-obj-nil) "{}"]
+        [(j-obj-cons key val tail)
+          (string-append "{"
+            (string-append "\""
+              (string-append (json-escape-string key)
+                (string-append "\":"
+                  (string-append (json-encode val) (string-append (json-object-rest tail) "}"))))))])))
+
+  (define-rec json-array-rest (Pi ((j BJson)) String)
+    (lam (j)
+      (match j [(j-null) empty] [(j-bool b) empty] [(j-num n) empty] [(j-str s) empty]
+        [(j-arr-nil) empty]
+        [(j-arr-cons head tail)
+          (string-append "," (string-append (json-encode head) (json-array-rest tail)))]
+        [(j-obj-nil) empty]
+        [(j-obj-cons key val tail) empty])))
+
+  (define-rec json-object-rest (Pi ((j BJson)) String)
+    (lam (j)
+      (match j [(j-null) empty] [(j-bool b) empty] [(j-num n) empty] [(j-str s) empty]
+        [(j-arr-nil) empty]
+        [(j-arr-cons head tail) empty]
+        [(j-obj-nil) empty]
+        [(j-obj-cons key val tail)
+          (string-append ","
+            (string-append "\""
+              (string-append (json-escape-string key)
+                (string-append "\":" (string-append (json-encode val) (json-object-rest tail))))))]))))

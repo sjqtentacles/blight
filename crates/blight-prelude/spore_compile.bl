@@ -1,0 +1,154 @@
+; spore_compile.bl — the self-hosted compiler (Grand Arc SH3 / C3): an ANF lowering of the
+; intrinsically-typed core `BTm` (spore_intrinsic.bl), written entirely in Blight.
+;
+; UNTRUSTED tower code, zero kernel growth. Where spore_elab.bl is the proof-carrying *elaborator*
+; (BSurf -> Sigma a. BTm g a), this file is the *compiler* backend: it lowers a well-typed core term
+; `BTm g a` to an A-normal-form IR `BAnf`, mirroring crates/blight-codegen/src/anf.rs but in Blight.
+; The host kernel certifies the whole lowering type-checks (every function is a `deftotal`, so it is a
+; single kernel `Elim` re-verified `Ok` by the independent re-checker).
+;
+; ── The target IR (BAnf) ────────────────────────────────────────────────────────────────────────
+; ANF distinguishes three syntactic sorts — atoms (trivial values), computations (that may step), and
+; tails (control). To stay inside the kernel's *directly-recursive* (no mutual-datatype) fragment we
+; model all three sorts as constructors of ONE inductive `BAnf`; the sort discipline is by convention:
+;   atoms : a-var / a-tmp        comps : c-app / c-lam        tails : t-ret / t-let
+; A compiler-introduced temporary `a-tmp n` lives in a *separate* namespace from source de Bruijn
+; variables `a-var i`, so flattening an application into `let`s never has to shift source indices — the
+; key trick that keeps the lowering a clean structural recursion.
+
+(load "spore.bl")  ; Nat / plus (the intrinsic core reuses them)
+(load "spore_intrinsic.bl")  ; BTy/BTyCtx/BVarIn/BTm
+
+; Local minimal product / list over the spore `Nat` — std/pair.bl and std/list.bl pull in std/nat.bl,
+; whose `Nat` would clash with spore.bl's, so the compiler carries its own tiny copies.
+(defdata CPair ((a (Type 0)) (b (Type 0))) (cpair (x a) (y b)))
+(defdata CList ((a (Type 0))) (cnil) (ccons (x a) (xs (CList a))))
+
+(deftotal cfoldr (Pi ((A (Type 0)) (B (Type 0)) (f (Pi ((x A) (acc B)) B)) (z B) (xs (CList A))) B)
+  (lam (A B f z xs) (match xs [(cnil) z] [(ccons x rest) (f x (cfoldr A B f z rest))])))
+
+(deftotal cappend (Pi ((A (Type 0)) (xs (CList A)) (ys (CList A))) (CList A))
+  (lam (A xs ys) (match xs [(cnil) ys] [(ccons x rest) (ccons x (cappend A rest ys))])))
+
+(defdata BAnf ()
+  (a-var (i Nat))  ; source variable, by de Bruijn index
+  (a-tmp (n Nat))  ; compiler temporary, by fresh name
+  (c-app (fn BAnf) (arg BAnf))  ; application of two atoms
+  (c-lam (body BAnf))  ; a lambda value whose body is a tail
+  (t-ret (a BAnf))  ; return an atom
+  (t-let (name Nat) (rhs BAnf) (rest BAnf)))  ; let tmp_name = rhs in rest
+
+; A structural size measure over the IR (the analogue of btm-size / bsize): proves BAnf is genuinely
+; recursive and gives demos/tests a deterministic numeric fingerprint of a compiled program.
+(deftotal banf-size (Pi ((e BAnf)) Nat)
+  (lam (e)
+    (match e [(a-var i) (Succ Zero)] [(a-tmp n) (Succ Zero)]
+      [(c-app f x) (Succ (plus (banf-size f) (banf-size x)))]
+      [(c-lam body) (Succ (banf-size body))]
+      [(t-ret a) (Succ (banf-size a))]
+      [(t-let name rhs rest) (Succ (plus (banf-size rhs) (banf-size rest)))])))
+
+; ── de Bruijn index of an intrinsic variable ────────────────────────────────────────────────────
+; Count the weakenings (`VS`) in a membership proof: `VZ` is index 0, each `VS` adds one.
+(deftotal bvar-index (Pi ((g BTyCtx) (a BTy) (x (BVarIn g a))) Nat)
+  (lam (g a x) (match x [(VZ g a) Zero] [(VS g a b y) (Succ (bvar-index g a y))])))
+
+; ── Stage 1: erase the intrinsic indices to an untyped term (mirrors blight-kernel::erase) ────────
+; A plain, non-indexed de Bruijn term. Erasing FIRST isolates all index handling in this single
+; btm-size-shaped pass, so the ANF stage below threads its fresh-name counter over an ordinary
+; inductive with no dependent-index interaction.
+(defdata UTm () (uvar (i Nat)) (ulam (body UTm)) (uapp (fn UTm) (arg UTm)))
+
+(deftotal berase (Pi ((g BTyCtx) (a BTy) (t (BTm g a))) UTm)
+  (lam (g a t)
+    (match t [(TVar g a x) (uvar (bvar-index g a x))]
+      [(TLam g a b body) (ulam (berase (CSnoc g a) b body))]
+      [(TApp g a b f x) (uapp (berase g (Arr a b) f) (berase g a x))])))
+
+; ── The compiler state: a fresh-name counter, a (source-order) list of pending lets, an atom ──────
+(defdata BcOut () (bc-out (counter Nat) (lets (CList (CPair Nat BAnf))) (atom BAnf)))
+
+(deftotal bcout-counter (Pi ((o BcOut)) Nat) (lam (o) (match o [(bc-out c l a) c])))
+(deftotal bcout-lets (Pi ((o BcOut)) (CList (CPair Nat BAnf)))
+  (lam (o) (match o [(bc-out c l a) l])))
+(deftotal bcout-atom (Pi ((o BcOut)) BAnf) (lam (o) (match o [(bc-out c l a) a])))
+
+; Fold a source-order list of `(name, comp)` bindings around a tail, innermost binding last.
+(deftotal bc-lets (Pi ((ls (CList (CPair Nat BAnf))) (tail BAnf)) BAnf)
+  (lam (ls tail)
+    (cfoldr (CPair Nat BAnf) BAnf (lam (b acc) (match b [(cpair n comp) (t-let n comp acc)])) tail
+      ls)))
+
+; ── Stage 2: the ANF lowering walker over the untyped term ─────────────────────────────────────────
+; `uanf t c` lowers term `t`, threading the fresh-name counter `c`, and returns the updated counter,
+; the lets it introduced, and the atom naming its value. `t` is matched FIRST and `c` rides as a
+; TRAILING accumulator (the fill-from shape). Because `UTm` is an ordinary (non-indexed) inductive
+; there is no dependent-index interaction with the accumulator.
+; Wrap a lowered body into the `c-lam` result, binding it to a fresh temp.
+(deftotal uanf-lam (Pi ((r BcOut)) BcOut)
+  (lam (r)
+    (match r
+      [(bc-out c1 ls at)
+        (bc-out (Succ c1) (ccons (cpair c1 (c-lam (bc-lets ls (t-ret at)))) cnil) (a-tmp c1))])))
+
+; Combine the lowered function and argument of an application into the `c-app` result.
+(deftotal uanf-app (Pi ((rf BcOut) (rx BcOut)) BcOut)
+  (lam (rf rx)
+    (match rf
+      [(bc-out cf lsf atf)
+        (match rx
+          [(bc-out cx lsx atx)
+            (bc-out (Succ cx)
+              (cappend (CPair Nat BAnf) (cappend (CPair Nat BAnf) lsf lsx)
+                (ccons (cpair cx (c-app atf atx)) cnil))
+              (a-tmp cx))])])))
+
+; The counter `c` is CURRIED (matched `t` first, each arm returns a `Nat -> BcOut`) so deftotal sees
+; the motive `λt. (Nat -> BcOut)` directly; `UTm` is non-indexed, so this currying is index-safe.
+; Recursive results are consumed by passing them to the `uanf-lam`/`uanf-app` combinators (the
+; argument-position shape btm-size uses), never matched or `let`-bound directly.
+(deftotal uanf (Pi ((t UTm) (c Nat)) BcOut)
+  (lam (t)
+    (match t
+      ; a variable: no lets, just its de Bruijn atom.
+      [(uvar i) (lam (c) (bc-out c cnil (a-var i)))]
+      ; a lambda: lower the body to a tail, bind the resulting `c-lam` to a fresh temp, return it.
+      [(ulam body) (lam (c) (uanf-lam (uanf body c)))]
+      ; an application: lower `f` then `x`, threading the counter via the second call's argument.
+      ; NOTE: `(uanf f c)` appears twice only to read its result counter for threading into `x` — the
+      ; structural fragment does not (yet) admit a `let`-bound recursive result here, so the call is
+      ; repeated rather than shared. It is pure, so this is semantically identical (just recomputed).
+      [(uapp f x) (lam (c) (uanf-app (uanf f c) (uanf x (bcout-counter (uanf f c)))))])))
+
+; `bcompile t` : the whole lowering — erase indices, ANF from a fresh counter, then wrap the lets
+; around a tail that returns the program's atom.
+(deftotal bcompile (Pi ((g BTyCtx) (a BTy) (t (BTm g a))) BAnf)
+  (lam (g a t)
+    (let ((r (uanf (berase g a t) Zero))) (bc-lets (bcout-lets r) (t-ret (bcout-atom r))))))
+
+; ── Demos ─────────────────────────────────────────────────────────────────────────────────────────
+; (Names prefixed `ci-` — "compiler intrinsic" — so this file composes with spore_elab.bl, which has
+; its own `demo-id`/`demo-app`, in spore_pipeline.bl.)
+; The identity `λx:Base. x` at the empty context.
+(define ci-demo-id (BTm CNil (Arr Base Base))
+  (TLam CNil Base Base (TVar (CSnoc CNil Base) Base (VZ CNil Base))))
+
+; `λf:(Base->Base). λx:Base. f x` — exercises TApp/TLam/TVar and the let-flattening of an application.
+(define ci-demo-app (BTm CNil (Arr (Arr Base Base) (Arr Base Base)))
+  (TLam CNil (Arr Base Base) (Arr Base Base)
+    (TLam (CSnoc CNil (Arr Base Base)) Base Base
+      (TApp (CSnoc (CSnoc CNil (Arr Base Base)) Base) Base Base
+        (TVar (CSnoc (CSnoc CNil (Arr Base Base)) Base) (Arr Base Base)
+          (VS (CSnoc CNil (Arr Base Base)) (Arr Base Base) Base (VZ CNil (Arr Base Base))))
+        (TVar (CSnoc (CSnoc CNil (Arr Base Base)) Base) Base (VZ (CSnoc CNil (Arr Base Base)) Base))))))
+
+; The compiled forms, as globals (so a test can confirm they compute through the kernel).
+(define ci-demo-id-anf BAnf (bcompile CNil (Arr Base Base) ci-demo-id))
+(define ci-demo-app-anf BAnf (bcompile CNil (Arr (Arr Base Base) (Arr Base Base)) ci-demo-app))
+
+; Deterministic fingerprints, certified by the kernel: bcompile ci-demo-id is
+;   (t-let 0 (c-lam (t-ret (a-var 0))) (t-ret (a-tmp 0)))  whose banf-size is 6.
+(define ci-six Nat (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))
+(define-by ci-demo-id-size-6
+  (Path Nat (banf-size (bcompile CNil (Arr Base Base) ci-demo-id)) ci-six)
+  refl)

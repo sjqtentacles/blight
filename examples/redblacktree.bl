@@ -14,5 +14,4 @@
 ; Build a concrete tree by ordered insertion using the Nat module's carrier and comparison.
 ; `tree-insert A cmp x tr` inserts `x` into `tr` under `cmp`.
 (the (Tree Nat)
-  (tree-insert Nat nat-le (Succ Zero)
-    (tree-insert Nat nat-le (Succ (Succ Zero)) leaf)))
+  (tree-insert Nat nat-le (Succ Zero) (tree-insert Nat nat-le (Succ (Succ Zero)) leaf)))

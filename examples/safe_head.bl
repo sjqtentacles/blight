@@ -31,20 +31,14 @@
 ; dependent-coverage pruning, so the body must still list the `vnil` arm — but it is unreachable:
 ; no caller can ever supply a `Vec A Zero` here, since the type forbids it.
 (define-rec safe-head (Pi ((A (Type 0)) (n Nat) (v (Vec A (Succ n)))) (Maybe A))
-  (lam (A n v)
-    (match v
-      [(vnil) nothing]
-      [(vcons m x xs) (just x)])))
+  (lam (A n v) (match v [(vnil) nothing] [(vcons m x xs) (just x)])))
 
 (define one Nat (Succ Zero))
 (define two Nat (Succ (Succ Zero)))
 
 ; sample : Vec Nat 2 = [1, 1]. `vcons` takes (tail-length, element, tail), so the tail lengths
 ; count down 1, 0 as the spine shrinks.
-(define sample (Vec Nat two)
-  (vcons one one
-    (vcons Zero one
-      (vnil))))
+(define sample (Vec Nat two) (vcons one one (vcons Zero one (vnil))))
 
 ; main = 1. safe-head returns (just 1); from-maybe unwraps it to a bare Nat so the compiled
 ; program prints a clean `1` (the runtime renders other constructors as `con#N`). The compile-time

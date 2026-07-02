@@ -10,17 +10,10 @@
 
 ; Reverse an ordering (swap `LT`/`GT`, fix `EQ`).
 (deftotal ordering-flip (Pi ((o Ordering)) Ordering)
-  (lam (o) (match o
-    [(LT) GT]
-    [(EQ) EQ]
-    [(GT) LT])))
+  (lam (o) (match o [(LT) GT] [(EQ) EQ] [(GT) LT])))
 
 ; Three-way comparison of two Nats: structural recursion on the first argument.
 (deftotal nat-compare (Pi ((x Nat) (y Nat)) Ordering)
-  (lam (x) (match x
-    [(Zero) (lam (y) (match y
-       [(Zero) EQ]
-       [(Succ k) LT]))]
-    [(Succ n) (lam (y) (match y
-       [(Zero) GT]
-       [(Succ k) (nat-compare n k)]))])))
+  (lam (x)
+    (match x [(Zero) (lam (y) (match y [(Zero) EQ] [(Succ k) LT]))]
+      [(Succ n) (lam (y) (match y [(Zero) GT] [(Succ k) (nat-compare n k)]))])))

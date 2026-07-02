@@ -9,9 +9,7 @@
 ; The model's conversion relation (definitional equality, here the cubical `Path`) is *reflexive*
 ; on every modeled core term: `Π (t : BTerm). t ≡ t`. This is the base structural property the
 ; kernel's `conv` relies on; we discharge it by the cubical reflexivity tactic.
-(define-by bconv-refl
-  (Pi ((t BTerm)) (Path BTerm t t))
-  (intro t refl))
+(define-by bconv-refl (Pi ((t BTerm)) (Path BTerm t t)) (intro t refl))
 
 ; ---- Metatheorem 2: a substitution-shaped lemma (context right-unit) ------------------------
 ; Concatenating a context with the empty context on the right is the identity:
@@ -21,13 +19,10 @@
 ; needs (e.g. `shift 0 = id`). We prove it by structural induction on `g`, closing the `BNil` case
 ; by reflexivity and the `BSnoc` case by congruence under `(λ r. BSnoc r ty)` over the IH (the
 ; congruence head is ascribed `BCtx → BCtx` so the kernel can check the applied wrapper).
-(define-by bctx-append-nil
-  (Pi ((g BCtx)) (Path BCtx (bctx-append g BNil) g))
+(define-by bctx-append-nil (Pi ((g BCtx)) (Path BCtx (bctx-append g BNil) g))
   (intro g
-    (induction g
-      [(BNil) refl]
-      [(BSnoc rest ty)
-        (cong (the (Pi ((r BCtx)) BCtx) (lam (r) (BSnoc r ty))) (exact rest#ih))])))
+    (induction g [(BNil) refl]
+      [(BSnoc rest ty) (cong (the (Pi ((r BCtx)) BCtx) (lam (r) (BSnoc r ty))) (exact rest#ih))])))
 
 ; ---- Metatheorem 3: bctx-len is a homomorphism over append -----------------------------------
 ; Concatenation adds context lengths:
@@ -41,11 +36,30 @@
 ; (`h` is introduced *before* the induction variable `g` so `g` stays the innermost binder the
 ; motive abstracts over — `h` rides along as a stable outer hypothesis.)
 (define-by bctx-len-append
-  (Pi ((h BCtx) (g BCtx))
-      (Path Nat (bctx-len (bctx-append g h)) (plus (bctx-len g) (bctx-len h))))
+  (Pi ((h BCtx) (g BCtx)) (Path Nat (bctx-len (bctx-append g h)) (plus (bctx-len g) (bctx-len h))))
   (intro h
     (intro g
-      (induction g
-        [(BNil) refl]
-        [(BSnoc rest ty)
-          (cong (the (Pi ((r Nat)) Nat) (lam (r) (Succ r))) (exact rest#ih))]))))
+      (induction g [(BNil) refl]
+        [(BSnoc rest ty) (cong (the (Pi ((r Nat)) Nat) (lam (r) (Succ r))) (exact rest#ih))]))))
+
+; ---- Metatheorem 4: associativity of plus (Track M2a) ----------------------------------------
+; `plus` is associative: Π (a b c : Nat). (plus (plus a b) c) ≡ (plus a (plus b c)). Both `plus`
+; calls on each side recurse on their *first* argument, so inducting on `a` makes every step
+; definitional except the one genuine rewrite: the `Succ n` case reduces (by the recursive
+; unfolding of `plus`, twice on each side) to `Path Nat (Succ (plus (plus n b) c)) (Succ (plus n
+; (plus b c)))`, which is exactly `cong Succ` over the IH `n#ih : Path Nat (plus (plus n b) c)
+; (plus n (plus b c))` — no `trans` needed for *this* statement (the M2a `trans` combinator's
+; first real client is `spore_codegen_meta.bl`'s `aeval-k-correct`, whose `Add` case genuinely
+; chains two IH-rewrites through this very lemma). `b`/`c` are generalized *inside* the not-yet-
+; introduced trailing `Pi` of the goal (each arm's sub-tactic `intro`s them itself, then applies
+; `n#ih` explicitly at the current `b`/`c` — the IH is `Π b c. Path …`, not a fixed instance),
+; which is what `induction`'s per-arm goal substitution must correctly rewrite *underneath* that
+; `Pi` (a real bug this proof caught and pinned: `tactic.rs::substitute_term` used to leave `Pi`
+; bodies untouched, so the trailing generalized variables silently kept referring to the
+; pre-induction scrutinee instead of the case term — see the `tactic.rs` doc comment).
+(define-by plus-assoc
+  (Pi ((a Nat) (b Nat) (c Nat)) (Path Nat (plus (plus a b) c) (plus a (plus b c))))
+  (intro a
+    (induction a [(Zero) (intro b (intro c refl))]
+      [(Succ n)
+        (intro b (intro c (cong (the (Pi ((r Nat)) Nat) (lam (r) (Succ r))) (exact (n#ih b c)))))])))

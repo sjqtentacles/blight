@@ -1,0 +1,33 @@
+; row_polymorphic_handler.bl — row-polymorphic handler composition (Wave 7 / E1).
+;
+; `crates/blight-kernel/src/row.rs` already carries an open row tail (`RowVar`) for Koka-style row
+; unification, but nothing ever constructed one: every row the kernel actually saw was closed. E1
+; adds a *surface* row-polymorphic ascription `(! (L1 .. | r) A)` in `blight-elab`: `r` names
+; "whatever effects this handled computation still carries, beyond the ones named explicitly" —
+; without the caller having to spell out the exact leftover set by hand. The elaborator resolves
+; `r` by asking the trusted kernel checker (`Checker::infer_g`, the same rule `check_top_with`
+; uses) what the handled computation's row actually is, and unifies the declared pattern against
+; it — so the kernel itself only ever sees the final, concrete, closed row. No kernel change.
+;
+; Below, `composed`'s body performs `State.get` (handled by the single clause, so it is fully
+; discharged) and its `return` clause performs two further, unhandled effects — `Extra1.bump1` and
+; `Extra2.bump2`. The ascription only names `Extra1` explicitly; the row variable `r` picks up
+; `Extra2` automatically as the row's *extension*. `crates/blight-repl/tests/stdlib.rs`'s
+; `row_polymorphic_handler_composes` loads this file and asserts `composed`'s elaborated type is
+; exactly `(! (Extra1 Extra2) Nat)` — proving `r` really did resolve to `{Extra2}`, not to
+; something wider, narrower, or left dangling open.
+;
+; This is a load-only example: `composed`'s declared row is intentionally non-empty (both
+; `Extra1`/`Extra2` bubble through unhandled), so there is no pure `main` to build and run.
+
+(load "std/nat.bl")
+
+(defdata Unit () (tt))
+
+(effect State (get Unit Nat))
+(effect Extra1 (bump1 Nat Nat))
+(effect Extra2 (bump2 Nat Nat))
+
+(define composed
+  (the (! (Extra1 | r) Nat)
+    (handle (perform get tt) (return x (perform bump1 (perform bump2 x))) (get u k (k Zero)))))

@@ -8,9 +8,7 @@
 (load "std/list.bl")
 
 (define-rec build-ones (Pi ((n Nat)) (List Nat))
-  (lam (n) (match n
-    [(Zero) nil]
-    [(Succ k) (cons (Succ Zero) (build-ones k))])))
+  (lam (n) (match n [(Zero) nil] [(Succ k) (cons (Succ Zero) (build-ones k))])))
 
 (define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
 (define eighty Nat (mult (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))) ten))

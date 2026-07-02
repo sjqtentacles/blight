@@ -13,9 +13,7 @@
 ;   fact Zero     = 1
 ;   fact (Succ k) = (Succ k) * fact k
 (deftotal fact (Pi ((n Nat)) Nat)
-  (lam (n) (match n
-    [(Zero) (Succ Zero)]
-    [(Succ k) (mult (Succ k) (fact k))])))
+  (lam (n) (match n [(Zero) (Succ Zero)] [(Succ k) (mult (Succ k) (fact k))])))
 
 ; 4 = Succ^4 Zero.
 (define four Nat (Succ (Succ (Succ (Succ Zero)))))

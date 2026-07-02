@@ -1,0 +1,74 @@
+; regex_scratch.bl — dogfooding `std/test.bl` against `std/regex.bl` (roadmap Wave 2 / L1).
+;
+; A pure `TestSuite` exercising every `Regex` former (`r-lit`/`r-dot`/`r-concat`/`r-alt`/`r-star`,
+; plus the `r-str` literal-string builder) on both matching and non-matching inputs — including the
+; two edges Brzozowski derivatives are famous for getting right for free: `r-star` matching the empty
+; string, and a whole-string ("fullmatch") mismatch on a proper prefix. `main : Bool` is
+; `suite-all-passed` — a Rust-side test (`crates/blight-repl/tests/examples.rs`) normalizes it with
+; the trusted kernel evaluator and asserts it reduces to `true`, giving `std/regex.bl` genuine
+; *behavioral* coverage — not just "loads and type-checks", which `every_std_module_loads_in_isolation`
+; already covers.
+;
+; `main` is deliberately a bare `Bool`, not a `(! Console …)` program: the suite is pure.
+
+(load "std/regex.bl")
+(load "std/char.bl")
+(load "std/test.bl")
+
+; ---- single-character patterns, built from std/char.bl's codepoints -------------------------------
+; `char-b` isn't one of std/char.bl's named constants — it's just 'a' + 1 (98).
+(define char-b Nat (Succ char-a))
+(define r-a Regex (r-lit char-a))
+(define r-b Regex (r-lit char-b))
+
+; ---- test cases -------------------------------------------------------------------------------
+(define t01 TestCase (deftest "lit-string-exact-match" (regex-match (r-str "abc") "abc")))
+(define t02 TestCase
+  (deftest "lit-string-mismatch" (assert-false (regex-match (r-str "abc") "abd"))))
+(define t03 TestCase
+  (deftest "lit-string-prefix-is-not-fullmatch" (assert-false (regex-match (r-str "ab") "abc"))))
+(define t04 TestCase
+  (deftest "lit-string-empty-vs-nonempty" (assert-false (regex-match (r-str "") "a"))))
+(define t05 TestCase (deftest "lit-string-empty-matches-empty" (regex-match (r-str "") "")))
+(define t06 TestCase (deftest "dot-matches-single-char" (regex-match r-dot "x")))
+(define t07 TestCase (deftest "dot-rejects-empty" (assert-false (regex-match r-dot ""))))
+(define t08 TestCase (deftest "dot-rejects-two-chars" (assert-false (regex-match r-dot "xy"))))
+(define t09 TestCase (deftest "star-matches-empty" (regex-match (r-star r-a) "")))
+(define t10 TestCase (deftest "star-matches-many-reps" (regex-match (r-star r-a) "aaaa")))
+(define t11 TestCase
+  (deftest "star-rejects-wrong-char" (assert-false (regex-match (r-star r-a) "aab"))))
+(define t12 TestCase
+  (deftest "alt-matches-left" (regex-match (r-alt (r-str "cat") (r-str "dog")) "cat")))
+(define t13 TestCase
+  (deftest "alt-matches-right" (regex-match (r-alt (r-str "cat") (r-str "dog")) "dog")))
+(define t14 TestCase
+  (deftest "alt-rejects-neither"
+    (assert-false (regex-match (r-alt (r-str "cat") (r-str "dog")) "cow"))))
+(define t15 TestCase (deftest "concat-then-star" (regex-match (r-concat r-b (r-star r-a)) "baaa")))
+(define t16 TestCase
+  (deftest "concat-then-star-zero-reps" (regex-match (r-concat r-b (r-star r-a)) "b")))
+(define t17 TestCase
+  (deftest "concat-then-star-rejects-missing-prefix"
+    (assert-false (regex-match (r-concat r-b (r-star r-a)) "aaa"))))
+(define t18 TestCase (deftest "nullable-star-is-true" (nullable (r-star r-a))))
+(define t19 TestCase (deftest "nullable-lit-is-false" (assert-false (nullable r-a))))
+
+(define all-cases (List TestCase)
+  (cons t01
+    (cons t02
+      (cons t03
+        (cons t04
+          (cons t05
+            (cons t06
+              (cons t07
+                (cons t08
+                  (cons t09
+                    (cons t10
+                      (cons t11
+                        (cons t12
+                          (cons t13
+                            (cons t14 (cons t15 (cons t16 (cons t17 (cons t18 (cons t19 nil))))))))))))))))))))
+
+(define regex-suite TestSuite (mk-suite "regex" all-cases))
+
+(define main Bool (suite-all-passed regex-suite))

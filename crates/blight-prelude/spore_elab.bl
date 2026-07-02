@@ -1,0 +1,206 @@
+; spore_elab.bl — the self-hosted, proof-carrying elaborator (Grand Arc SH2: `belaborate`).
+;
+; UNTRUSTED metacircular tower code, written entirely in Blight. This is where self-hosting meets
+; proof-carrying: an elaborator
+;
+;     belaborate : (g : BTyCtx) -> (s : BSurf) -> Maybe (Sigma (a : BTy). BTm g a)
+;
+; whose ACCEPTANCE IS A TYPING PROOF. The output lives in the intrinsically-typed core of
+; spore_intrinsic.bl (`BTm g a` — well-typed-syntax-by-construction), so `belaborate` can *only* emit
+; a term that the object language's typing rules accept: a successful elaboration is, by the very type
+; of the result, a derivation of `g ⊢ t : a`. An ill-typed surface term simply has no inhabitant of
+; the result type, so the elaborator returns `nothing` — it is impossible for it to forge a bad term.
+; The host kernel then certifies this whole file type-checks: Blight describes a *type-correct
+; elaborator into its own typed core*, and the trusted kernel agrees. Zero kernel growth — every type
+; below (`BSurf`/`BSig`/`BtyEq`/…) is an ordinary inductive family in the existing fragment.
+;
+; The dependent core (what makes this nontrivial in a checker as strict as Blight's): wherever a
+; runtime-discovered type equality must be used at the type level, it goes through a propositional
+; equality `BtyEq` and its transport `bty-coerce`, never a raw cast. Two disciplines keep every
+; nested dependent `match` inside the fragment this elaborator certifies:
+;   1. **curry the scrutinee whose type the result mentions** — match `a`/`g`/`s` returning a
+;      *function* of the remaining argument, so the matched value is the only thing in scope and the
+;      result type cannot mention a stale binder (the `bty-deceq`/`lookup-var`/`belab-go` shape).
+;   2. **match only variables, thread `Maybe`s as parameters** — never `match` a function-call result
+;      or a nested constructor pattern directly; pass it into a one-`match` helper (or `maybe-map` /
+;      `maybe-bind`) instead, so each `match` is a clean single elimination of a most-recent binder.
+; The result is a tower of small, individually-certified pieces that compose into the headline.
+
+(load "spore.bl")  ; Nat / plus (the intrinsic core reuses them)
+(load "spore_intrinsic.bl")  ; BTy, BTyCtx, BVarIn, BTm — the intrinsically-typed object core
+(load "std/maybe.bl")  ; Maybe / just / nothing / maybe-map / maybe-bind
+
+; ── Surface syntax (BSurf): the untyped input the elaborator consumes ───────────────────────────────
+; A directly-recursive, type-annotated lambda calculus. `su-lam` carries its domain type because the
+; object core is simply-typed (the domain is not otherwise recoverable). `su-var` is a de Bruijn index.
+(defdata BSurf () (su-var (i Nat)) (su-lam (dom BTy) (body BSurf)) (su-app (fn BSurf) (arg BSurf)))
+
+; ── Existential outputs: a type packed with a well-typed term/variable at that type, in context g ────
+(defdata BSig
+  ((g BTyCtx))  ; Sigma (a : BTy). BTm g a  — the result payload
+  (bsig (a BTy) (tm (BTm g a))))
+(defdata BVarSig
+  ((g BTyCtx))  ; Sigma (a : BTy). BVarIn g a  — a found variable
+  (bvarsig (a BTy) (x (BVarIn g a))))
+(defdata BArrSig
+  ((g BTyCtx))  ; a term already coerced to a *known* arrow type
+  (barrsig (dom BTy) (cod BTy) (f (BTm g (Arr dom cod)))))
+
+; ── Type equality (BtyEq): the propositional equality on object types, with transport ───────────────
+; A two-index family inhabited only by `bty-refl : BtyEq a a` — the intrinsic identity type for `BTy`.
+(defdata BtyEq () ((a BTy) (b BTy)) (bty-refl (a BTy) (=> a a)))
+
+; Congruence: lift equalities of domain and codomain through `Arr` (double based-path-induction).
+(deftotal arr-cong
+  (Pi ((d1 BTy) (d2 BTy) (c1 BTy) (c2 BTy) (ed (BtyEq d1 d2)) (ec (BtyEq c1 c2)))
+    (BtyEq (Arr d1 c1) (Arr d2 c2)))
+  (lam (d1 d2 c1 c2 ed ec) (match ed [(bty-refl d) (match ec [(bty-refl c) (bty-refl (Arr d c))])])))
+
+; Transport along an equality: `BTm g a` becomes `BTm g b` given `a = b`. Matching `bty-refl` unifies
+; the two indices, so the body's `t : BTm g a` checks at the refined result `BTm g b` — the
+; intrinsic-family `subst`, and the one essential dependent step the whole elaborator leans on.
+(deftotal bty-coerce (Pi ((g BTyCtx) (a BTy) (b BTy) (e (BtyEq a b)) (t (BTm g a))) (BTm g b))
+  (lam (g a b e t) (match e [(bty-refl a0) t])))
+
+; ── Decidable type equality ─────────────────────────────────────────────────────────────────────────
+; Combine two component decisions into an arrow decision (matches only variable `Maybe`s).
+(deftotal mk-arr-eq
+  (Pi ((d1 BTy) (c1 BTy) (d2 BTy) (c2 BTy) (md (Maybe (BtyEq d1 d2))) (mc (Maybe (BtyEq c1 c2))))
+    (Maybe (BtyEq (Arr d1 c1) (Arr d2 c2))))
+  (lam (d1 c1 d2 c2 md mc)
+    (match md [(nothing) nothing]
+      [(just ed) (match mc [(nothing) nothing] [(just ec) (just (arr-cong d1 d2 c1 c2 ed ec))])])))
+
+; The `Base` row of the decision table.
+(deftotal deceq-base (Pi ((b BTy)) (Maybe (BtyEq Base b)))
+  (lam (b) (match b [(Base) (just (bty-refl Base))] [(Arr d c) nothing])))
+
+; Decide `BtyEq a b` structurally. Curried on `a`: the `a`-match returns a function of `b`, so `b` is
+; out of scope during it (discipline 1). The `Arr` row is an ascribed `λb` whose inner `b`-match is in
+; checking mode, with the domain/codomain sub-decisions resolved by recursion (`d1`/`c1` ⊏ `a`).
+(define-rec bty-deceq (Pi ((a BTy) (b BTy)) (Maybe (BtyEq a b)))
+  (lam (a)
+    (match a [(Base) deceq-base]
+      [(Arr d1 c1)
+        (the (Pi ((b BTy)) (Maybe (BtyEq (Arr d1 c1) b)))
+          (lam (b)
+            (match b [(Base) nothing]
+              [(Arr d2 c2) (mk-arr-eq d1 c1 d2 c2 (bty-deceq d1 d2) (bty-deceq c1 c2))])))])))
+
+; ── Arrow view: read a type as an arrow, carrying the equality witness ───────────────────────────────
+; `BArrEq a` is `Sigma (dom cod : BTy). BtyEq a (Arr dom cod)` — evidence that `a` is a function type.
+(defdata BArrEq ((a BTy)) (barreq (dom BTy) (cod BTy) (e (BtyEq a (Arr dom cod)))))
+
+; The view. In the `(Arr dom cod)` branch the *result type* refines to `Maybe (BArrEq (Arr dom cod))`,
+; so the reflexivity witness `bty-refl (Arr dom cod)` is exactly what `barreq dom cod _` needs.
+(deftotal split-arrow (Pi ((a BTy)) (Maybe (BArrEq a)))
+  (lam (a)
+    (match a [(Base) nothing] [(Arr dom cod) (just (barreq dom cod (bty-refl (Arr dom cod))))])))
+
+; ── Coerce an inferred term to a *known* arrow type (the function side of application) ────────────────
+; Given the arrow witness, transport the function term to the arrow type. (One `match` of a variable.)
+(deftotal sv-flat (Pi ((g BTyCtx) (af BTy) (tmf (BTm g af)) (ae (BArrEq af))) (BArrSig g))
+  (lam (g af tmf ae)
+    (match ae [(barreq dom cod earr) (barrsig dom cod (bty-coerce g af (Arr dom cod) earr tmf))])))
+(deftotal sig-arrow-view2
+  (Pi ((g BTyCtx) (af BTy) (tmf (BTm g af)) (ma (Maybe (BArrEq af)))) (Maybe (BArrSig g)))
+  (lam (g af tmf ma) (match ma [(nothing) nothing] [(just ae) (just (sv-flat g af tmf ae))])))
+(deftotal sig-arrow-view (Pi ((g BTyCtx) (af BTy) (tmf (BTm g af))) (Maybe (BArrSig g)))
+  (lam (g af tmf) (sig-arrow-view2 g af tmf (split-arrow af))))
+(deftotal as-arrow (Pi ((g BTyCtx) (sf (BSig g))) (Maybe (BArrSig g)))
+  (lam (g sf) (match sf [(bsig af tmf) (sig-arrow-view g af tmf)])))
+
+; ── Apply a known-arrow term to an argument (the argument side of application) ────────────────────────
+; Check the argument's type against the domain (`bty-deceq`), coerce it, and eliminate with `TApp`.
+(deftotal apply-arr3
+  (Pi
+    ((g BTyCtx) (dom BTy) (cod BTy) (f (BTm g (Arr dom cod))) (aa BTy) (tma (BTm g aa))
+      (me (Maybe (BtyEq aa dom))))
+    (Maybe (BSig g)))
+  (lam (g dom cod f aa tma me)
+    (match me [(nothing) nothing]
+      [(just earg) (just (bsig cod (TApp g dom cod f (bty-coerce g aa dom earg tma))))])))
+(deftotal apply-arr2
+  (Pi ((g BTyCtx) (dom BTy) (cod BTy) (f (BTm g (Arr dom cod))) (sx (BSig g))) (Maybe (BSig g)))
+  (lam (g dom cod f sx)
+    (match sx [(bsig aa tma) (apply-arr3 g dom cod f aa tma (bty-deceq aa dom))])))
+(deftotal apply-arr (Pi ((g BTyCtx) (fa (BArrSig g)) (sx (BSig g))) (Maybe (BSig g)))
+  (lam (g fa sx) (match fa [(barrsig dom cod f) (apply-arr2 g dom cod f sx)])))
+
+; Application of one elaborated signature to another: view the function as an arrow, then apply.
+(deftotal apply-sig (Pi ((g BTyCtx) (sf (BSig g)) (sx (BSig g))) (Maybe (BSig g)))
+  (lam (g sf sx)
+    (maybe-bind (BArrSig g) (BSig g) (as-arrow g sf)
+      (the (Pi ((fa (BArrSig g))) (Maybe (BSig g))) (lam (fa) (apply-arr g fa sx))))))
+
+; ── Variable lookup ──────────────────────────────────────────────────────────────────────────────────
+; Weaken a found variable under one more binder (`VS`). Then `lookup-var`, curried on `g` with the
+; deeper hit threaded through `maybe-map` (discipline 2) rather than re-matching the recursive `Maybe`.
+(deftotal bvarsig-weaken (Pi ((g BTyCtx) (ty BTy) (vs (BVarSig g))) (BVarSig (CSnoc g ty)))
+  (lam (g ty vs) (match vs [(bvarsig a x) (bvarsig a (VS g a ty x))])))
+(define-rec lookup-var (Pi ((g BTyCtx) (i Nat)) (Maybe (BVarSig g)))
+  (lam (g)
+    (match g [(CNil) (the (Pi ((i Nat)) (Maybe (BVarSig CNil))) (lam (i) nothing))]
+      [(CSnoc rest ty)
+        (the (Pi ((i Nat)) (Maybe (BVarSig (CSnoc rest ty))))
+          (lam (i)
+            (match i [(Zero) (just (bvarsig ty (VZ rest ty)))]
+              [(Succ j)
+                (maybe-map (BVarSig rest) (BVarSig (CSnoc rest ty)) (bvarsig-weaken rest ty)
+                  (lookup-var rest j))])))])))
+
+; ── The elaborator ──────────────────────────────────────────────────────────────────────────────────
+; Per-arm finishers: a found variable becomes a `TVar` signature; an elaborated body becomes a `TLam`.
+(deftotal mk-tvar (Pi ((g BTyCtx) (vs (BVarSig g))) (BSig g))
+  (lam (g vs) (match vs [(bvarsig a x) (bsig a (TVar g a x))])))
+(deftotal mk-tlam (Pi ((g BTyCtx) (dom BTy) (s (BSig (CSnoc g dom)))) (BSig g))
+  (lam (g dom s) (match s [(bsig b tm) (bsig (Arr dom b) (TLam g dom b tm))])))
+
+; The headline loop. Curried on the surface term `s` (structural recursion on the leading scrutinee),
+; returning a function of the context `g`; currying keeps `g` out of scope during `match s` so every
+; arm stays in checking mode (discipline 1). Each arm threads recursive results through
+; `maybe-map`/`maybe-bind` (discipline 2): a variable looks itself up and becomes `TVar`; a lambda
+; elaborates its body in the extended context and becomes `TLam`; an application elaborates both sides
+; and hands them to `apply-sig` (arrow view + domain check + `TApp`).
+(deftotal belab-go (Pi ((s BSurf) (g BTyCtx)) (Maybe (BSig g)))
+  (lam (s)
+    (match s
+      [(su-var i)
+        (the (Pi ((g BTyCtx)) (Maybe (BSig g)))
+          (lam (g) (maybe-map (BVarSig g) (BSig g) (mk-tvar g) (lookup-var g i))))]
+      [(su-lam dom body)
+        (the (Pi ((g BTyCtx)) (Maybe (BSig g)))
+          (lam (g)
+            (maybe-map (BSig (CSnoc g dom)) (BSig g) (mk-tlam g dom) (belab-go body (CSnoc g dom)))))]
+      [(su-app fn arg)
+        (the (Pi ((g BTyCtx)) (Maybe (BSig g)))
+          (lam (g)
+            (maybe-bind (BSig g) (BSig g) (belab-go fn g)
+              (the (Pi ((sf (BSig g))) (Maybe (BSig g)))
+                (lam (sf)
+                  (maybe-bind (BSig g) (BSig g) (belab-go arg g)
+                    (the (Pi ((sx (BSig g))) (Maybe (BSig g))) (lam (sx) (apply-sig g sf sx)))))))))])))
+
+; The headline, with the plan's argument order `(g : BTyCtx) (s : BSurf)`.
+(deftotal belaborate (Pi ((g BTyCtx) (s BSurf)) (Maybe (BSig g))) (lam (g s) (belab-go s g)))
+
+; The size of an elaborated term (0 on failure) — a closed, evaluable witness for the demos below.
+(deftotal bsig-size (Pi ((g BTyCtx) (s (BSig g))) Nat)
+  (lam (g s) (match s [(bsig a t) (btm-size g a t)])))
+(deftotal belab-size (Pi ((g BTyCtx) (m (Maybe (BSig g)))) Nat)
+  (lam (g m) (match m [(nothing) Zero] [(just s) (bsig-size g s)])))
+
+; ── Demos: the kernel certifies these elaborations succeed (or correctly fail) ───────────────────────
+; ⊢ (λx:Base. x) : Base → Base — the identity. Elaborates to a `just` in the empty context.
+(define demo-id BSurf (su-lam Base (su-var Zero)))
+(define demo-id-sig (Maybe (BSig CNil)) (belaborate CNil demo-id))
+
+; ⊢ (λf:Base→Base. λx:Base. f x) : (Base→Base) → Base → Base — application + variable capture.
+(define demo-app BSurf
+  (su-lam (Arr Base Base) (su-lam Base (su-app (su-var (Succ Zero)) (su-var Zero)))))
+(define demo-app-sig (Maybe (BSig CNil)) (belaborate CNil demo-app))
+
+; An ILL-TYPED surface term: (λx:Base. x x) applies a `Base` as if a function. There is no inhabitant
+; of `BTm g (…)` for it, so `belaborate` *must* return `nothing` — and the kernel checks that it does.
+(define demo-bad BSurf (su-lam Base (su-app (su-var Zero) (su-var Zero))))
+(define demo-bad-sig (Maybe (BSig CNil)) (belaborate CNil demo-bad))

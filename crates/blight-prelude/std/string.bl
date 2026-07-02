@@ -7,45 +7,42 @@
 (load "std/nat.bl")
 
 ; A character is just a codepoint.
-(defdata String ()
-  (empty)
-  (push (c Nat) (rest String)))
+(defdata String () (empty) (push (c Nat) (rest String)))
 
 ; The length (number of codepoints) by structural recursion on the spine.
 (define-rec string-length (Pi ((s String)) Nat)
-  (lam (s) (match s
-    [(empty) Zero]
-    [(push c rest) (Succ (string-length rest))])))
+  (lam (s) (match s [(empty) Zero] [(push c rest) (Succ (string-length rest))])))
 
 ; Concatenation: prepend the first string's codepoints onto the second.
 (define-rec string-append (Pi ((s String) (t String)) String)
-  (lam (s t) (match s
-    [(empty) t]
-    [(push c rest) (push c (string-append rest t))])))
+  (lam (s t) (match s [(empty) t] [(push c rest) (push c (string-append rest t))])))
 
 ; Reverse via an accumulator-free structural fold (append a singleton at each step).
 (define-rec string-reverse (Pi ((s String)) String)
-  (lam (s) (match s
-    [(empty) empty]
-    [(push c rest) (string-append (string-reverse rest) (push c empty))])))
+  (lam (s)
+    (match s [(empty) empty] [(push c rest) (string-append (string-reverse rest) (push c empty))])))
 
 ; Structural equality on strings: codepoint-by-codepoint, mirroring std/order's `nat-eq` shape
 ; (curry over the second string so the inner match descends on a strict sub-term). Depends on
 ; std/order for `nat-eq` and std/bool for `and`.
-(load "std/order.bl")
+;
+; `(import …)`, not `(load …)`: `order.bl` declares the `(instance (Show Nat) …)` — the only
+; `instance` in the prelude — so any consumer that also (transitively) loads `order.bl` via a
+; different path (e.g. `std/char.bl`, or `std/test.bl` loading both `string.bl` and `char.bl`)
+; would hit "overlapping instance" on a plain `(load …)`, which never deduplicates (only
+; `(import …)` does — see `crates/blight-elab/src/program.rs`). `import` makes `string.bl` safe to
+; combine with any other module that also needs `order.bl`, regardless of load order.
+(import "std/order.bl")
 
 (define-rec string-eq (Pi ((s String) (t String)) Bool)
-  (lam (s) (match s
-    [(empty) (lam (t) (match t [(empty) true] [(push d ds) false]))]
-    [(push c cs) (lam (t) (match t
-       [(empty) false]
-       [(push d ds) (and (nat-eq c d) (string-eq cs ds))]))])))
+  (lam (s)
+    (match s [(empty) (lam (t) (match t [(empty) true] [(push d ds) false]))]
+      [(push c cs)
+        (lam (t) (match t [(empty) false] [(push d ds) (and (nat-eq c d) (string-eq cs ds))]))])))
 
 ; Map a codepoint function over a string (structural recursion on the spine). Used by `caesar`.
 (define-rec string-map (Pi ((f (Pi ((c Nat)) Nat)) (s String)) String)
-  (lam (f s) (match s
-    [(empty) empty]
-    [(push c rest) (push (f c) (string-map f rest))])))
+  (lam (f s) (match s [(empty) empty] [(push c rest) (push (f c) (string-map f rest))])))
 
 ; Caesar shift: add `k` to every codepoint. (No modular wrap — codepoints are unbounded `Nat`s;
 ; this is the honest in-fragment version. Decoding wraps to a byte at print time.) Non-recursive:

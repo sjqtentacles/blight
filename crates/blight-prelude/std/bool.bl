@@ -6,13 +6,10 @@
 (defdata Bool () (false) (true))
 
 ; Negation.
-(deftotal not (Pi ((b Bool)) Bool)
-  (lam (b) (match b [(false) true] [(true) false])))
+(deftotal not (Pi ((b Bool)) Bool) (lam (b) (match b [(false) true] [(true) false])))
 
 ; Conjunction (short-circuit shape: pattern-match the first argument).
-(deftotal and (Pi ((x Bool) (y Bool)) Bool)
-  (lam (x y) (match x [(false) false] [(true) y])))
+(deftotal and (Pi ((x Bool) (y Bool)) Bool) (lam (x y) (match x [(false) false] [(true) y])))
 
 ; Disjunction.
-(deftotal or (Pi ((x Bool) (y Bool)) Bool)
-  (lam (x y) (match x [(false) y] [(true) true])))
+(deftotal or (Pi ((x Bool) (y Bool)) Bool) (lam (x y) (match x [(false) y] [(true) true])))

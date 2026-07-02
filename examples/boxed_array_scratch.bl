@@ -1,0 +1,27 @@
+; boxed_array_scratch.bl — the smallest `Array A`-effect program (A3b, std/array.bl).
+;
+; `main : (! Array Nat)` allocates a 3-element runtime array of `Nat`s (every slot initialized to
+; `0`), writes `7` at index 1, reads it back, and returns it — folded by the same native top-level
+; handler the `Arrays`/`Bytes` examples use (`bl_run_console`, extended with the A3b boxed-array ops).
+; Unlike `array_scratch.bl` (A3a, `Int`-only), each element here is a genuine boxed `BlValue` (a `Nat`
+; is itself a heap object, or a tagged immediate — either way a real GC-traced value, not a raw
+; machine word), so this is also the runtime-execution proof that a boxed array's backing object
+; survives the collector across the round-trip (the dedicated GC-stress proof lives in
+; `runtime/tests/gc_test.c`'s `test_boxed_array_survives_minor_and_major_gc_structurally`).
+;
+; Effects are MODELED at the type level by the independent re-checker (not declined), so `--recheck`
+; agrees with the seed kernel on this program; it compiles and runs natively.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/boxed_array_scratch.bl -o boxed_array_scratch
+;   ./boxed_array_scratch     # => 7
+
+(load "std/array.bl")
+
+(define three Nat (Succ (Succ (Succ Zero))))
+(define one Nat (Succ Zero))
+(define seven Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero))))))))
+
+(define main (! Array Nat)
+  (let ((h (perform new-boxed-array (Nat) (mk-pair three Zero))))
+    (let ((_ (perform set-boxed (Nat) (mk-pair h (mk-pair one seven)))))
+      (perform get-boxed (Nat) (mk-pair h one)))))

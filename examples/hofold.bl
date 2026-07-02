@@ -1,0 +1,24 @@
+; hofold.bl — small mirror of bench/games/hofold/hofold_int.bl (the P10 defunctionalization corpus
+; entry). A higher-order `iterate` applies a *capturing* closure `(adder (int 1))` to an `Int`
+; accumulator `fuel` times; each `(step acc)` is an indirect `bl_app` (a runtime closure apply), so
+; this is the closure-indirection shape defunctionalization rewrites to a direct call. Here fuel is
+; only 1000 (fast for the differential matrix); the bench twin uses 10^6.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/hofold.bl -o hofold && ./hofold  # => 1000
+
+(load "std/nat.bl")
+(load "std/int.bl")
+
+; `adder k` returns a closure `(lam (a) (int+ a k))` capturing `k` — a first-class function value.
+(deftotal adder (Pi ((k Int)) (Pi ((a Int)) Int)) (lam (k) (lam (a) (int+ a k))))
+
+; Apply `step` to `acc`, `fuel` times. Structural recursion on `fuel`; `step` is applied indirectly.
+(deftotal iterate (Pi ((fuel Nat) (step (Pi ((a Int)) Int)) (acc Int)) Int)
+  (lam (fuel step acc) (match fuel [(Zero) acc] [(Succ f) (iterate f step (step acc))])))
+
+(define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+(define hundred Nat (mult ten ten))
+(define thousand Nat (mult hundred ten))
+
+; iterate (+1) a thousand times starting from 0 => 1000.
+(define main Int (iterate thousand (adder (int 1)) (int 0)))

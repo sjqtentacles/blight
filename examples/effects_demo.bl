@@ -4,10 +4,11 @@
 ; `(perform get tt)` reads the state; a `(handle …)` interprets the operations, discharging the
 ; effect so the handled computation is *pure* and re-checkable at `Nat`.
 ;
-; Effects sit OUTSIDE the independent re-checker's fragment, so `blight build --recheck` and the
-; recheck test corpus *decline* (not reject) this program — that is expected and sound (declining
-; just means "no second opinion offered"). The seed kernel still fully type-checks it, which is why
-; this is a load-only example (exercised by `cargo test -p blight-repl --test examples`).
+; Effects are now MODELED at the type level by the independent re-checker (`Op`/`Handle`/`EffTy` in
+; `crates/blight-recheck/src/term.rs`), not declined: `blight build --recheck` re-derives this
+; program's type and AGREES with the seed kernel (see `recheck_agrees_on_surface_effect_program`).
+; The re-checker declines only cubical `Glue`/`ua`/partial, `foreign` postulates, and universe-level
+; variables. This is a load-only example (exercised by `cargo test -p blight-repl --test examples`).
 
 (load "std/nat.bl")
 
@@ -17,7 +18,4 @@
 
 ; Read the state with `get`; the handler below interprets `get` to hand back `Zero`, and `return x`
 ; yields the read value. So the whole handled computation is the pure `Nat` `Zero`.
-(the Nat
-  (handle (perform get tt)
-    (return x x)
-    (get x k (k Zero))))
+(the Nat (handle (perform get tt) (return x x) (get x k (k Zero))))

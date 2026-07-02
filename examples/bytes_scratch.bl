@@ -1,0 +1,25 @@
+; bytes_scratch.bl — the smallest `Bytes`-effect program (C2, std/bytes.bl).
+;
+; `main : (! Bytes Nat)` allocates a 4-byte runtime buffer, writes the byte 7 at index 2, reads it
+; back, and returns it as a `Nat` — folded by the same native top-level handler the `Console`/`FileIO`
+; examples use (`bl_run_console`, extended with the C2 byte-buffer ops). The buffer is mutable storage
+; living entirely in C; the program only passes around the opaque `Int` handle `new-bytes` returns, so
+; `Bytes` adds zero traced object kinds and zero TCB.
+;
+; This is the mutable substrate a self-hosted lexer (C3) scans: copy a file's bytes in once, then read
+; them with O(1) `bytes-get` index reads. Effects are now MODELED at the type level by the
+; independent re-checker (not declined), so `--recheck` AGREES with the seed kernel on this program;
+; it compiles and runs natively.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/bytes_scratch.bl -o bytes_scratch
+;   ./bytes_scratch            # => 7
+
+(load "std/bytes.bl")
+
+(define four Nat (Succ (Succ (Succ (Succ Zero)))))
+(define two Nat (Succ (Succ Zero)))
+(define seven Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero))))))))
+
+(define main (! Bytes Nat)
+  (let ((h (perform new-bytes four)))
+    (let ((_ (perform set-byte (mk-pair h (mk-pair two seven))))) (perform get-byte (mk-pair h two)))))

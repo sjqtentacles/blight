@@ -1,0 +1,33 @@
+; actor_pingpong.bl — the M16 actor/CSP surface (std/actor.bl) run end-to-end.
+;
+; An `Actor`-effect program interpreted by the cooperative single-core scheduler handler (the inline
+; deep `handle` shape documented in std/actor.bl). The actor body exercises all four ops in tail
+; position — `spawn` a peer, `send` it a message, `yield`, then `receive` its inbox — and returns the
+; successor of the received value. The handler threads a fixed inbox `Nat` through the continuation,
+; resuming each (linear) op exactly once, which is the kernel-enforced contract proven by the kernel
+; tests `linear_actor_send_double_resume_rejected` / `nondet_actor_fork_multi_resume_ok`.
+;
+; The actor program is written *lexically inside* the `handle` (like std/io.bl's Console programs run
+; under the driver-installed top-level handler): under call-by-value, an effect must be performed
+; inside its handler's dynamic extent. With inbox = 4 the actor receives 4 and `main` prints 5.
+;
+; Effects are now MODELED at the type level by the independent re-checker (not declined), so
+; `blight build --recheck` AGREES with the seed kernel on this program; it compiles and runs
+; natively.
+
+(load "std/actor.bl")
+
+; `main` runs an actor body under the cooperative scheduler. The body performs (in sequence, each
+; resumed once by the handler): spawn a peer, send it a message, yield, then receive — binds the
+; received message and returns its successor. All work lives inside `handle` (an effect must be
+; performed inside its handler's dynamic extent). With inbox = 4 the actor receives 4 and prints 5.
+(define main Nat
+  (handle
+    (let ((peer (perform spawn (Succ Zero))))
+      (let ((s (perform send peer)))
+        (let ((y (perform yield tt))) (let ((msg (perform receive tt))) (Succ msg)))))
+    (return x x)
+    (receive u k (k (Succ (Succ (Succ (Succ Zero))))))
+    (send m k (k tt))
+    (yield u k (k tt))
+    (spawn tag k (k tag))))

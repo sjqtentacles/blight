@@ -6,12 +6,9 @@
 
 (load "std/nat.bl")
 
-(defdata Vec ((a (Type 0))) ((n Nat))
-  (vnil (=> Zero))
+(defdata Vec ((a (Type 0))) ((n Nat)) (vnil (=> Zero))
   (vcons (m Nat) (x a) (xs (Vec a m)) (=> (Succ m))))
 
 ; Recover the spine length as a plain `Nat` (a non-dependent fold; the motive is just `Nat`).
 (define-rec vec-length (Pi ((A (Type 0)) (n Nat) (v (Vec A n))) Nat)
-  (lam (A n v) (match v
-    [(vnil) Zero]
-    [(vcons m x xs) (Succ (vec-length A m xs))])))
+  (lam (A n v) (match v [(vnil) Zero] [(vcons m x xs) (Succ (vec-length A m xs))])))

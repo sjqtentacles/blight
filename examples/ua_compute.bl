@@ -31,7 +31,5 @@
 ; computes to `equiv-fun e-bool true = true`. Provable by `refl` *iff* the kernel reduces the
 ; Glue-transport (otherwise the two sides would be distinct neutrals and the boundary check fails).
 (define ua-computes-bool
-  (Path Bool
-    (transp (plam (i) (ua-bool @ i)) cbot true)
-    (equiv-fun Bool Bool e-bool true))
+  (Path Bool (transp (plam (i) (ua-bool @ i)) cbot true) (equiv-fun Bool Bool e-bool true))
   (plam (i) true))

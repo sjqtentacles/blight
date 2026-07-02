@@ -11,9 +11,5 @@
 
 (load "tactics.bl")
 
-(define-by mult-one
-  (Pi ((n Nat)) (Path Nat (mult n (Succ Zero)) n))
-  (intro n
-    (induction n
-      [(Zero)   refl]
-      [(Succ k) (cong Succ (exact k#ih))])))
+(define-by mult-one (Pi ((n Nat)) (Path Nat (mult n (Succ Zero)) n))
+  (intro n (induction n [(Zero) refl] [(Succ k) (cong Succ (exact k#ih))])))

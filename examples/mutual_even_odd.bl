@@ -1,0 +1,17 @@
+; mutual_even_odd.bl — mutual recursion (MR milestone). `even?`/`odd?` reference each other; the
+; `(mutual …)` form desugars in the untrusted tower to a single kernel `Elim` over a generated tag
+; (zero kernel growth). Compiles and runs natively.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/mutual_even_odd.bl -o meo && ./meo  # => 1
+
+(load "std/nat.bl")
+
+(mutual (deftotal even? (Pi ((n Nat)) Bool) (lam (n) (match n [(Zero) true] [(Succ m) (odd? m)])))
+  (deftotal odd? (Pi ((n Nat)) Bool) (lam (n) (match n [(Zero) false] [(Succ m) (even? m)]))))
+
+(deftotal b2n (Pi ((b Bool)) Nat) (lam (b) (match b [(false) Zero] [(true) (Succ Zero)])))
+
+(define four Nat (Succ (Succ (Succ (Succ Zero)))))
+
+; even? 4 = true -> 1.
+(define main Nat (b2n (even? four)))

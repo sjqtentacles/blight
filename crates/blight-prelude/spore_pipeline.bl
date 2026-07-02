@@ -1,0 +1,49 @@
+; spore_pipeline.bl — the self-hosting bootstrap (Grand Arc SH4 / C4): wire the proof-carrying
+; elaborator (spore_elab.bl, `belaborate`) into the ANF compiler (spore_compile.bl, `bcompile`) to
+; get a single in-Blight front-to-back checker+lowerer
+;
+;     bcheck : (g : BTyCtx) -> (s : BSurf) -> Maybe BAnf
+;
+; A surface term flows through Blight's OWN typed elaborator (acceptance = a typing proof) and, on
+; success, straight into Blight's OWN ANF backend. The host kernel certifies the whole composition
+; type-checks; both halves live over spore.bl's `Nat`, so they compose directly. Zero kernel growth.
+;
+; NOTE on the string front-end: a `String -> …` entry would prepend std/parser.bl's reader, but that
+; tower is built over std/nat.bl's `Nat` while the elaborator/compiler use spore.bl's `Nat` — two
+; distinct object cores. Bridging them needs a `BSexp -> BSurf` transcoder across the `Nat` split and
+; is tracked separately; the bootstrap proper is the typed `belaborate -> bcompile` composition below.
+
+(load "spore_elab.bl")  ; belaborate : BTyCtx -> BSurf -> Maybe (BSig g); BSurf, BSig, BTy, BTm
+(load "spore_compile.bl")  ; bcompile : BTm g a -> BAnf; BAnf (idempotently re-loads the shared core)
+
+; Compile a successful elaboration payload `BSig g = Σ(a:BTy). BTm g a` to ANF.
+(deftotal compile-sig (Pi ((g BTyCtx) (p (BSig g))) BAnf)
+  (lam (g p) (match p [(bsig a tm) (bcompile g a tm)])))
+
+; The bootstrap pipeline: elaborate, then (on success) compile.
+(deftotal bcheck (Pi ((g BTyCtx) (s BSurf)) (Maybe BAnf))
+  (lam (g s) (maybe-map (BSig g) BAnf (compile-sig g) (belaborate g s))))
+
+; ── End-to-end demos, certified by the kernel ──────────────────────────────────────────────────────
+; A size measure that reaches through the `Maybe` (0 on elaboration failure).
+(deftotal maybe-anf-size (Pi ((m (Maybe BAnf))) Nat)
+  (lam (m) (match m [(nothing) Zero] [(just e) (banf-size e)])))
+
+(define pipe-id-anf (Maybe BAnf) (bcheck CNil demo-id))  ; demo-id / demo-bad from spore_elab.bl
+(define pipe-bad-anf (Maybe BAnf) (bcheck CNil demo-bad))
+
+; `λx:Base.x` runs the whole pipeline and lowers to the size-6 ANF (= ci-demo-id-anf); the ill-typed
+; `λx:Base. x x` has no typed elaboration, so the pipeline yields `nothing` (size 0). Both are refl —
+; the kernel certifies the end-to-end behaviour definitionally.
+;
+; NOTE: these are deliberately *not* Wave 5/N4's `compute` tactic, even though the goals are exactly
+; its target shape (a ground, closed `Nat` equality). `compute` elaborates+evaluates its goal itself,
+; *in addition to* the one `check_core` always performs — for a goal this late in a large self-hosted
+; file, that second elaboration was measured to cost seconds on top of `refl`'s cost here (the same
+; ambient-size-dependent elaboration expense Wave 5/N1's investigation and N3's write-up describe),
+; for zero behavioural benefit (this goal is already known-good and cheap to check once). `compute`'s
+; real value — deciding fast, or failing fast under budget instead of hanging — pays off for small,
+; standalone goals (see `std/nat.bl`'s dogfood lemmas), not for re-deciding an expensive, already-
+; passing proof a second time.
+(define-by pipe-id-size-6 (Path Nat (maybe-anf-size (bcheck CNil demo-id)) ci-six) refl)
+(define-by pipe-bad-none (Path Nat (maybe-anf-size (bcheck CNil demo-bad)) Zero) refl)

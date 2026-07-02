@@ -20,9 +20,7 @@
 
 ; Build a list of `n` Int-ones, counting down on the unary `Nat` `n`.
 (define-rec build-int-ones (Pi ((n Nat)) (List Int))
-  (lam (n) (match n
-    [(Zero) nil]
-    [(Succ k) (cons int-one (build-int-ones k))])))
+  (lam (n) (match n [(Zero) nil] [(Succ k) (cons int-one (build-int-ones k))])))
 
 (define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
 (define eighty Nat (mult (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))) ten))

@@ -1,0 +1,35 @@
+; float_arith.bl — fixed-point `Float` as an UNTRUSTED library type (M23, zero TCB growth).
+;
+; `Float` is NOT a kernel primitive (that would grow the trusted base, like `Int`). It is ordinary
+; inductive `Data` — `(mkfloat (mantissa Int))` — defined in std/float.bl as a base-10 fixed-point
+; rational: the `Int` field holds the value scaled by 10^6 (six fractional digits). Every operation
+; is exact `Int` arithmetic on that mantissa, so the kernel and the independent re-checker only ever
+; see a one-field constructor over the trusted `Int` base. Nothing here is trusted.
+;
+; The backend recognizer (recognize.rs, M23) fingerprints these `float-*` wrapper shapes and rewrites
+; them to O(1) `bl_float_*` runtime helpers that collapse the `match … match … mkfloat (int op)`
+; tower into a single call — same checked fixed-point meaning, fewer allocations/branches. A
+; differential fuzz test (runtime/tests/float_diff.c) gates that the fast helper agrees bit-for-bit
+; with this exact-rational reference, so the optimization is *checked*, never *trusted*.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/float_arith.bl -o floats
+;   ./floats            # => 6250000   (i.e. 6.25, scaled by 10^6)
+;
+; Computation (operands are variables, so the recognizer fires on each wrapper):
+;   ((2.5 * 4.0) - (10.0 / 4.0)) + (-1.25)  =  (10.0 - 2.5) + (-1.25)  =  6.25
+; printed as its scaled mantissa, 6_250_000.
+
+(load "std/float.bl")
+
+(deftotal fadd (Pi ((a Float) (b Float)) Float) (lam (a b) (float-add a b)))
+(deftotal fsub (Pi ((a Float) (b Float)) Float) (lam (a b) (float-sub a b)))
+(deftotal fmul (Pi ((a Float) (b Float)) Float) (lam (a b) (float-mul a b)))
+(deftotal fdiv (Pi ((a Float) (b Float)) Float) (lam (a b) (float-div a b)))
+(deftotal fneg (Pi ((a Float)) Float) (lam (a) (float-neg a)))
+
+(define main Int
+  (float-mantissa
+    (fadd
+      (fsub (fmul (mkfloat (int 2500000)) (float-of-int (int 4)))
+        (fdiv (float-of-int (int 10)) (float-of-int (int 4))))
+      (fneg (mkfloat (int 1250000))))))

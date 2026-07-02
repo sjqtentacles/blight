@@ -1,0 +1,26 @@
+; graphics_scratch.bl — the smallest `Graphics`-effect program (Wave 10 / P2, std/graphics.bl).
+;
+; `main : (! Graphics Int)` opens a small window, clears the frame, draws one rectangle, presents it,
+; then polls for one input event and returns the result — folded by the native `bl_run_graphics`
+; handler (runtime/graphics.c), which the build driver installs when the `graphics` cargo feature is
+; enabled. Under CI's headless `SDL_VIDEODRIVER=dummy` (no real display, no synthetic events queued),
+; `poll-input` deterministically observes nothing pending and returns `-1` — a genuine, concrete,
+; observable result from having actually driven SDL end to end (window creation, a real render pass,
+; a real presented frame), not a human watching a window. This mirrors `boxed_array_scratch.bl`'s role
+; for A3b: the smallest possible program that exercises every op the effect declares at least once.
+;
+; Effects are MODELED at the type level by the independent re-checker (not declined), so `--recheck`
+; agrees with the seed kernel on this program; it compiles and runs natively (with `--features
+; llvm,graphics` and SDL2 installed).
+;
+;   SDL_VIDEODRIVER=dummy cargo run -p blight-repl --features llvm,graphics -- \
+;     build examples/graphics_scratch.bl -o graphics_scratch
+;   SDL_VIDEODRIVER=dummy ./graphics_scratch     # => -1
+
+(load "std/graphics.bl")
+
+(define main (! Graphics Int)
+  (let ((_ (gfx-init-window (int 320) (int 240))))
+    (let ((_ (gfx-clear tt)))
+      (let ((_ (gfx-draw-rect (int 10) (int 10) (int 32) (int 32))))
+        (let ((_ (gfx-present tt))) (gfx-poll-input tt))))))

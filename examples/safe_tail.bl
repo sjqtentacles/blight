@@ -23,19 +23,13 @@
 ; the body must still list the `vnil` arm — but it is unreachable: no caller can supply a
 ; `Vec A Zero` where `Vec A (Succ n)` is demanded.
 (define-rec safe-tail (Pi ((A (Type 0)) (n Nat) (v (Vec A (Succ n)))) (Vec A n))
-  (lam (A n v)
-    (match v
-      [(vnil) vnil]
-      [(vcons m x xs) xs])))
+  (lam (A n v) (match v [(vnil) vnil] [(vcons m x xs) xs])))
 
 (define one Nat (Succ Zero))
 (define two Nat (Succ (Succ Zero)))
 
 ; sample : Vec Nat 2 = [1, 1]. (vcons takes tail-length, element, tail; lengths count down 1, 0.)
-(define sample (Vec Nat two)
-  (vcons one one
-    (vcons Zero one
-      (vnil))))
+(define sample (Vec Nat two) (vcons one one (vcons Zero one (vnil))))
 
 ; main = 1. The tail of a length-2 vector has length 1; `vec-length` reads that index back as a
 ; concrete Nat. The "exactly one shorter" promise lives in safe-tail's TYPE and is re-verified by

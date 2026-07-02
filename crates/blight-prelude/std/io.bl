@@ -5,9 +5,9 @@
 ;   * `print : String -> Unit`  — write a string to stdout (no implicit newline);
 ;   * `read  : Unit   -> String` — read one line from stdin (newline stripped).
 ; A program `main : (! Console A)` performs these and is run by the native top-level Console handler
-; the build driver installs (it folds the bubbling effect tree against real stdio). Effects are
-; outside the independent re-checker's fragment, so such programs are *declined* (not rejected) by
-; `--recheck`; the seed kernel type-checks them and they compile and run natively.
+; the build driver installs (it folds the bubbling effect tree against real stdio). Effects are now
+; MODELED at the type level by the independent re-checker (not declined), so such programs re-check
+; and agree with the seed kernel, which type-checks them; they compile and run natively.
 
 (load "std/string.bl")
 
@@ -15,13 +15,38 @@
 ; examples declare their own, so we declare it here too (re-declaring an identical inductive is fine).
 (defdata Unit () (tt))
 
-(effect Console
-  (print String Unit)
-  (read  Unit   String))
+(effect Console (print String Unit) (read Unit String))
 
 ; Convenience wrappers so user code reads naturally.
-(deftotal put-str (Pi ((s String)) (! Console Unit))
-  (lam (s) (perform print s)))
+(deftotal put-str (Pi ((s String)) (! Console Unit)) (lam (s) (perform print s)))
 
-(deftotal get-line (Pi ((u Unit)) (! Console String))
-  (lam (u) (perform read tt)))
+(deftotal get-line (Pi ((u Unit)) (! Console String)) (lam (u) (perform read tt)))
+
+; ---------------------------------------------------------------------------------------------------
+; The `FileIO` effect (C1): whole-file text input/output, extending the M7 Console pattern.
+;
+; UNTRUSTED tower code. Like `Console`, `FileIO` is an ordinary user effect run by the *same* native
+; top-level deep handler the build driver installs (`bl_run_console`, runtime/effects.c, extended with
+; `read-file`/`write-file` branches) — it folds the bubbling effect tree against real
+; `fopen`/`fread`/`fwrite`. It declares two operations:
+;   * `read-file  : String        -> String` — read an entire file's contents by path (whole file as
+;                   one String; a missing/unreadable file yields the empty String, never a crash);
+;   * `write-file : (Pair String String) -> Unit` — write the second String to the file named by the
+;                   first (truncating), a no-op-with-warning on error.
+;
+; Whole-file (rather than fd/handle) operations are deliberate: they are the minimal substrate a
+; self-hosted lexer/parser (C3) needs (`read-file "foo.bl"`), and they avoid threading a mutable
+; handle through pure code — the file is opened, fully read/written, and closed inside the native
+; handler. A program `main : (! FileIO A)` (or a combined `(! ⟨Console FileIO⟩ A)`) performs these and
+; is run by the same top-level handler. Effects are now MODELED at the type level by the re-checker
+; (not declined), so such programs re-check and agree with the seed kernel, which type-checks them.
+
+(load "std/pair.bl")
+
+(effect FileIO (read-file String String) (write-file (Pair String String) Unit))
+
+; Convenience wrappers.
+(deftotal read-file-str (Pi ((path String)) (! FileIO String)) (lam (path) (perform read-file path)))
+
+(deftotal write-file-str (Pi ((path String) (contents String)) (! FileIO Unit))
+  (lam (path contents) (perform write-file (mk-pair path contents))))

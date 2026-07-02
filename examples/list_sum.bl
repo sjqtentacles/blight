@@ -7,13 +7,12 @@
 
 (load "std/list.bl")
 
-(define one   Nat (Succ Zero))
-(define two   Nat (Succ (Succ Zero)))
+(define one Nat (Succ Zero))
+(define two Nat (Succ (Succ Zero)))
 (define three Nat (Succ (Succ (Succ Zero))))
 
 ; [1, 2, 3] : List Nat
-(define sample (List Nat)
-  (cons one (cons two (cons three nil))))
+(define sample (List Nat) (cons one (cons two (cons three nil))))
 
 ; sum = foldr plus 0 [1,2,3] = 1 + (2 + (3 + 0)) = 6.
 (define main Nat (foldr Nat Nat plus Zero sample))

@@ -12,21 +12,14 @@
 
 ; Addition by structural recursion on the first argument.
 (define-rec plus (Pi ((a Nat) (b Nat)) Nat)
-  (lam (a b) (match a
-    [(Zero) b]
-    [(Succ n) (Succ (plus n b))])))
+  (lam (a b) (match a [(Zero) b] [(Succ n) (Succ (plus n b))])))
 
 ; Multiplication by structural recursion on the first argument.
 (define-rec mult (Pi ((a Nat) (b Nat)) Nat)
-  (lam (a b) (match a
-    [(Zero) Zero]
-    [(Succ n) (plus b (mult n b))])))
+  (lam (a b) (match a [(Zero) Zero] [(Succ n) (plus b (mult n b))])))
 
 ; Truncated predecessor (`pred Zero = Zero`).
-(deftotal pred (Pi ((n Nat)) Nat)
-  (lam (n) (match n
-    [(Zero) Zero]
-    [(Succ k) k])))
+(deftotal pred (Pi ((n Nat)) Nat) (lam (n) (match n [(Zero) Zero] [(Succ k) k])))
 
 ; Truncated subtraction (`sub a b = max 0 (a - b)`): structural recursion on the first argument `a`.
 ; Each step peels a `Succ` off both `a` and `b`; the recursive call `(sub n k)` descends on `n`, the
@@ -36,37 +29,49 @@
 ; only `a`; see docs/roadmap.md for the precise supported-recursion fragment (recursing on a
 ; *non-immediate* sub-term, e.g. peeling two `Succ`s before the call, is outside it).
 (deftotal sub (Pi ((a Nat) (b Nat)) Nat)
-  (lam (a) (match a
-    [(Zero) (lam (b) Zero)]
-    [(Succ n) (lam (b) (match b
-       [(Zero) (Succ n)]
-       [(Succ k) (sub n k)]))])))
+  (lam (a)
+    (match a [(Zero) (lam (b) Zero)]
+      [(Succ n) (lam (b) (match b [(Zero) (Succ n)] [(Succ k) (sub n k)]))])))
 
 ; Minimum: structural recursion on the first argument.
 (deftotal min (Pi ((a Nat) (b Nat)) Nat)
-  (lam (a) (match a
-    [(Zero) (lam (b) Zero)]
-    [(Succ n) (lam (b) (match b
-       [(Zero) Zero]
-       [(Succ k) (Succ (min n k))]))])))
+  (lam (a)
+    (match a [(Zero) (lam (b) Zero)]
+      [(Succ n) (lam (b) (match b [(Zero) Zero] [(Succ k) (Succ (min n k))]))])))
 
 ; Maximum: structural recursion on the first argument.
 (deftotal max (Pi ((a Nat) (b Nat)) Nat)
-  (lam (a) (match a
-    [(Zero) (lam (b) b)]
-    [(Succ n) (lam (b) (match b
-       [(Zero) (Succ n)]
-       [(Succ k) (Succ (max n k))]))])))
+  (lam (a)
+    (match a [(Zero) (lam (b) b)]
+      [(Succ n) (lam (b) (match b [(Zero) (Succ n)] [(Succ k) (Succ (max n k))]))])))
 
 ; Parity. Single structural recursion on the immediate sub-term, flipping the result with `not`.
 ; (`even (Succ k) = not (even k)`.) This keeps each call on the kernel's one-step induction
 ; hypothesis, the fragment the native backend compiles correctly; see docs/roadmap.md.
-(deftotal even (Pi ((n Nat)) Bool)
-  (lam (n) (match n
-    [(Zero) true]
-    [(Succ k) (not (even k))])))
+(deftotal even (Pi ((n Nat)) Bool) (lam (n) (match n [(Zero) true] [(Succ k) (not (even k))])))
 
-(deftotal odd (Pi ((n Nat)) Bool)
-  (lam (n) (match n
-    [(Zero) false]
-    [(Succ k) (not (odd k))])))
+(deftotal odd (Pi ((n Nat)) Bool) (lam (n) (match n [(Zero) false] [(Succ k) (not (odd k))])))
+
+; ── Wave 5 / N4 dogfood: `compute`/`decide` on small, ground arithmetic facts ───────────────────────
+; A hand-rolled `refl` would also close each of these (the kernel's own `conv`, inside `check_core`,
+; would discover the same equality on its own) — `compute`/`decide` instead *decide* the goal
+; themselves, up front, via the metered evaluator (Wave 5/N2): a wrong fact fails immediately with a
+; legible message instead of a mysterious kernel rejection, and (for a goal complex enough to matter)
+; a runaway computation fails under budget rather than hanging the caller. These are cheap, closed,
+; standalone goals — exactly `compute`/`decide`'s sweet spot (see spore_pipeline.bl's header note on
+; why the *self-hosted pipeline's* proofs, despite having the same `Path`-over-ground-`Nat` shape,
+; are deliberately left as plain `refl` instead: there, the ambient elaboration context is large
+; enough that `compute`'s extra, independent elaborate+evaluate pass measurably doubles an already
+; expensive check for no behavioural benefit).
+(define-by plus-two-three-is-five
+  (Path Nat (plus (Succ (Succ Zero)) (Succ (Succ (Succ Zero))))
+    (Succ (Succ (Succ (Succ (Succ Zero))))))
+  compute)
+
+(define-by mult-two-three-is-six
+  (Path Nat (mult (Succ (Succ Zero)) (Succ (Succ (Succ Zero))))
+    (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))
+  compute)
+
+; `decide`: the "is this decidable proposition true" idiom `Path Bool e true` — four is even.
+(define-by four-is-even (Path Bool (even (Succ (Succ (Succ (Succ Zero))))) true) decide)

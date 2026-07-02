@@ -5,8 +5,8 @@
 ; and resumed by the native top-level Console handler with the I/O result. This exercises *multiple*
 ; sequenced operations through the delimited-continuation machinery, not just one.
 ;
-; Effects are outside the independent re-checker's fragment, so `--recheck` *declines* this program;
-; the seed kernel type-checks it and it compiles and runs natively.
+; Effects are now MODELED at the type level by the independent re-checker (not declined), so
+; `--recheck` AGREES with the seed kernel on this program; it compiles and runs natively.
 
 (load "std/io.bl")
 

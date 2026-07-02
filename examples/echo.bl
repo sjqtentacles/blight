@@ -6,11 +6,9 @@
 ; handler the build driver installs (`bl_run_console`), which folds the bubbling effect tree against
 ; real stdio. `print` writes without an implicit newline, so the output is a byte-faithful echo.
 ;
-; Effects sit outside the independent re-checker's fragment, so `--recheck` *declines* this program;
-; the seed kernel type-checks it and it compiles and runs natively.
+; Effects are now MODELED at the type level by the independent re-checker (not declined), so
+; `--recheck` AGREES with the seed kernel on this program; it compiles and runs natively.
 
 (load "std/io.bl")
 
-(define main (! Console Unit)
-  (let ((line (perform read tt)))
-    (perform print line)))
+(define main (! Console Unit) (let ((line (perform read tt))) (perform print line)))

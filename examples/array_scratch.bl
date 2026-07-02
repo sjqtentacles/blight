@@ -1,0 +1,23 @@
+; array_scratch.bl — the smallest `Arrays`-effect program (A3a, std/array.bl).
+;
+; `main : (! Arrays Int)` allocates a 4-element runtime array, writes the value 7 at index 2, reads
+; it back, and returns it as an `Int` — folded by the same native top-level handler the
+; `Console`/`Bytes` examples use (`bl_run_console`, extended with the A3a int-array ops). The array
+; is mutable storage living entirely in C; the program only passes around the opaque `Int` handle
+; `new-array` returns, so `Arrays` adds zero traced object kinds and zero TCB, exactly like `Bytes`.
+;
+; Effects are MODELED at the type level by the independent re-checker (not declined), so `--recheck`
+; agrees with the seed kernel on this program; it compiles and runs natively.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/array_scratch.bl -o array_scratch
+;   ./array_scratch            # => 7
+
+(load "std/array.bl")
+
+(define four Nat (Succ (Succ (Succ (Succ Zero)))))
+(define two Nat (Succ (Succ Zero)))
+(define seven Int (int 7))
+
+(define main (! Arrays Int)
+  (let ((h (perform new-array four)))
+    (let ((_ (perform set-elem (mk-pair h (mk-pair two seven))))) (perform get-elem (mk-pair h two)))))

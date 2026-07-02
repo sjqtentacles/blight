@@ -5,20 +5,16 @@
 ; loadable in isolation and re-checkable through the spore. Exercises the lifted multi-parameter
 ; cap (two parameters, like `Either`).
 
-(defdata Pair ((a (Type 0)) (b (Type 0)))
-  (mk-pair (x a) (y b)))
+(defdata Pair ((a (Type 0)) (b (Type 0))) (mk-pair (x a) (y b)))
 
 ; First projection.
 (deftotal pair-fst (Pi ((A (Type 0)) (B (Type 0)) (p (Pair A B))) A)
-  (lam (A B p) (match p
-    [(mk-pair x y) x])))
+  (lam (A B p) (match p [(mk-pair x y) x])))
 
 ; Second projection.
 (deftotal pair-snd (Pi ((A (Type 0)) (B (Type 0)) (p (Pair A B))) B)
-  (lam (A B p) (match p
-    [(mk-pair x y) y])))
+  (lam (A B p) (match p [(mk-pair x y) y])))
 
 ; Swap the components.
 (deftotal pair-swap (Pi ((A (Type 0)) (B (Type 0)) (p (Pair A B))) (Pair B A))
-  (lam (A B p) (match p
-    [(mk-pair x y) (mk-pair y x)])))
+  (lam (A B p) (match p [(mk-pair x y) (mk-pair y x)])))

@@ -18,45 +18,43 @@
 ; Halve a Nat (floor), carrying a `keep` toggle that drops every other unit — the structural-half
 ; trick from collatz_steps.bl. Used to find the split point.
 (deftotal half-go (Pi ((n Nat) (keep Bool)) Nat)
-  (lam (n keep) (match n
-    [(Zero) Zero]
-    [(Succ k) (match keep
-       [(true)  (half-go k false)]
-       [(false) (Succ (half-go k true))])])))
+  (lam (n keep)
+    (match n [(Zero) Zero]
+      [(Succ k) (match keep [(true) (half-go k false)] [(false) (Succ (half-go k true))])])))
 
-(deftotal half (Pi ((n Nat)) Nat)
-  (lam (n) (half-go n true)))
+(deftotal half (Pi ((n Nat)) Nat) (lam (n) (half-go n true)))
 
 ; ---- merge of two sorted lists (fuel-bounded) ----
 ; One merge step on two non-empty lists, choosing the smaller head and recursing via `cont`.
 (deftotal merge-pick
-  (Pi ((cont (Pi ((xs (List Nat)) (ys (List Nat))) (List Nat)))
-       (x Nat) (xrest (List Nat)) (y Nat) (yrest (List Nat))) (List Nat))
-  (lam (cont x xrest y yrest) (match (nat-le x y)
-    [(true)  (cons x (cont xrest (cons y yrest)))]
-    [(false) (cons y (cont (cons x xrest) yrest))])))
+  (Pi
+    ((cont (Pi ((xs (List Nat)) (ys (List Nat))) (List Nat))) (x Nat) (xrest (List Nat)) (y Nat)
+      (yrest (List Nat)))
+    (List Nat))
+  (lam (cont x xrest y yrest)
+    (match (nat-le x y) [(true) (cons x (cont xrest (cons y yrest)))]
+      [(false) (cons y (cont (cons x xrest) yrest))])))
 
 ; Dispatch on `ys` given a non-empty `xs = (cons x xrest)`.
 (deftotal merge-on-ys
-  (Pi ((cont (Pi ((xs (List Nat)) (ys (List Nat))) (List Nat)))
-       (x Nat) (xrest (List Nat)) (ys (List Nat))) (List Nat))
-  (lam (cont x xrest ys) (match ys
-    [(nil) (cons x xrest)]
-    [(cons y yrest) (merge-pick cont x xrest y yrest)])))
+  (Pi
+    ((cont (Pi ((xs (List Nat)) (ys (List Nat))) (List Nat))) (x Nat) (xrest (List Nat))
+      (ys (List Nat)))
+    (List Nat))
+  (lam (cont x xrest ys)
+    (match ys [(nil) (cons x xrest)] [(cons y yrest) (merge-pick cont x xrest y yrest)])))
 
 ; Dispatch on `xs`.
 (deftotal merge-on-xs
-  (Pi ((cont (Pi ((xs (List Nat)) (ys (List Nat))) (List Nat)))
-       (xs (List Nat)) (ys (List Nat))) (List Nat))
-  (lam (cont xs ys) (match xs
-    [(nil) ys]
-    [(cons x xrest) (merge-on-ys cont x xrest ys)])))
+  (Pi ((cont (Pi ((xs (List Nat)) (ys (List Nat))) (List Nat))) (xs (List Nat)) (ys (List Nat)))
+    (List Nat))
+  (lam (cont xs ys) (match xs [(nil) ys] [(cons x xrest) (merge-on-ys cont x xrest ys)])))
 
 ; `merge-go fuel xs ys` merges two sorted lists. Structural recursion on `fuel`.
 (deftotal merge-go (Pi ((fuel Nat) (xs (List Nat)) (ys (List Nat))) (List Nat))
-  (lam (fuel xs ys) (match fuel
-    [(Zero) (append Nat xs ys)]
-    [(Succ f) (merge-on-xs (lam (xs2 ys2) (merge-go f xs2 ys2)) xs ys)])))
+  (lam (fuel xs ys)
+    (match fuel [(Zero) (append Nat xs ys)]
+      [(Succ f) (merge-on-xs (lam (xs2 ys2) (merge-go f xs2 ys2)) xs ys)])))
 
 ; `merge xs ys` with fuel = |xs| + |ys| (one output element per step always suffices).
 (deftotal merge (Pi ((xs (List Nat)) (ys (List Nat))) (List Nat))
@@ -64,41 +62,33 @@
 
 ; ---- the sort itself (fuel-bounded) ----
 ; Split `xs` at its midpoint, sort each half via `cont`, and merge. Non-recursive itself.
-(deftotal msort-split
-  (Pi ((cont (Pi ((xs (List Nat))) (List Nat))) (xs (List Nat))) (List Nat))
+(deftotal msort-split (Pi ((cont (Pi ((xs (List Nat))) (List Nat))) (xs (List Nat))) (List Nat))
   (lam (cont xs)
-    (merge
-      (cont (take Nat (half (length Nat xs)) xs))
-      (cont (drop Nat (half (length Nat xs)) xs)))))
+    (merge (cont (take Nat (half (length Nat xs)) xs)) (cont (drop Nat (half (length Nat xs)) xs)))))
 
 ; Dispatch on the spine: lists of length 0 or 1 are already sorted; otherwise split + recurse.
-(deftotal msort-on-xs
-  (Pi ((cont (Pi ((xs (List Nat))) (List Nat))) (xs (List Nat))) (List Nat))
-  (lam (cont xs) (match xs
-    [(nil) nil]
-    [(cons x rest) (match rest
-       [(nil) (cons x nil)]                       ; singleton: already sorted
-       [(cons y more) (msort-split cont xs)])])))
+(deftotal msort-on-xs (Pi ((cont (Pi ((xs (List Nat))) (List Nat))) (xs (List Nat))) (List Nat))
+  (lam (cont xs)
+    (match xs [(nil) nil]
+      [(cons x rest)
+        (match rest
+          [(nil) (cons x nil)]  ; singleton: already sorted
+          [(cons y more) (msort-split cont xs)])])))
 
 ; `msort-go fuel xs`: structural recursion on `fuel`.
 (deftotal msort-go (Pi ((fuel Nat) (xs (List Nat))) (List Nat))
-  (lam (fuel xs) (match fuel
-    [(Zero) xs]
-    [(Succ f) (msort-on-xs (lam (xs2) (msort-go f xs2)) xs)])))
+  (lam (fuel xs) (match fuel [(Zero) xs] [(Succ f) (msort-on-xs (lam (xs2) (msort-go f xs2)) xs)])))
 
 ; `msort xs` with fuel = |xs| (depth of halving is < length, so length fuel is ample).
-(deftotal msort (Pi ((xs (List Nat))) (List Nat))
-  (lam (xs) (msort-go (length Nat xs) xs)))
+(deftotal msort (Pi ((xs (List Nat))) (List Nat)) (lam (xs) (msort-go (length Nat xs) xs)))
 
 (deftotal head-or (Pi ((d Nat) (xs (List Nat))) Nat)
-  (lam (d xs) (match xs
-    [(nil) d]
-    [(cons x rest) x])))
+  (lam (d xs) (match xs [(nil) d] [(cons x rest) x])))
 
-(define one   Nat (Succ Zero))
-(define two   Nat (Succ (Succ Zero)))
+(define one Nat (Succ Zero))
+(define two Nat (Succ (Succ Zero)))
 (define three Nat (Succ (Succ (Succ Zero))))
-(define five  Nat (Succ (Succ (Succ (Succ (Succ Zero))))))
+(define five Nat (Succ (Succ (Succ (Succ (Succ Zero))))))
 (define seven Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero))))))))
 (define eight Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))
 

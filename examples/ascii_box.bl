@@ -25,17 +25,14 @@
 ; A row: `n` copies of codepoint `c`, then `empty`. Structural recursion on the immediate
 ; sub-term `k` of `n` (the kernel's one-step induction hypothesis).
 (deftotal repeat-char (Pi ((c Nat) (n Nat)) String)
-  (lam (c n) (match n
-    [(Zero) empty]
-    [(Succ k) (push c (repeat-char c k))])))
+  (lam (c n) (match n [(Zero) empty] [(Succ k) (push c (repeat-char c k))])))
 
 ; `n` rows of `(repeat-char c w)`, each followed by a newline (codepoint 10, written `"\n"`).
 ; Structural recursion on `n`; `string-append` glues this row in front of the rest of the grid.
 (deftotal box-rows (Pi ((c Nat) (n Nat) (w Nat)) String)
-  (lam (c n w) (match n
-    [(Zero) empty]
-    [(Succ k) (string-append (repeat-char c w)
-                (string-append "\n" (box-rows c k w)))])))
+  (lam (c n w)
+    (match n [(Zero) empty]
+      [(Succ k) (string-append (repeat-char c w) (string-append "\n" (box-rows c k w)))])))
 
 ; three = 3 (row count and width); `?#` is the char literal for `#` (codepoint 35).
 (define three Nat (Succ (Succ (Succ Zero))))

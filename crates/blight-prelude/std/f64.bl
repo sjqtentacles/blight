@@ -1,0 +1,77 @@
+; std/f64.bl — an UNVERIFIED IEEE-754 `F64` escape hatch (Wave 2 / L2, Design B, spec §7.6).
+;
+; `std/float.bl` (M23, Design C) is the *verified* default: an ordinary trusted-`Int`-backed `Data`
+; the kernel fully understands and the independent re-checker fully re-derives, at the honest cost of
+; being a fixed-point rational rather than genuine IEEE-754 (no NaN/Inf, six decimal digits of
+; fraction, `0.1+0.2` exact in the scaled representation rather than reproducing hardware rounding).
+;
+; This module is the OTHER side of that trade: real hardware `double` semantics (NaN, Inf, exact
+; binary rounding), at the cost of leaving the proof fragment entirely. `F64` and every operation
+; below is a `foreign` postulate (spec §7.6): the kernel takes each C symbol on faith (this is the
+; ONE deliberate hole that grows the trusted computing base — see docs/roadmap.md "Design B"), and
+; the independent re-checker honestly **DECLINES** to certify any judgement that mentions one — never
+; silently accepts it, never reports a false proof. Reach for `std/float.bl` first; reach for this
+; module only when you specifically need real IEEE-754 rounding/NaN/Inf and are willing to step
+; outside the checked fragment for that code.
+;
+; Representation (runtime/numeric.c): a boxed `F64` value is bit-for-bit a boxed `Int` whose 64-bit
+; payload is the `double`'s raw IEEE-754 bit pattern — so there is zero new GC surface (it rides the
+; existing `BL_INT` box). Binary operations pack their two operands into a single `(Pair F64 F64)`
+; argument (`mk-pair`, std/pair.bl), exactly the multi-arg convention `std/bytes.bl`'s effect ops use
+; (`lower.rs` packs every multi-operand `foreign` call this way — see `ir.rs`'s `Cir::Foreign` doc
+; comment) — a single argument is all the `foreign` hatch supports per call, at any arity.
+;
+; Only `f64-of-int`/`f64-round` cross the F64 <-> checked-Int boundary: an abstract `foreign` type has
+; no eliminator, so there is no other way to construct or observe one from checked code.
+;
+; UNTRUSTED elaborator-only surface (spec §7.6); loadable in isolation. Depends on the trusted `Int`
+; base (std/int.bl) only for its `int-zero`/`int-one` constants.
+
+(load "std/int.bl")
+(load "std/pair.bl")
+
+; The opaque hardware-`double` type. A `foreign` of type `(Type 0)` is exactly the `foreign "answer" :
+; Univ 0` shape the kernel test suite pins (blight-kernel `foreign_checks_at_its_type`); it has no
+; eliminator, so `F64` values only ever flow between the operations below.
+(foreign F64 (Type 0) "bl_f64_ty_witness")
+
+; Inject a checked `Int` as its (exact) `double` value — a genuine numeric conversion (`5` becomes
+; `5.0`), never a bit reinterpretation.
+(foreign f64-of-int (Pi ((n Int)) F64) "bl_f64_of_int")
+
+; Project back to a checked `Int` by rounding to the nearest whole number (ties away from zero). This
+; is the one way to observe an `F64` result in checked code (e.g. to print it via the `Int`/`Show`
+; machinery) — necessarily lossy for a non-integral value, which is the honest price of leaving the
+; verified fragment.
+(foreign f64-round (Pi ((x F64)) Int) "bl_f64_round")
+
+; Arithmetic, packed two-at-a-time per the file header.
+(foreign f64-add (Pi ((p (Pair F64 F64))) F64) "bl_f64_add")
+(foreign f64-sub (Pi ((p (Pair F64 F64))) F64) "bl_f64_sub")
+(foreign f64-mul (Pi ((p (Pair F64 F64))) F64) "bl_f64_mul")
+(foreign f64-div (Pi ((p (Pair F64 F64))) F64) "bl_f64_div")  ; IEEE-754: div-by-zero yields +-Inf/NaN
+
+; Negation (unary; no packing needed).
+(foreign f64-neg (Pi ((x F64)) F64) "bl_f64_neg")
+
+; Comparison flags (`1`/`0`, an `Int` — `F64` has no `Bool` bridge, mirroring std/int.bl/std/float.bl).
+(foreign f64-lt (Pi ((p (Pair F64 F64))) Int) "bl_f64_lt")
+(foreign f64-eq (Pi ((p (Pair F64 F64))) Int) "bl_f64_eq")  ; IEEE equality: NaN = NaN is 0
+
+; ── Convenience wrappers so binary ops read as ordinary two-argument calls ─────────────────────────
+
+(deftotal f64-plus (Pi ((a F64) (b F64)) F64) (lam (a b) (f64-add (mk-pair a b))))
+
+(deftotal f64-minus (Pi ((a F64) (b F64)) F64) (lam (a b) (f64-sub (mk-pair a b))))
+
+(deftotal f64-times (Pi ((a F64) (b F64)) F64) (lam (a b) (f64-mul (mk-pair a b))))
+
+(deftotal f64-over (Pi ((a F64) (b F64)) F64) (lam (a b) (f64-div (mk-pair a b))))
+
+(deftotal f64-less-than (Pi ((a F64) (b F64)) Int) (lam (a b) (f64-lt (mk-pair a b))))
+
+(deftotal f64-equal (Pi ((a F64) (b F64)) Int) (lam (a b) (f64-eq (mk-pair a b))))
+
+; Common constants.
+(define f64-zero F64 (f64-of-int int-zero))
+(define f64-one F64 (f64-of-int int-one))

@@ -1,0 +1,236 @@
+; spore_reader.bl — the `BSexp -> BSurf` transcoder (Wave 2 / P4): closes Grand Arc SH4's string
+; front end by bridging std/parser.bl's untyped s-expression reader into spore_elab.bl's typed
+; surface language, so `bcheck` can finally be driven from a literal source `String` end to end.
+;
+; ── The "two Nat towers" gotcha, resolved ──────────────────────────────────────────────────────────
+; `std/parser.bl`'s `BSexp` is built over std/nat.bl's `Nat`; `spore.bl`/`spore_elab.bl`'s `BSurf`/
+; `BTyCtx`/`BTm` are built over spore.bl's OWN, separately-`defdata`'d `Nat` (kept local so the
+; extrinsic model in spore_meta.bl stays self-contained — see spore.bl's header). Naively these look
+; like two incompatible object cores. They are not: `defdata`/`define` redeclaration is a plain
+; last-write-wins overwrite in both `ElabEnv`/`Signature` (`std/bytes.bl`'s `Unit` redeclaration and
+; `std/nat.bl`'s "re-splicing std/bool elsewhere is harmless" comment already document this), and
+; spore.bl's `Nat` is BYTE-FOR-BYTE the same shape as std/nat.bl's (`(defdata Nat () (Zero) (Succ (n
+; Nat)))`) — so loading both into one program collapses to a SINGLE `DataName("Nat")` entry that both
+; towers' already-elaborated terms transparently share (a redeclaration of an identical shape can
+; never introduce an observable discrepancy). This file loads both `spore_pipeline.bl` (the typed
+; `bcheck`) and `std/parser.bl` (the untyped `BSexp` reader) side by side and is the load-bearing
+; proof that the combination type-checks with no kernel change and no name-clash error.
+;
+; ── The transcoder ─────────────────────────────────────────────────────────────────────────────────
+; `BSurf` is a closed grammar (`su-var`/`su-lam`/`su-app` over `BTy = Base | Arr BTy BTy`), so
+; `resolve-term`/`resolve-ty` below are complete, total readers for exactly this concrete syntax:
+;
+;   types:  Base                =>  Base
+;           (Arr T1 T2)          =>  Arr t1 t2
+;   terms:  NAME                =>  su-var i         (i = the de Bruijn index of NAME in scope)
+;           (lam (NAME TY) BODY) =>  su-lam ty body'
+;           (FN ARG)             =>  su-app fn' arg'  (binary application; FN need not be an atom)
+;
+; ── Why these are *fuel*-recursive, not plain structural `define-rec`s ─────────────────────────────
+; Both readers must recurse into sub-expressions (`T1`/`T2`; `bodyE`/`argE`/`fnT`) that sit several
+; `s-cons` cells *below* the top-level scrutinee `e` — e.g. `(Arr T1 T2)`'s `T1` is only reached by
+; matching `e`, then its `rest`, then `rest`'s own head. Blight's structural-recursion checker
+; recognizes a self-call as terminating only when its argument is a field bound by the function's
+; OWN outermost match (the induction hypothesis the kernel's eliminator hands you one constructor
+; layer at a time); it does not — and by the metatheory (spec §4.4) *should* not — chase an
+; unbounded chain of nested matches to "discover" that a grandchild is still structurally smaller,
+; since that is exactly the kind of unverified fixpoint a trusted-kernel design must refuse to
+; special-case. The standard, fully general escape hatch for this shape (well-founded recursion on
+; a decreasing size metric, "fuel") is used instead: `bsexp-size` gives a `Nat` metric that strictly
+; decreases from a `BSexp` to *any* sub-expression reachable by peeling `s-cons` cells, and
+; `resolve-ty-fuel`/`resolve-term-fuel` recurse structurally on a `Nat` fuel parameter seeded with
+; that metric — a self-call `(resolve-ty-fuel k sub)` is structurally eligible purely because `k`
+; (from matching `fuel` as `Succ k`) is the function's own first parameter's direct field, regardless
+; of what `sub` is. Fuel never actually runs out (each call passes a sub-expression strictly smaller
+; than the one whose size seeded the fuel), so the `(Zero) => nothing` fuel-exhaustion arm is dead
+; code, present only because `deftotal` demands a total, exhaustive function.
+
+(load "spore_pipeline.bl")  ; BSurf, BTy (Base/Arr), bcheck, BAnf, banf-size, demo-id (identity check)
+(load "std/parser.bl")  ; BSexp (s-atom/s-nil/s-cons), parse-string, Bytes (transitively: List)
+(load "std/pair.bl")  ; Pair/mk-pair, for the fixed-arity `BSexp` list decomposition below
+
+; ── Byte-list (`List Nat`) equality — the object language has no strings, only raw codepoint lists ──
+(define-rec bytes-eq (Pi ((a (List Nat)) (b (List Nat))) Bool)
+  (lam (a)
+    (match a [(nil) (lam (b) (match b [(nil) true] [(cons y ys) false]))]
+      [(cons x xs)
+        (lam (b) (match b [(nil) false] [(cons y ys) (and (nat-eq x y) (bytes-eq xs ys))]))])))
+
+; The two reserved keyword atoms and the one reserved type atom, as codepoint lists (`?x` is the
+; reader's single-character-literal sugar, desugaring straight to the `Nat` codepoint — spec §6).
+(define kw-lam (List Nat) (cons ?l (cons ?a (cons ?m nil))))
+(define kw-base (List Nat) (cons ?B (cons ?a (cons ?s (cons ?e nil)))))
+(define kw-arr (List Nat) (cons ?A (cons ?r (cons ?r nil))))
+
+; ── Name resolution: `NAME` -> de Bruijn index against the enclosing binder stack ───────────────────
+; `names` is innermost-binder-first, exactly the order `su-var`'s index counts in (`Zero` = the most
+; recently bound name). Structural recursion on `names` (first parameter).
+;
+; The recursive step, factored into its own `deftotal` (discipline 2, `spore_elab.bl`'s `mk-arr-eq`
+; pattern): `lookup-name`'s own recursive call is never itself the scrutinee of a `match` — it is
+; always passed as a plain ARGUMENT to a helper, which matches its own (variable) parameter instead.
+(deftotal lookup-name-found (Pi ((sub (Maybe Nat))) (Maybe Nat))
+  (lam (sub) (match sub [(nothing) nothing] [(just k) (just (Succ k))])))
+
+(define-rec lookup-name (Pi ((names (List (List Nat))) (target (List Nat))) (Maybe Nat))
+  (lam (names target)
+    (match names [(nil) nothing]
+      [(cons n rest)
+        (match (bytes-eq n target) [(true) (just Zero)]
+          [(false) (lookup-name-found (lookup-name rest target))])])))
+
+; ── Size metric: strictly decreases from `e` to any sub-expression reached via `s-cons` ──────────────
+; Structural recursion on `e` (both fields of `s-cons` are direct fields of the outermost match, so
+; this `deftotal` is fully eligible on its own terms) — the fuel seed for the readers below.
+(deftotal bsexp-size (Pi ((e BSexp)) Nat)
+  (lam (e)
+    (match e [(s-atom bs) (Succ Zero)] [(s-nil) (Succ Zero)]
+      [(s-cons h r) (Succ (plus (bsexp-size h) (bsexp-size r)))])))
+
+; ── Type reader: `Base` | `(Arr T1 T2)` ──────────────────────────────────────────────────────────────
+; Fuel-recursive (see the file header note): `fuel` is the function's own first parameter and every
+; self-call passes the current arm's `k` (from matching `fuel` as `(Succ k)`) unchanged as the new
+; fuel, so every self-call is structurally eligible regardless of which `BSexp` sub-expression
+; (`t1e`/`t2e`) it recurses into.
+(deftotal resolve-ty-fuel (Pi ((fuel Nat) (e BSexp)) (Maybe BTy))
+  (lam (fuel e)
+    (match fuel [(Zero) nothing]
+      [(Succ k)
+        (match e [(s-atom bs) (match (bytes-eq bs kw-base) [(true) (just Base)] [(false) nothing])]
+          [(s-nil) nothing]
+          [(s-cons head rest)
+            (match head [(s-nil) nothing] [(s-cons z1 z2) nothing]
+              [(s-atom hbs)
+                (match (bytes-eq hbs kw-arr) [(false) nothing]
+                  [(true)
+                    (match rest [(s-atom ra) nothing] [(s-nil) nothing]
+                      [(s-cons t1e rest2)
+                        (match rest2 [(s-atom ra2) nothing] [(s-nil) nothing]
+                          [(s-cons t2e rest3)
+                            (match rest3 [(s-atom ra3) nothing] [(s-cons z1 z2) nothing]
+                              [(s-nil)
+                                (match (resolve-ty-fuel k t1e) [(nothing) nothing]
+                                  [(just t1)
+                                    (match (resolve-ty-fuel k t2e) [(nothing) nothing]
+                                      [(just t2) (just (Arr t1 t2))])])])])])])])])])))
+
+; Top-level entry point: seed the fuel with `e`'s own size (always enough, since every recursive step
+; strictly shrinks the sub-expression — see the file header note).
+(deftotal resolve-ty (Pi ((e BSexp)) (Maybe BTy)) (lam (e) (resolve-ty-fuel (bsexp-size e) e)))
+
+; Is this `BSexp` the bare keyword atom `lam`? A flat (non-recursive) predicate, so `resolve-term`
+; below can dispatch on it without a mutually-recursive helper.
+(deftotal is-lam-kw (Pi ((e BSexp)) Bool)
+  (lam (e) (match e [(s-atom bs) (bytes-eq bs kw-lam)] [(s-nil) false] [(s-cons h r) false])))
+
+; ── Term reader: `NAME` | `(lam (NAME TY) BODY)` | `(FN ARG)` ───────────────────────────────────────
+; Fuel-recursive for the same reason as `resolve-ty-fuel` above: `head`/`bodyE`/`argE`/`fnT` are all
+; reached several `s-cons` cells below `e`, so every self-call passes the current arm's `k` unchanged
+; as the new fuel (structurally eligible regardless of the `BSexp` sub-expression it targets).
+(deftotal resolve-term-fuel (Pi ((fuel Nat) (names (List (List Nat))) (e BSexp)) (Maybe BSurf))
+  (lam (fuel names e)
+    (match fuel [(Zero) nothing]
+      [(Succ k)
+        (match e
+          [(s-atom bs)
+            (match (lookup-name names bs) [(nothing) nothing] [(just i) (just (su-var i))])]
+          [(s-nil) nothing]
+          [(s-cons head rest)
+            (match (is-lam-kw head)
+              [(true)
+                ; (lam (NAME TY) BODY): rest = (binder . body . ()), binder = (NAME . TY . ())
+                (match rest [(s-atom ra) nothing] [(s-nil) nothing]
+                  [(s-cons binder rest2)
+                    (match binder [(s-atom z) nothing] [(s-nil) nothing]
+                      [(s-cons nameE brest)
+                        (match nameE [(s-nil) nothing] [(s-cons z1 z2) nothing]
+                          [(s-atom nbs)
+                            (match brest [(s-atom rb) nothing] [(s-nil) nothing]
+                              [(s-cons tyE trest)
+                                (match trest [(s-atom rt) nothing] [(s-cons z1 z2) nothing]
+                                  [(s-nil)
+                                    (match rest2 [(s-atom r2) nothing] [(s-nil) nothing]
+                                      [(s-cons bodyE brest2)
+                                        (match brest2 [(s-atom rb2) nothing]
+                                          [(s-cons z1 z2) nothing]
+                                          [(s-nil)
+                                            (match (resolve-ty tyE) [(nothing) nothing]
+                                              [(just ty)
+                                                (match (resolve-term-fuel k (cons nbs names) bodyE)
+                                                  [(nothing) nothing]
+                                                  [(just body) (just (su-lam ty body))])])])])])])])])])]
+              [(false)
+                ; (FN ARG): rest = (argE . ())
+                (match rest [(s-atom ra) nothing] [(s-nil) nothing]
+                  [(s-cons argE rest2)
+                    (match rest2 [(s-atom r2) nothing] [(s-cons z1 z2) nothing]
+                      [(s-nil)
+                        (match (resolve-term-fuel k names head) [(nothing) nothing]
+                          [(just fnT)
+                            (match (resolve-term-fuel k names argE) [(nothing) nothing]
+                              [(just argT) (just (su-app fnT argT))])])])])])])])))
+
+; Top-level entry point: seed the fuel with `e`'s own size, exactly like `resolve-ty`.
+(deftotal resolve-term (Pi ((names (List (List Nat))) (e BSexp)) (Maybe BSurf))
+  (lam (names e) (resolve-term-fuel (bsexp-size e) names e)))
+
+; ── Top-level entry points ───────────────────────────────────────────────────────────────────────────
+; A closed surface term: no enclosing binders.
+(deftotal bsexp->bsurf (Pi ((e BSexp)) (Maybe BSurf)) (lam (e) (resolve-term nil e)))
+
+; The full string front end: parse (effectful, `Bytes`-backed) then resolve (pure). `main`s that call
+; this are, like every `Bytes` program, MODELED at the type level by the independent re-checker (not
+; declined) and run natively through the shared top-level handler.
+(define bsource->bsurf (Pi ((s String)) (! Bytes (Maybe BSurf)))
+  (lam (s) (let ((r (parse-string s))) (maybe-bind BSexp BSurf r bsexp->bsurf))))
+
+; `String -> Maybe BAnf`, end to end: parse, resolve, elaborate (a typing proof), compile — finishing
+; the SH4 bootstrap's one documented gap (spore_pipeline.bl's header note).
+(define bcheck-string (Pi ((g BTyCtx) (s String)) (! Bytes (Maybe BAnf)))
+  (lam (g s) (let ((ms (bsource->bsurf s))) (maybe-bind BSurf BAnf ms (bcheck g)))))
+
+; ── Pure demo ────────────────────────────────────────────────────────────────────────────────────────
+; The hand-built `BSexp` for the literal source text `(lam (x Base) x)` — the same program as
+; spore_elab.bl's `demo-id = (su-lam Base (su-var Zero))`.
+;
+; NOTE on why there is still no `(define-by ... refl)` certifying `bsexp->bsurf reader-demo-sexp =
+; just demo-id` here (unlike `spore_pipeline.bl`'s `pipe-id-anf`/`ci-demo-id-size-6`) — updated after
+; Wave 5/N1's investigation:
+;
+; N1 fixed one real, confirmed source of superlinear blowup: `resolve-ty-fuel`/`resolve-term-fuel`'s
+; fuel-recursive `do_elim`s used to *re-clone* the entire captured environment once per recursion
+; level with no sharing across reduction steps (`Env`'s `Vec<Value>` representation made every
+; `Env::extend`/closure-clone an O(environment-size) copy). `ValueChain` (an O(1)-clone persistent
+; environment, mirrored in both `blight-kernel` and `blight-recheck`; see `value.rs` in each crate,
+; and `crates/blight-kernel/src/normalize.rs`'s `deep_elim_conv_is_bounded_under_wide_ambient_env`
+; test) closes that specific gap — confirmed by direct measurement, not just a compile-and-hope.
+;
+; Measuring *this exact* `refl` goal after N1 landed, it is still not fast enough to run in a normal
+; test suite: reintroducing it as a temporary experiment and running the host test both in `cargo
+; test` (debug) and `cargo test --release` still leaves it running (not crashed, not swapping) past
+; 7 minutes of sustained ~98% CPU in `--release` before being killed — ruling out "just debug-build
+; overhead" as the explanation. RSS stays in the single-digit MB the whole time (unlike the pre-N1
+; multi-GB symptom), so this is a genuinely *different*, second bottleneck, not a regression of the
+; first. The cause:
+; `eval`'s `Term::Lam`/`Pi`/`Sigma`/`PLam` arms still deep-`clone()` the *remaining* `Box<Term>`
+; subtree into every new `Closure` — a *one-time* construction cost paid once per AST node on a
+; single evaluation pass, not a repeated-reduction cost `ValueChain` addresses. Evaluating this
+; whole self-hosted pipeline (every `load`ed file's definitions sit in scope as one giant nested
+; `let`-chain) means walking many thousands of such nodes, each paying a clone proportional to the
+; size of everything still to come — an inherent O(program size²) one-time cost with the current
+; representation.
+;
+; Closing this needs `Term`'s own recursive fields to move from `Box<Term>` to `Rc<Term>` (so a
+; closure can cheaply share a pointer into the original tree instead of cloning a subtree) — a
+; representation change touching every crate in the pipeline (elab/kernel/recheck/codegen), too
+; large and too TCB-adjacent to take speculatively alongside N1's `Env` fix. This is the sharpened
+; go-bar for actually adding this `refl`: land `Term: Box -> Rc` (tracked as a Wave 6+ follow-on),
+; re-measure, then add `reader-demo-refl` here. Until then, `reader_self_host_loads` (below, and in
+; `crates/blight-repl/tests/spore.rs`) certifies correctness the same way `parser_self_host_loads`
+; certifies `std/parser.bl`: every form type-checks, and the independent re-checker re-verifies the
+; pure core — a normalizer *performance* gap, not a correctness question the type checker leaves
+; open.
+(define reader-demo-sexp BSexp
+  (s-cons (s-atom kw-lam)
+    (s-cons (s-cons (s-atom (cons ?x nil)) (s-cons (s-atom kw-base) s-nil))
+      (s-cons (s-atom (cons ?x nil)) s-nil))))

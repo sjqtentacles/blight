@@ -27,37 +27,26 @@
 ; concatenate `sorted-lesser ++ [p] ++ sorted-greater`. Non-recursive itself.
 (deftotal qsort-step
   (Pi ((cont (Pi ((xs (List Nat))) (List Nat))) (p Nat) (rest (List Nat))) (List Nat))
-  (lam (cont p rest)
-    (append Nat
-      (cont (lesser p rest))
-      (cons p (cont (greater-eq p rest))))))
+  (lam (cont p rest) (append Nat (cont (lesser p rest)) (cons p (cont (greater-eq p rest))))))
 
 ; Dispatch on the spine: the empty list is sorted; otherwise take a quicksort step.
-(deftotal qsort-on-xs
-  (Pi ((cont (Pi ((xs (List Nat))) (List Nat))) (xs (List Nat))) (List Nat))
-  (lam (cont xs) (match xs
-    [(nil) nil]
-    [(cons p rest) (qsort-step cont p rest)])))
+(deftotal qsort-on-xs (Pi ((cont (Pi ((xs (List Nat))) (List Nat))) (xs (List Nat))) (List Nat))
+  (lam (cont xs) (match xs [(nil) nil] [(cons p rest) (qsort-step cont p rest)])))
 
 ; `qsort-go fuel xs`: structural recursion on `fuel`.
 (deftotal qsort-go (Pi ((fuel Nat) (xs (List Nat))) (List Nat))
-  (lam (fuel xs) (match fuel
-    [(Zero) xs]
-    [(Succ f) (qsort-on-xs (lam (xs2) (qsort-go f xs2)) xs)])))
+  (lam (fuel xs) (match fuel [(Zero) xs] [(Succ f) (qsort-on-xs (lam (xs2) (qsort-go f xs2)) xs)])))
 
 ; `qsort xs` with fuel = |xs| (each level removes the pivot, so length fuel is ample).
-(deftotal qsort (Pi ((xs (List Nat))) (List Nat))
-  (lam (xs) (qsort-go (length Nat xs) xs)))
+(deftotal qsort (Pi ((xs (List Nat))) (List Nat)) (lam (xs) (qsort-go (length Nat xs) xs)))
 
 (deftotal head-or (Pi ((d Nat) (xs (List Nat))) Nat)
-  (lam (d xs) (match xs
-    [(nil) d]
-    [(cons x rest) x])))
+  (lam (d xs) (match xs [(nil) d] [(cons x rest) x])))
 
-(define one   Nat (Succ Zero))
-(define two   Nat (Succ (Succ Zero)))
+(define one Nat (Succ Zero))
+(define two Nat (Succ (Succ Zero)))
 (define three Nat (Succ (Succ (Succ Zero))))
-(define five  Nat (Succ (Succ (Succ (Succ (Succ Zero))))))
+(define five Nat (Succ (Succ (Succ (Succ (Succ Zero))))))
 (define seven Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero))))))))
 (define eight Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))
 

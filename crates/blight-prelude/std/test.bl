@@ -1,0 +1,107 @@
+; std/test.bl — an in-language test framework: `deftest` + assert combinators (roadmap Wave 2 / L1).
+;
+; UNTRUSTED tower code, entirely pure and total: a test is a `TestCase` (a name paired with a `Bool`
+; verdict already computed by an assert combinator below), a `TestSuite` groups several under a name,
+; and `render-suite`/`suite-all-passed` turn a suite into a human-readable report / a single pass-fail
+; `Bool` a Rust-side end-to-end test (or a `Console` program) can check. There is deliberately no
+; macro-level `(deftest …)` special form — `deftest` is an ordinary smart constructor, so every other
+; L1 module's tests are written using nothing but `define` + `deftest` + these combinators, exactly
+; the same fragment the rest of the stdlib already lives in (no elaborator change, loadable in
+; isolation, fully re-checked).
+;
+; Every other Wave 2 stdlib module (`std/map.bl`, `std/json.bl`, `std/regex.bl`) is dogfooded through
+; this exact framework: see `examples/map_scratch.bl`, `examples/json_scratch.bl`,
+; `examples/regex_scratch.bl` for suites built with `deftest` that are asserted (Rust-side) to report
+; all-green.
+
+; NOT `(load "std/string.bl")`/`(load "std/list.bl")` directly: `std/string_extra.bl` (below)
+; already loads both itself, and `(load …)` never deduplicates (only `(import …)` does; see
+; `crates/blight-elab/src/program.rs`), so loading a module both directly AND transitively
+; re-registers its top-level `instance`s a second time and fails as an overlapping-instance error
+; (`std/string.bl` loads `std/order.bl`, whose `(instance (Show Nat) …)` is exactly such a case).
+(load "std/string_extra.bl")
+(load "std/bool.bl")
+
+; A local `char-space`/`digit-char` (NOT `(load "std/char.bl")`): `std/char.bl` itself
+; `(load "std/order.bl")`, and `std/string.bl` (above, via `string_extra.bl`) already does the same
+; internally for `string-eq` — loading both here would register `order.bl`'s `(instance (Show Nat)
+; …)` a second time (see the note above) and fail as an overlapping-instance error. `char.bl`'s
+; `is-lower`/`is-upper` (the only things it actually needs `order.bl` for) are not needed here, so
+; this just inlines the couple of constants that are, computed identically to `std/char.bl`.
+(define char-two Nat (Succ (Succ Zero)))
+(define char-eight Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))
+(define char-ten Nat (Succ (Succ char-eight)))
+(define char-newline Nat char-ten)
+(define char-space Nat (mult char-eight (plus char-two char-two)))
+(deftotal digit-char (Pi ((n Nat)) Nat)
+  (lam (n) (plus (mult char-eight (plus char-two (plus char-two char-two))) n)))  ; '0' + n = 48 + n
+
+; ---- assert combinators: each reduces a comparison to the `Bool` a `deftest` case records ----------
+; `assert-true`/`assert-false` are the identity/negation — named so a test reads as an assertion
+; rather than a bare `Bool`.
+(deftotal assert-true (Pi ((b Bool)) Bool) (lam (b) b))
+
+(deftotal assert-false (Pi ((b Bool)) Bool) (lam (b) (not b)))
+
+; Structural equality on `Bool` (std/bool.bl declares no instances, so this is not already named).
+(deftotal bool-eq (Pi ((x Bool) (y Bool)) Bool) (lam (x y) (match x [(false) (not y)] [(true) y])))
+
+(deftotal assert-eq-bool (Pi ((x Bool) (y Bool)) Bool) (lam (x y) (bool-eq x y)))
+
+(deftotal assert-eq-nat (Pi ((x Nat) (y Nat)) Bool) (lam (x y) (nat-eq x y)))
+
+(deftotal assert-eq-string (Pi ((x String) (y String)) Bool) (lam (x y) (string-eq x y)))
+
+; ---- the framework proper ---------------------------------------------------------------------
+(defdata TestCase () (mk-test (name String) (passed Bool)))
+(defdata TestSuite () (mk-suite (name String) (cases (List TestCase))))
+
+; `deftest name passed` names an already-computed assertion result. Called as e.g.
+; `(deftest "plus-comm" (assert-eq-nat (plus 2 3) (plus 3 2)))`.
+(deftotal deftest (Pi ((name String) (passed Bool)) TestCase)
+  (lam (name passed) (mk-test name passed)))
+
+; ---- reporting ----------------------------------------------------------------------------------
+(deftotal case-passed (Pi ((c TestCase)) Bool) (lam (c) (match c [(mk-test name passed) passed])))
+
+; The number of cases in a suite.
+(deftotal suite-total (Pi ((s TestSuite)) Nat)
+  (lam (s) (match s [(mk-suite name cases) (length TestCase cases)])))
+
+; The number of *passing* cases in a suite (structural recursion on the case spine).
+(define-rec count-passed (Pi ((cases (List TestCase))) Nat)
+  (lam (cases)
+    (match cases [(nil) Zero]
+      [(cons c rest)
+        (match (case-passed c) [(true) (Succ (count-passed rest))] [(false) (count-passed rest)])])))
+
+(deftotal suite-passed (Pi ((s TestSuite)) Nat)
+  (lam (s) (match s [(mk-suite name cases) (count-passed cases)])))
+
+; `true` iff every case in the suite passed (an empty suite vacuously passes).
+(define-rec all-passed (Pi ((cases (List TestCase))) Bool)
+  (lam (cases) (match cases [(nil) true] [(cons c rest) (and (case-passed c) (all-passed rest))])))
+
+(deftotal suite-all-passed (Pi ((s TestSuite)) Bool)
+  (lam (s) (match s [(mk-suite name cases) (all-passed cases)])))
+
+; ---- human-readable rendering (for a Console program to print) ----------------------------------
+; Verdicts render as `" 1"` (pass) / `" 0"` (fail) — a single digit codepoint via `digit-char`
+; (std/char.bl), avoiding the need for hand-built multi-letter ASCII constants (see std/char.bl's
+; header note on why large codepoints are built from small numerals, not literal `Succ` chains).
+(deftotal bool-to-nat (Pi ((b Bool)) Nat) (lam (b) (match b [(false) Zero] [(true) (Succ Zero)])))
+
+(deftotal render-verdict (Pi ((b Bool)) String)
+  (lam (b) (push char-space (push (digit-char (bool-to-nat b)) empty))))
+
+(deftotal render-case (Pi ((c TestCase)) String)
+  (lam (c) (match c [(mk-test name passed) (string-append name (render-verdict passed))])))
+
+(define-rec render-cases (Pi ((cases (List TestCase))) String)
+  (lam (cases)
+    (match cases [(nil) empty]
+      [(cons c rest) (string-append (render-case c) (push char-newline (render-cases rest)))])))
+
+; `render-suite s` — one line per case (`"<name> PASS"`/`"<name> FAIL"`), newline-terminated.
+(deftotal render-suite (Pi ((s TestSuite)) String)
+  (lam (s) (match s [(mk-suite name cases) (render-cases cases)])))

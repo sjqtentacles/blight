@@ -1,0 +1,18 @@
+; listfold.bl — the canonical deforestation target (P7 fusion). Build a small `List Int`, `map`
+; (*2) over it, then `foldr (+)` it down to a single Int. This is exactly the build-then-fold
+; pipeline the fusion pass shortcuts:
+;
+;   foldr f z (map g xs)  =>  foldr (λx acc. f (g x) acc) z xs
+;
+; With fusion on (the default) the intermediate mapped list is never allocated — every `cons` cell
+; `map` would build, and the GC traffic to reclaim it, is gone. The `BL_NO_FUSION` differential A/B
+; switch proves the observable result is bit-identical with the un-fused lowering either way.
+;
+;   foldr (+) 0 (map (*2) [1,2,3,4,5]) = 2*(1+2+3+4+5) = 30
+
+(load "std/list.bl")
+(load "std/int.bl")
+
+(define xs (List Int) (cons (int 1) (cons (int 2) (cons (int 3) (cons (int 4) (cons (int 5) nil))))))
+
+(define main Int (foldr Int Int int-add (int 0) (map Int Int int-double xs)))

@@ -7,12 +7,17 @@
 ; Depends on std/nat for arithmetic and std/order for `nat-le`.
 
 (load "std/nat.bl")
-(load "std/order.bl")
+; `(import …)`, not `(load …)`: `order.bl` declares the `(instance (Show Nat) …)` — the only
+; `instance` in the prelude — so any consumer that also (transitively) loads `order.bl` via a
+; different path would hit "overlapping instance" on a plain `(load …)` (which never deduplicates;
+; only `(import …)` does — see `crates/blight-elab/src/program.rs`). `import` makes `char.bl` safe
+; to combine with any other module that also needs `order.bl`, regardless of load order.
+(import "std/order.bl")
 
 ; Small building-block numerals.
-(define char-two   Nat (Succ (Succ Zero)))
+(define char-two Nat (Succ (Succ Zero)))
 (define char-eight Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))
-(define char-ten   Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+(define char-ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
 
 ; ---- named ASCII codepoints ----
 ; newline = 10.
@@ -27,17 +32,14 @@
 (define char-a Nat (plus char-A char-space))
 
 ; The codepoint of the single digit `n` (0..9), i.e. '0' + n.
-(deftotal digit-char (Pi ((n Nat)) Nat)
-  (lam (n) (plus char-zero n)))
+(deftotal digit-char (Pi ((n Nat)) Nat) (lam (n) (plus char-zero n)))
 
 ; 'Z' = 'A' + 25, 'z' = 'a' + 25 — the inclusive upper ends of each letter range.
-(define char-Z Nat (plus char-A (plus char-ten (plus char-ten (plus char-two char-two))))) ; 65 + 25 = 90
-(define char-z Nat (plus char-a (plus char-ten (plus char-ten (plus char-two char-two))))) ; 97 + 25 = 122
+(define char-Z Nat (plus char-A (plus char-ten (plus char-ten (plus char-two char-two)))))  ; 65 + 25 = 90
+(define char-z Nat (plus char-a (plus char-ten (plus char-ten (plus char-two char-two)))))  ; 97 + 25 = 122
 
 ; `is-lower c` is `true` iff 'a' <= c <= 'z'.
-(deftotal is-lower (Pi ((c Nat)) Bool)
-  (lam (c) (and (nat-le char-a c) (nat-le c char-z))))
+(deftotal is-lower (Pi ((c Nat)) Bool) (lam (c) (and (nat-le char-a c) (nat-le c char-z))))
 
 ; `is-upper c` is `true` iff 'A' <= c <= 'Z'.
-(deftotal is-upper (Pi ((c Nat)) Bool)
-  (lam (c) (and (nat-le char-A c) (nat-le c char-Z))))
+(deftotal is-upper (Pi ((c Nat)) Bool) (lam (c) (and (nat-le char-A c) (nat-le c char-Z))))

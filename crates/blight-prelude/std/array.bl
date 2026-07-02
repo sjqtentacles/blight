@@ -1,0 +1,99 @@
+; std/array.bl — the `Arrays` effect: a mutable, runtime-backed array of machine `Int`s (roadmap A3a),
+; plus the generic/boxed `Array A` effect (roadmap Wave 10 / P1, A3b).
+;
+; UNTRUSTED tower code. `Arrays` is an ordinary user effect (like `Bytes` in std/bytes.bl), folded by
+; the SAME native top-level deep handler the build driver installs (`bl_run_console`, runtime/
+; effects.c, extended with `new-array`/`array-len`/`get-elem`/`set-elem` branches). The mutable
+; storage lives entirely in C, outside the GC graph: each array is reached through an opaque `Int`
+; HANDLE (a trusted, re-checkable kernel base type) indexing a runtime-side table. Pure code only
+; ever passes the `Int` handle around — so `Arrays` adds ZERO new kernel surface, ZERO traced object
+; kinds, and ZERO TCB, exactly like `Bytes` (this module is deliberately its exact mirror).
+;
+; Elements are fixed to `Int` (a machine-word primitive, not a pointer), which is what makes this
+; effect GC-safe with no tracer changes at all: a `malloc`'d table of raw `int64_t`s can never hold a
+; stale/moved GC pointer because it never holds a pointer at all.
+;
+; Operations (all total; out-of-range handles/indices are saturating no-ops, never a crash):
+;   * `new-array : Nat -> Int`   — allocate a zero-filled array of the given length; returns its
+;                                  handle (`Int -1` only on allocation failure — an always-invalid
+;                                  handle, so subsequent ops degrade to no-ops rather than trapping).
+;   * `array-len : Int -> Nat`   — the length of the array named by the handle (0 if invalid).
+;   * `get-elem  : (Pair Int Nat) -> Int`             — read element `i` of array `h` (0 if out of
+;                                  range).
+;   * `set-elem  : (Pair Int (Pair Nat Int)) -> Unit` — write `(h, (i, v))`: store `v` at index `i`
+;                                  of array `h` (no-op if out of range).
+;
+; A program `main : (! Arrays A)` performs these and is run by the same top-level handler. Multi-arg
+; ops are packed with `Pair` (the surface `(! E A)` row carries a single effect name and each op a
+; single argument type). Effects are MODELED at the type level by the independent re-checker (not
+; declined), so `--recheck` agrees with the seed kernel on such a program, which type-checks it.
+;
+; ── `Array A` (A3b, shipped): a mutable array of arbitrary BOXED elements ──────────────────────────
+;
+; The A3a design above cannot generalize past `Int` for two independent reasons, both now closed (see
+; `docs/design-a3b-boxed-arrays.md` for the full history):
+;   - Blocker 1 (a polymorphic effect operation) is closed by Wave 7/E2 parameterized effects: `Array`
+;     below declares a real parameter telescope `((A (Type 0)))`, the same shape `defdata` already
+;     has, so each op's `A` is genuinely instantiated per call site (`(perform op (T) arg)`), not
+;     hardcoded to one type.
+;   - Blocker 2 (an off-heap `BlValue[]` is invisible to the precise, moving collector) is closed by
+;     `runtime/boxed_array.c`'s design: each array's storage is a REAL GC-heap `BL_TUPLE` (traced by
+;     the existing tracer with zero changes), referenced by an opaque `Int` handle into an off-heap
+;     table whose entries are themselves scanned as GC roots every collection, with `set-boxed`
+;     write-barriered exactly like a codegen-emitted field store into an already-allocated object.
+;
+; Operations (all total; an out-of-range handle/index degrades rather than traps — see
+; `bl_boxed_array_get`'s header comment in boxed_array.c for the one honest exception: an out-of-range
+; *read* cannot fabricate a value of the erased element type `A`, so it returns an inert nullary `Con`
+; rather than a genuine `A`; this can only be observed by a program that reads out of bounds, which is
+; already a logic error):
+;   * `new-boxed-array : (Pair Nat A) -> Array A`               — allocate an array of the given
+;                                  length, every slot initialized to the given value; returns its
+;                                  handle.
+;   * `boxed-len       : Array A -> Nat`                        — the length of the array (0 if
+;                                  invalid).
+;   * `get-boxed       : (Pair (Array A) Nat) -> A`             — read element `i` of array `h`.
+;   * `set-boxed       : (Pair (Array A) (Pair Nat A)) -> Unit` — write `(h, (i, v))`.
+; `Array A`'s handle type is `Int` itself (not a fresh opaque wrapper) — exactly the `Arrays`/`Bytes`
+; convention — so `boxed-array-new`/`boxed-array-get`/`boxed-array-set`/`boxed-array-length` below
+; thread it around as a plain value with no boxing of its own.
+
+(load "std/nat.bl")
+(load "std/int.bl")
+(load "std/pair.bl")
+
+; `Unit` is the result of the void ops. Re-declaring an identical inductive is fine.
+(defdata Unit () (tt))
+
+(effect Arrays (new-array Nat Int) (array-len Int Nat) (get-elem (Pair Int Nat) Int)
+  (set-elem (Pair Int (Pair Nat Int)) Unit))
+
+; ── Convenience wrappers so user code reads naturally ────────────────────────────────────────────
+
+(deftotal array-new (Pi ((len Nat)) (! Arrays Int)) (lam (len) (perform new-array len)))
+
+(deftotal array-length (Pi ((h Int)) (! Arrays Nat)) (lam (h) (perform array-len h)))
+
+(deftotal array-get (Pi ((h Int) (i Nat)) (! Arrays Int))
+  (lam (h i) (perform get-elem (mk-pair h i))))
+
+(deftotal array-set (Pi ((h Int) (i Nat) (v Int)) (! Arrays Unit))
+  (lam (h i v) (perform set-elem (mk-pair h (mk-pair i v)))))
+
+; ── `Array A` (A3b): the generic/boxed sibling ───────────────────────────────────────────────────
+
+(effect Array ((A (Type 0))) (new-boxed-array (Pair Nat A) Int) (boxed-len Int Nat)
+  (get-boxed (Pair Int Nat) A)
+  (set-boxed (Pair Int (Pair Nat A)) Unit))
+
+(deftotal boxed-array-new (Pi ((A (Type 0)) (len Nat) (init A)) (! Array Int))
+  (lam (A len init) (perform new-boxed-array (A) (mk-pair len init))))
+
+(deftotal boxed-array-length (Pi ((A (Type 0)) (h Int)) (! Array Nat))
+  (lam (A h) (perform boxed-len (A) h)))
+
+(deftotal boxed-array-get (Pi ((A (Type 0)) (h Int) (i Nat)) (! Array A))
+  (lam (A h i) (perform get-boxed (A) (mk-pair h i))))
+
+(deftotal boxed-array-set (Pi ((A (Type 0)) (h Int) (i Nat) (v A)) (! Array Unit))
+  (lam (A h i v) (perform set-boxed (A) (mk-pair h (mk-pair i v)))))

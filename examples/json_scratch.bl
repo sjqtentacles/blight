@@ -1,0 +1,79 @@
+; json_scratch.bl — dogfooding `std/test.bl` against `std/json.bl` (roadmap Wave 2 / L1).
+;
+; A pure `TestSuite` exercising `json-encode` over every `BJson` shape (null/bool/num/str/array/
+; object, including nesting and string-escaping) and `nat-to-string`'s multi-digit rendering.
+; `main : Bool` is `suite-all-passed` — a Rust-side test (`crates/blight-repl/tests/examples.rs`)
+; normalizes it with the trusted kernel evaluator and asserts it reduces to `true`, giving
+; `std/json.bl` genuine *behavioral* coverage — not just "loads and type-checks", which
+; `every_std_module_loads_in_isolation` already covers.
+;
+; `main` is deliberately a bare `Bool`, not a `(! Console …)` program: the suite is pure.
+
+(load "std/json.bl")
+(load "std/test.bl")
+
+; ---- small Nat constants: 0, 1, 2, and 42 (4 * 10 + 2, to exercise multi-digit rendering) ----------
+(define n0 Nat Zero)
+(define n1 Nat (Succ n0))
+(define n2 Nat (Succ n1))
+(define n4 Nat (Succ (Succ (Succ (Succ n0)))))
+(define n10 Nat (Succ nine))  ; `nine` is `std/json.bl`'s own decimal-rendering helper constant
+(define n42 Nat (plus (mult n4 n10) n2))
+
+; ---- test cases -------------------------------------------------------------------------------
+(define t01 TestCase (deftest "encode-null" (assert-eq-string (json-encode j-null) "null")))
+(define t02 TestCase
+  (deftest "encode-bool-true" (assert-eq-string (json-encode (j-bool true)) "true")))
+(define t03 TestCase
+  (deftest "encode-bool-false" (assert-eq-string (json-encode (j-bool false)) "false")))
+(define t04 TestCase (deftest "encode-num-zero" (assert-eq-string (json-encode (j-num n0)) "0")))
+(define t05 TestCase (deftest "encode-num-42" (assert-eq-string (json-encode (j-num n42)) "42")))
+(define t06 TestCase (deftest "encode-str" (assert-eq-string (json-encode (j-str "hi")) "\"hi\"")))
+(define t07 TestCase
+  (deftest "encode-str-escape" (assert-eq-string (json-encode (j-str "a\"b")) "\"a\\\"b\"")))
+(define t08 TestCase (deftest "encode-arr-empty" (assert-eq-string (json-encode j-arr-nil) "[]")))
+(define t09 TestCase
+  (deftest "encode-arr"
+    (assert-eq-string (json-encode (j-arr-cons (j-num n1) (j-arr-cons (j-num n2) j-arr-nil)))
+      "[1,2]")))
+(define t10 TestCase (deftest "encode-obj-empty" (assert-eq-string (json-encode j-obj-nil) "{}")))
+(define t11 TestCase
+  (deftest "encode-obj"
+    (assert-eq-string (json-encode (j-obj-cons "a" (j-num n1) j-obj-nil)) "{\"a\":1}")))
+(define t12 TestCase
+  (deftest "encode-obj-two-keys"
+    (assert-eq-string
+      (json-encode (j-obj-cons "a" (j-num n1) (j-obj-cons "b" (j-num n2) j-obj-nil)))
+      "{\"a\":1,\"b\":2}")))
+(define t13 TestCase
+  (deftest "encode-nested-array-in-object"
+    (assert-eq-string
+      (json-encode
+        (j-obj-cons "xs" (j-arr-cons (j-num n1) (j-arr-cons (j-num n2) j-arr-nil)) j-obj-nil))
+      "{\"xs\":[1,2]}")))
+(define t14 TestCase (deftest "nat-to-string-zero" (assert-eq-string (nat-to-string n0) "0")))
+(define t15 TestCase
+  (deftest "nat-to-string-multi-digit" (assert-eq-string (nat-to-string n42) "42")))
+(define t16 TestCase
+  (deftest "j-arr-builds-arr-nil" (assert-eq-string (json-encode (j-arr nil)) "[]")))
+(define t17 TestCase
+  (deftest "j-arr-builds-from-list"
+    (assert-eq-string (json-encode (j-arr (cons (j-num n1) (cons (j-num n2) nil)))) "[1,2]")))
+
+(define all-cases (List TestCase)
+  (cons t01
+    (cons t02
+      (cons t03
+        (cons t04
+          (cons t05
+            (cons t06
+              (cons t07
+                (cons t08
+                  (cons t09
+                    (cons t10
+                      (cons t11
+                        (cons t12 (cons t13 (cons t14 (cons t15 (cons t16 (cons t17 nil))))))))))))))))))
+
+(define json-suite TestSuite (mk-suite "json" all-cases))
+
+(define main Bool (suite-all-passed json-suite))

@@ -1,0 +1,35 @@
+; std/time.bl — the `Clock` effect: wall-clock time as a machine `Int` (roadmap Wave 2 / L1).
+;
+; UNTRUSTED tower code. `Clock` is an ordinary user effect — the smallest possible one, mirroring
+; `std/io.bl`'s `Console` pattern: it is folded by the SAME native top-level deep handler the build
+; driver installs (`bl_run_console`, runtime/effects.c, extended with a `now` branch). It declares a
+; single total operation:
+;   * `now : Unit -> Int` — the current wall-clock time, as milliseconds since the Unix epoch.
+; Unlike `Bytes`/`Arrays`, `Clock` needs no runtime-side table at all: `now` just reads the OS clock
+; (`gettimeofday`) and returns it, so this adds ZERO new kernel surface and ZERO mutable runtime
+; state, exactly as gentle on the TCB as `Console` itself.
+;
+; IMPORTANT scope note: `Int` is a *primitive* kernel base type with NO eliminator (std/int.bl) — a
+; program cannot `match` on an `Int`, so a timestamp can only be combined with other `Int`s via the
+; arithmetic primitives (`int-add`/`int-sub`/…), never branched on, in pure Blight code today. This
+; makes `Clock` suitable for measuring elapsed time (`elapsed-ms` below) and for timestamping, but NOT
+; for e.g. `if timestamp mod 2 = 0` branching logic — that would need an `Int` eliminator, a
+; deliberate future TCB decision, not an oversight here.
+;
+; A program `main : (! Clock A)` performs `now` and is run by the same top-level handler the
+; `Console`/`Bytes`/`Arrays` examples use. Effects are MODELED at the type level by the independent
+; re-checker (not declined), so `--recheck` agrees with the seed kernel on such a program.
+
+(load "std/int.bl")
+
+; `Unit` is the parameter of `now`. Re-declaring an identical inductive is fine.
+(defdata Unit () (tt))
+
+(effect Clock (now Unit Int))
+
+; Convenience wrapper so user code reads naturally.
+(deftotal clock-now (Pi ((u Unit)) (! Clock Int)) (lam (u) (perform now tt)))
+
+; `elapsed-ms start end` — the number of milliseconds between two `clock-now` readings (`end` taken
+; after `start`). A thin, readable name for `int-sub`, specialized to this effect's unit.
+(deftotal elapsed-ms (Pi ((start Int) (end Int)) Int) (lam (start end) (int-sub end start)))

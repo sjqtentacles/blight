@@ -1,0 +1,78 @@
+; std/regex.bl — a minimal regex engine via Brzozowski derivatives (roadmap Wave 2 / L1).
+;
+; UNTRUSTED tower code, entirely pure and total. Classic backtracking regex matching recurses on
+; "the pattern, replayed against a shrinking suffix of the input" — a well-founded (not structural)
+; measure this kernel's `deftotal`/`Elim` machinery cannot certify directly (the same wall every
+; "recurse on a derived, non-immediate-sub-term value" attempt hits elsewhere in this stdlib; see
+; std/json.bl's header for the Nat-to-string analogue). Brzozowski derivatives sidestep it entirely:
+; `deriv r c` asks "what must the REST of the string match, given `r` just consumed the character
+; `c`?" — a function of `r`'s STRUCTURE alone, no string involved, so its own recursion is a plain
+; structural fold over the `Regex` AST. Matching a whole string is then a structural fold over the
+; STRING's spine (`rmatch`, consuming one character, i.e. one immediate `push` sub-term, per step),
+; asking at each character "derive the regex, then continue on the rest" and finishing by asking
+; whether the final regex is `nullable` (matches the empty string). This is a textbook-correct
+; algorithm (Brzozowski 1964) and happens to be an unusually good structural fit for this kernel.
+;
+; SCOPE (explicit): `regex-match r s` matches the WHOLE string `s` against `r` (like most languages'
+; "fullmatch", not "search"/"find") — there is no first-class substring-search API in this pass (a
+; `regex-search` trying every suffix via `string-drop` is a straightforward, separately-addable
+; extension, deliberately left out to keep this module's surface small and honestly scoped).
+;
+; Depends on std/string (which itself splices `std/order.bl` for `nat-eq`) and std/bool. NOTE:
+; deliberately does NOT also `(load "std/order.bl")` directly — `(load …)` never deduplicates (only
+; `(import …)` does; see `crates/blight-elab/src/program.rs`), and `std/string.bl` already loads it
+; internally for `string-eq`, so a second explicit load here would re-register `order.bl`'s
+; `(instance (Show Nat) …)` and fail as an overlapping-instance error.
+
+(load "std/string.bl")
+(load "std/bool.bl")
+
+; ---- the pattern language --------------------------------------------------------------------------
+(defdata Regex ()
+  (r-fail)  ; matches no string at all (the empty language)
+  (r-empty)  ; matches only the empty string
+  (r-lit (c Nat))  ; matches exactly the one-character string `c`
+  (r-dot)  ; matches any single character
+  (r-concat (a Regex) (b Regex))  ; matches `a` immediately followed by `b`
+  (r-alt (a Regex) (b Regex))  ; matches `a` or `b`
+  (r-star (a Regex)))  ; matches zero or more repetitions of `a`
+
+; `r-str s` — the regex matching exactly the literal string `s` (a right-nested `r-concat` chain of
+; single-character literals). Structural recursion on `s`.
+(deftotal r-str (Pi ((s String)) Regex)
+  (lam (s) (match s [(empty) r-empty] [(push c rest) (r-concat (r-lit c) (r-str rest))])))
+
+; `nullable r` — does `r` match the empty string? Structural recursion on `r`.
+(deftotal nullable (Pi ((r Regex)) Bool)
+  (lam (r)
+    (match r [(r-fail) false] [(r-empty) true] [(r-lit c) false] [(r-dot) false]
+      [(r-concat a b) (and (nullable a) (nullable b))]
+      [(r-alt a b) (or (nullable a) (nullable b))]
+      [(r-star a) true])))
+
+; `deriv r c` — the regex matching `w` such that `r` matches `(c :: w)` (the Brzozowski derivative of
+; `r` with respect to `c`). Structural recursion on `r`; `c` rides along unchanged.
+(deftotal deriv (Pi ((r Regex) (c Nat)) Regex)
+  (lam (r c)
+    (match r [(r-fail) r-fail]
+      [(r-empty) r-fail]  ; no character starts the empty string
+      [(r-lit d) (match (nat-eq c d) [(true) r-empty] [(false) r-fail])]
+      [(r-dot) r-empty]
+      [(r-concat a b)
+        (match (nullable a) [(true) (r-alt (r-concat (deriv a c) b) (deriv b c))]
+          [(false) (r-concat (deriv a c) b)])]
+      [(r-alt a b) (r-alt (deriv a c) (deriv b c))]
+      [(r-star a) (r-concat (deriv a c) (r-star a))])))
+
+; `rmatch s r` — does `r` match the WHOLE string `s`? Structural recursion on `s` (the FIRST/
+; leading parameter here — one `push`, i.e. one character, per step); `r` is a TRAILING parameter
+; threaded like an accumulator (transformed by `deriv` each step, exactly the shape `std/parser.bl`'s
+; `tok-go` uses for its trailing `acc`) — a structural `Elim` fixes *leading* parameters verbatim
+; across a recursive call but freely allows *trailing* ones to vary, which is why `r` must come
+; after `s` here rather than before it. `nullable` decides the base case.
+(deftotal rmatch (Pi ((s String) (r Regex)) Bool)
+  (lam (s)
+    (match s [(empty) (lam (r) (nullable r))] [(push c rest) (lam (r) (rmatch rest (deriv r c)))])))
+
+; The public API keeps the conventional `regex-match PATTERN STRING` argument order.
+(deftotal regex-match (Pi ((r Regex) (s String)) Bool) (lam (r s) (rmatch s r)))

@@ -1,0 +1,28 @@
+; flat_esc.bl — cross-function escaping nested product (A1′ post-mono SRA coverage).
+;
+; `mk` builds a nested pair `Pair (Pair Nat Nat) Nat` and *returns* it, so the inner pair escapes
+; `mk` across the call boundary — exactly the shape the single, pre-monomorphization `unbox`/`flatten`
+; passes cannot optimize (the producer and the drill-to-leaf consumer live in different functions).
+; After monomorphization folds `mk` into `main`, the use site becomes a `match`-of-`mk-pair` chain
+;   (pair-fst (pair-fst (mk-pair (mk-pair (0+1) (0+1+1)) (0+1+1+1))))
+; over pure (non-trapping) arithmetic that the *post-mono* layout pass
+; (crates/blight-codegen/src/layout.rs) deletes outright (Case-of-Con product β) — both `mk-pair`
+; allocations vanish. The result is unchanged ((1 + 2) + 3 = 6), so it is a differential check that
+; this post-mono scalar-replacement stays bit-identical under every fast-path flag (`BL_NO_UNBOX` /
+; `BL_NO_FLATTEN` included), and it re-checks through the independent re-checker (`--recheck`).
+;
+;   cargo run -p blight-repl --features llvm -- build examples/flat_esc.bl -o flat_esc
+;   ./flat_esc      # prints 6
+
+(load "std/nat.bl")
+(load "std/pair.bl")
+
+; n |-> ((n, n+1), n+2) : Pair (Pair Nat Nat) Nat — the nested pair escapes this function.
+(deftotal mk (Pi ((n Nat)) (Pair (Pair Nat Nat) Nat))
+  (lam (n) (mk-pair (mk-pair n (Succ n)) (Succ (Succ n)))))
+
+; Consume the escaping pair with inline `match`es (not the `pair-fst`/`pair-snd` helper functions,
+; which would stay un-inlined and hide the redex): after mono folds `mk` to a literal `mk-pair`, these
+; become `match`-of-`mk-pair` that post-mono SRA β-reduces away, deleting both allocations.
+(define main Nat
+  (match (mk (Succ Zero)) [(mk-pair inner z) (match inner [(mk-pair a b) (plus (plus a b) z)])]))

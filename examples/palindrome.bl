@@ -7,10 +7,6 @@
 
 (load "std/string.bl")
 
-(define is-palindrome (Pi ((s String)) Bool)
-  (lam (s) (string-eq s (string-reverse s))))
+(define is-palindrome (Pi ((s String)) Bool) (lam (s) (string-eq s (string-reverse s))))
 
-(define main Nat
-  (match (is-palindrome "level")
-    [(false) Zero]
-    [(true) (Succ Zero)]))
+(define main Nat (match (is-palindrome "level") [(false) Zero] [(true) (Succ Zero)]))

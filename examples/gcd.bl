@@ -13,24 +13,19 @@
 
 ; One subtractive step on two positive numbers, choosing which to reduce by the comparison.
 (deftotal gcd-reduce (Pi ((rec (Pi ((a Nat) (b Nat)) Nat)) (a Nat) (b Nat)) Nat)
-  (lam (rec a b) (match (nat-le a b)
-    [(true)  (rec a (sub b a))]
-    [(false) (rec (sub a b) b)])))
+  (lam (rec a b) (match (nat-le a b) [(true) (rec a (sub b a))] [(false) (rec (sub a b) b)])))
 
 ; Dispatch on `b`: if zero, `a` is the gcd; else take a subtractive step via `cont`.
 (deftotal gcd-on-b (Pi ((cont (Pi ((a Nat) (b Nat)) Nat)) (a Nat) (b Nat)) Nat)
-  (lam (cont a b) (match b
-    [(Zero) a]
-    [(Succ b1) (gcd-reduce cont a b)])))
+  (lam (cont a b) (match b [(Zero) a] [(Succ b1) (gcd-reduce cont a b)])))
 
 ; `gcd-step fuel a b`: structural recursion on `fuel`; one `match` here, the rest in helpers.
 (deftotal gcd-step (Pi ((fuel Nat) (a Nat) (b Nat)) Nat)
-  (lam (fuel a b) (match fuel
-    [(Zero) a]
-    [(Succ f) (gcd-on-b (lam (a2 b2) (gcd-step f a2 b2)) a b)])))
+  (lam (fuel a b) (match fuel [(Zero) a] [(Succ f) (gcd-on-b (lam (a2 b2) (gcd-step f a2 b2)) a b)])))
 
-(define twelve Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))))
-(define eight  Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))
+(define twelve Nat
+  (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))))
+(define eight Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))
 (define twenty Nat (plus twelve eight))
 
 (define main Nat (gcd-step twenty twelve eight))

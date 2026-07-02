@@ -3,37 +3,25 @@
 ; UNTRUSTED tower code: a single-parameter inductive with two constructors, plus the standard
 ; non-recursive combinators the kernel re-checks through the spore. Loadable in isolation.
 
-(defdata Maybe ((a (Type 0)))
-  (nothing)
-  (just (x a)))
+(defdata Maybe ((a (Type 0))) (nothing) (just (x a)))
 
 ; The eliminator: `maybe d f m` is `d` when `m` is `nothing`, else `f x` for `(just x)`.
 (deftotal maybe (Pi ((A (Type 0)) (B (Type 0)) (d B) (f (Pi ((x A)) B)) (m (Maybe A))) B)
-  (lam (A B d f m) (match m
-    [(nothing) d]
-    [(just x) (f x)])))
+  (lam (A B d f m) (match m [(nothing) d] [(just x) (f x)])))
 
 ; `map` over the optional: applies `f` under `just`, leaves `nothing` alone.
 (deftotal maybe-map (Pi ((A (Type 0)) (B (Type 0)) (f (Pi ((x A)) B)) (m (Maybe A))) (Maybe B))
-  (lam (A B f m) (match m
-    [(nothing) nothing]
-    [(just x) (just (f x))])))
+  (lam (A B f m) (match m [(nothing) nothing] [(just x) (just (f x))])))
 
 ; The default-or-value projection.
 (deftotal from-maybe (Pi ((A (Type 0)) (d A) (m (Maybe A))) A)
-  (lam (A d m) (match m
-    [(nothing) d]
-    [(just x) x])))
+  (lam (A d m) (match m [(nothing) d] [(just x) x])))
 
 ; Monadic bind: `nothing` short-circuits, `just x` continues with `f x`.
 (deftotal maybe-bind
   (Pi ((A (Type 0)) (B (Type 0)) (m (Maybe A)) (f (Pi ((x A)) (Maybe B)))) (Maybe B))
-  (lam (A B m f) (match m
-    [(nothing) nothing]
-    [(just x) (f x)])))
+  (lam (A B m f) (match m [(nothing) nothing] [(just x) (f x)])))
 
 ; First-success choice: return `m` if it is `just`, else the fallback `n`.
 (deftotal maybe-or (Pi ((A (Type 0)) (m (Maybe A)) (n (Maybe A))) (Maybe A))
-  (lam (A m n) (match m
-    [(nothing) n]
-    [(just x) (just x)])))
+  (lam (A m n) (match m [(nothing) n] [(just x) (just x)])))

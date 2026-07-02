@@ -34,11 +34,9 @@
 ; guards it under `later`, and the result is `Delay Nat`. The return type is therefore ascribed
 ; `Delay Nat`; base cases use `now` to inject a value into the delay monad.
 (define-rec parity (Pi ((n Nat)) (Delay Nat))
-  (lam (n) (match n
-    [(Zero) (now Zero)]
-    [(Succ m) (match m
-       [(Zero) (now (Succ Zero))]
-       [(Succ k) (parity k)])])))
+  (lam (n)
+    (match n [(Zero) (now Zero)]
+      [(Succ m) (match m [(Zero) (now (Succ Zero))] [(Succ k) (parity k)])])))
 
 (define seven Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero))))))))
 

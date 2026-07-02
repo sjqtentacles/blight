@@ -12,28 +12,24 @@
 
 ; Insert `x` into an already-sorted list, keeping it sorted (structural recursion on the spine).
 (deftotal insert (Pi ((x Nat) (xs (List Nat))) (List Nat))
-  (lam (x xs) (match xs
-    [(nil) (cons x nil)]
-    [(cons y rest)
-      (list-nat-if
-        (cons x (cons y rest))          ; x <= y: x goes in front
-        (cons y (insert x rest))        ; x > y: keep y, recurse
-        (nat-le x y))])))
+  (lam (x xs)
+    (match xs [(nil) (cons x nil)]
+      [(cons y rest)
+        (list-nat-if
+          (cons x (cons y rest))  ; x <= y: x goes in front
+          (cons y (insert x rest))  ; x > y: keep y, recurse
+          (nat-le x y))])))
 
 ; Insertion sort: fold `insert` over the list.
 (deftotal isort (Pi ((xs (List Nat))) (List Nat))
-  (lam (xs) (match xs
-    [(nil) nil]
-    [(cons x rest) (insert x (isort rest))])))
+  (lam (xs) (match xs [(nil) nil] [(cons x rest) (insert x (isort rest))])))
 
 ; `head-or 0` of a list.
 (deftotal head-or (Pi ((d Nat) (xs (List Nat))) Nat)
-  (lam (d xs) (match xs
-    [(nil) d]
-    [(cons x rest) x])))
+  (lam (d xs) (match xs [(nil) d] [(cons x rest) x])))
 
-(define one   Nat (Succ Zero))
-(define two   Nat (Succ (Succ Zero)))
+(define one Nat (Succ Zero))
+(define two Nat (Succ (Succ Zero)))
 (define three Nat (Succ (Succ (Succ Zero))))
 
 (define input (List Nat) (cons three (cons one (cons two nil))))

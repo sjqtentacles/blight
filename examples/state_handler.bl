@@ -6,9 +6,9 @@
 ; the native backend compiles end-to-end: `handle` lowers each clause to a closure and installs them
 ; via the runtime's `bl_handle_clo` deep-handler trampoline (mirrors the kernel's `do_handle`).
 ;
-; Effects sit OUTSIDE the independent re-checker's fragment, so `--recheck` *declines* (not rejects)
-; this program — that is expected and sound. The seed kernel fully type-checks it, and it compiles
-; and runs natively, printing the handled result.
+; Effects are now MODELED at the type level by the independent re-checker (not declined): `--recheck`
+; re-derives this handled program and AGREES with the seed kernel. The seed kernel fully type-checks
+; it, and it compiles and runs natively, printing the handled result.
 ;
 ; Boundary note: handlers whose `perform` is NOT in tail position (e.g. `(plus (perform get tt) …)`,
 ; where the continuation must be captured across an ordinary application) are *also* compiled now —
@@ -23,7 +23,4 @@
 
 ; Read the state with `get`; the handler interprets `get` by resuming the continuation with the
 ; literal `3` (`Succ^3 Zero`). The `return x` clause yields the resumed value, so `main` prints `3`.
-(define main Nat
-  (handle (perform get tt)
-    (return x x)
-    (get x k (k (Succ (Succ (Succ Zero)))))))
+(define main Nat (handle (perform get tt) (return x x) (get x k (k (Succ (Succ (Succ Zero)))))))

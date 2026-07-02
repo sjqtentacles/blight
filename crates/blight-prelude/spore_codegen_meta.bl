@@ -1,0 +1,171 @@
+; spore_codegen_meta.bl — semantics-preservation lemmas for the untrusted backend (Grand Arc B4).
+;
+; UNTRUSTED. Each backend "fast path" (recognize.rs, unbox.rs, anf.rs) is a *representation* rewrite
+; that must be observationally identical to the slow, inductive semantics — the property the B1
+; differential corpus enforces by building every example with the path on and off. This file states,
+; *in Blight*, the equational laws those rewrites embody and proves them by tactic scripts whose terms
+; are re-checked through the kernel door (LCF: a buggy tactic can only fail, never mint a false proof).
+; A passing proof is a machine-checked certificate that the rewrite preserves meaning.
+;
+; Scope of the proof language. The tactic vocabulary is `refl` + single-step congruence induction
+; (`induction`/`cong`/`exact`), plus (Track M2a/M2b) a `Path` transitivity combinator (`trans`,
+; `spore_meta.bl`) that unlocks genuine multi-rewrite chains — e.g. §4 below's CPS/ANF
+; evaluator-preservation theorem, which needs two IH rewrites composed with `plus`-associativity and
+; was previously out of reach (see docs/metatheory.md §3, now updated to reflect the proved theorem).
+; The laws below are exactly the ones the passes *actually* rely on, each provable in this fragment.
+;
+; Requires `std/nat.bl` (Nat, plus, mult) and `std/pair.bl` (Pair, mk-pair, projections).
+
+(load "std/nat.bl")
+(load "std/pair.bl")
+
+; =====================================================================================
+; Pass 1 — the Nat-arithmetic recognizer (recognize.rs / numeric.c).
+; The recognizer represents a `Nat` by a machine-word *count* and implements `plus`/`mult` as O(1)
+; word ops (`bl_nat_add`/`bl_nat_mul`). That is sound exactly because the inductive `plus`/`mult`
+; satisfy the count-arithmetic laws. The *left* recurrences hold definitionally —
+;   plus Zero b ≡ b,   plus (Succ a) b ≡ Succ (plus a b),   mult Zero b ≡ Zero
+; — (both functions recurse on their first argument), so the only genuine obligations are the laws on
+; the *second* argument, which require induction. These two are the in-Blight certificate that the
+; word-count implementation agrees with the Peano spec the differential fuzzer checks it against.
+; =====================================================================================
+
+; `plus a Zero ≡ a` — the additive right-unit (`bl_nat_add a 0 = a`). Induction on `a`: the `Zero`
+; case is `plus Zero Zero ≡ Zero` (definitional), the `Succ` case is `cong Succ` over the IH.
+(define-by rec-add-unit-r (Pi ((a Nat)) (Path Nat (plus a Zero) a))
+  (intro a (induction a [(Zero) refl] [(Succ k) (cong Succ (exact k#ih))])))
+
+; `mult a Zero ≡ Zero` — the multiplicative right-zero (`bl_nat_mul a 0 = 0`). Induction on `a`: the
+; `Succ` case reduces `mult (Succ k) Zero ≡ plus Zero (mult k Zero) ≡ mult k Zero` definitionally, so
+; the goal is exactly the IH `mult k Zero ≡ Zero`.
+(define-by rec-mul-zero-r (Pi ((a Nat)) (Path Nat (mult a Zero) Zero))
+  (intro a (induction a [(Zero) refl] [(Succ k) (exact k#ih)])))
+
+; =====================================================================================
+; Pass 2 — scalar-replacement-of-aggregates (unbox.rs, M27 SRA).
+; SRA deletes a product that is built and immediately projected in place, feeding the field values
+; straight to the consumer. That rewrite *is* product β: `fst (mk-pair a b) ⇝ a`,
+; `snd (mk-pair a b) ⇝ b`. Both hold **definitionally** in the kernel (the projection's `match`
+; reduces on the literal constructor), which is precisely why deleting the allocation is bit-identical
+; — there is nothing to prove beyond exhibiting the definitional equality, closed by `refl`.
+; =====================================================================================
+
+; First-projection β: the law unbox applies to a `let p = (a, b) in fst p` redex. The product type
+; parameters of `mk-pair` are inferred from `a`/`b`.
+(define-by sra-beta-fst
+  (Pi ((A (Type 0)) (B (Type 0)) (a A) (b B)) (Path A (pair-fst A B (mk-pair a b)) a))
+  (intro A (intro B (intro a (intro b refl)))))
+
+; Second-projection β: the symmetric law for `snd`.
+(define-by sra-beta-snd
+  (Pi ((A (Type 0)) (B (Type 0)) (a A) (b B)) (Path B (pair-snd A B (mk-pair a b)) b))
+  (intro A (intro B (intro a (intro b refl)))))
+
+; =====================================================================================
+; Pass 3 — A-normal-form normalization (anf.rs).
+; ANF rewrites every nested subexpression into a `let`-bound atom. In a call-by-value setting each
+; such step is a *let-introduction* / commuting conversion whose denotation is the substituted form —
+; a definitional equality. We model the ANF let as `anf-let e k = k e` and certify the substitution
+; law it relies on (refl), then exhibit a genuinely *inductive* ANF property — that the let-normalized
+; reconstruction of a value is the identity — within the single-congruence fragment.
+; =====================================================================================
+
+; The ANF `let`: bind `e`, run the continuation `k` on the bound atom. Its meaning is substitution.
+(deftotal anf-let (Pi ((A (Type 0)) (B (Type 0)) (e A) (k (Pi ((x A)) B))) B) (lam (A B e k) (k e)))
+
+; Let-introduction preserves meaning: `(let x = e in k x) ≡ k e`. This is the substitution law every
+; ANF binding step is an instance of; it holds definitionally (`anf-let A B e k ≡ k e`).
+(define-by anf-let-subst
+  (Pi ((A (Type 0)) (B (Type 0)) (e A) (k (Pi ((x A)) B))) (Path B (anf-let A B e k) (k e)))
+  (intro A (intro B (intro e (intro k refl)))))
+
+; The let-normalized reconstruction of a `Nat`: each `Succ` layer becomes `let r = rebuild k in Succ
+; r` — the canonical ANF shape for a recursive constructor application (name the recursive result,
+; then build). It denotes the identity.
+(deftotal anf-rebuild (Pi ((n Nat)) Nat)
+  (lam (n) (match n [(Zero) Zero] [(Succ k) (Succ (anf-rebuild k))])))
+
+; ANF preserves the value of the reconstruction: `anf-rebuild n ≡ n`. A genuine induction (the `Succ`
+; case is `cong Succ` over the IH), certifying that wrapping each recursive sub-result in an ANF `let`
+; binding leaves the computed value unchanged.
+(define-by anf-rebuild-id (Pi ((n Nat)) (Path Nat (anf-rebuild n) n))
+  (intro n (induction n [(Zero) refl] [(Succ k) (cong Succ (exact k#ih))])))
+
+; =====================================================================================
+; §4 — the CPS/ANF evaluator-preservation theorem (Track M2b).
+; `anf.rs`'s real backend transform is a CPS-style ANF conversion of an arithmetic-expression
+; evaluator: a direct-style `aeval` gets rewritten into an accumulator/continuation-passing form
+; `aeval-k` (each recursive call now threads a running `Nat` accumulator instead of composing `plus`
+; on the way back up — precisely the shape ANF's "flatten the recursion, name every intermediate"
+; transform produces). The obligation the differential fuzzer checks *empirically* on concrete
+; programs, and this section certifies *for every* `Expr`, is that the accumulator form computes the
+; same value: `aeval-k e acc ≡ plus acc (aeval e)`. This is exactly the theorem
+; docs/metatheory.md §3 previously named as "out of reach of the current tactic fragment" — its
+; `Add` case rewrites with each subterm's IH and then needs `plus`-associativity to line the two
+; rewrites up, i.e. genuine multi-step transitivity, which only the Track M2a `trans` combinator
+; (`crates/blight-elab/src/tactic.rs`) supplies. It is now proved, discharging that open obligation.
+; =====================================================================================
+
+; A minimal arithmetic-expression AST: literals and binary addition (enough to force a genuine
+; two-subterm recursive case — the shape that needs `trans`, unlike every single-recursion lemma
+; above).
+(defdata Expr () (Lit (n Nat)) (Add (l Expr) (r Expr)))
+
+; The direct-style evaluator.
+(deftotal aeval (Pi ((e Expr)) Nat)
+  (lam (e) (match e [(Lit n) n] [(Add l r) (plus (aeval l) (aeval r))])))
+
+; The accumulator/CPS-style evaluator ANF conversion produces: thread `acc` through each recursive
+; call instead of composing `plus` on the way back up (`aeval-k (Add l r) acc = aeval-k r (aeval-k l
+; acc)` — evaluate `l` into the accumulator, then `r`, with no pending `plus` at the `Add` node
+; itself).
+(deftotal aeval-k (Pi ((e Expr) (acc Nat)) Nat)
+  (lam (e acc) (match e [(Lit n) (plus acc n)] [(Add l r) (aeval-k r (aeval-k l acc))])))
+
+; A local, `std/nat.bl`-scoped restatement of `spore_meta.bl`'s `plus-assoc` (that file's version is
+; proved against `spore.bl`'s own model `Nat`, a structurally identical but distinct type from this
+; file's `std/nat.bl` one — see the `tactic.rs::substitute_term` doc comment there for the proof
+; shape/history; the case analysis here is identical).
+(define-by codegen-plus-assoc
+  (Pi ((a Nat) (b Nat) (c Nat)) (Path Nat (plus (plus a b) c) (plus a (plus b c))))
+  (intro a
+    (induction a [(Zero) (intro b (intro c refl))]
+      [(Succ n)
+        (intro b (intro c (cong (the (Pi ((r Nat)) Nat) (lam (r) (Succ r))) (exact (n#ih b c)))))])))
+
+; The evaluator-preservation theorem: `aeval-k e acc ≡ plus acc (aeval e)`, for *every* `Expr` and
+; accumulator `acc`. Induction on `e`:
+;   - `Lit n`: `aeval-k (Lit n) acc = plus acc n = plus acc (aeval (Lit n))` — definitional, `refl`.
+;   - `Add l r`: the goal is `Path Nat (aeval-k r (aeval-k l acc)) (plus acc (plus (aeval l) (aeval
+;     r)))`. Chain three steps with `trans` (each operand `ascribe`d with its own `Path` type so the
+;     kernel can *infer* through the nested nested-`PApp`/`hcomp` terms `trans` builds — a bare
+;     tactic result is a `PLam` with no annotation, and `PApp`'s elaboration needs to infer its
+;     function's type, exactly parallel to why a bare `lam` needs a `Pi` target):
+;       1. `l#ih acc : Path Nat (aeval-k l acc) (plus acc (aeval l))`, so `cong (aeval-k r ·)` over it
+;          (built directly as `plam i. aeval-k r ((l#ih acc) @ i)`, no `cong` combinator needed since
+;          the congruence head is just another `aeval-k r` application) gives step 1: `aeval-k r
+;          (aeval-k l acc) ≡ aeval-k r (plus acc (aeval l))`.
+;       2. `r#ih (plus acc (aeval l)) : Path Nat (aeval-k r (plus acc (aeval l))) (plus (plus acc
+;          (aeval l)) (aeval r))` is step 2 verbatim — the *second* IH rewrite that `docs/metatheory.md`
+;          §3 named as needing to compose with the first.
+;       3. `codegen-plus-assoc acc (aeval l) (aeval r) : Path Nat (plus (plus acc (aeval l)) (aeval
+;          r)) (plus acc (plus (aeval l) (aeval r)))` is the associativity rewrite that lines the
+;          composed IHs' target up with the goal's actual right-hand side — exactly the "needs
+;          associativity of `plus`" gap the old doc comment identified.
+;     `trans (trans step1 step2) step3` composes all three into the goal.
+(define-by aeval-k-correct (Pi ((e Expr) (acc Nat)) (Path Nat (aeval-k e acc) (plus acc (aeval e))))
+  (intro e
+    (induction e [(Lit n) (intro acc refl)]
+      [(Add l r)
+        (intro acc
+          (trans
+            (ascribe (Path Nat (aeval-k r (aeval-k l acc)) (plus (plus acc (aeval l)) (aeval r)))
+              (trans
+                (ascribe (Path Nat (aeval-k r (aeval-k l acc)) (aeval-k r (plus acc (aeval l))))
+                  (plam (i) (aeval-k r ((l#ih acc) @ i))))
+                (ascribe
+                  (Path Nat (aeval-k r (plus acc (aeval l))) (plus (plus acc (aeval l)) (aeval r)))
+                  (exact (r#ih (plus acc (aeval l)))))))
+            (ascribe
+              (Path Nat (plus (plus acc (aeval l)) (aeval r)) (plus acc (plus (aeval l) (aeval r))))
+              (exact (codegen-plus-assoc acc (aeval l) (aeval r))))))])))

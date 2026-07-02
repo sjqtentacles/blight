@@ -4,20 +4,18 @@
 ; A *signature* is a record type (a Sigma), a *module* is a value of it, and a *functor* is an
 ; ordinary function between module records. The order travels as a value through the functor
 ; argument (the kernel's single-inductive-parameter caveat). Depends on std/order.
+;
+; `(import …)`, not `(load …)`: `order.bl` declares the `(instance (Show Nat) …)` — the only
+; `instance` in the prelude — so `import` (idempotent; see `crates/blight-elab/src/program.rs`)
+; keeps `tree.bl` safe to combine with any other module that also needs `order.bl`.
+(import "std/order.bl")
 
-(load "std/order.bl")
-
-(defdata Tree ((a (Type 0)))
-  (leaf)
-  (node (l (Tree a)) (x a) (r (Tree a))))
+(defdata Tree ((a (Type 0))) (leaf) (node (l (Tree a)) (x a) (r (Tree a))))
 
 ; The functor's *result* signature: the tree type with `empty` and `insert`.
 ;   TreeSig E := Sigma (t : Type0). Sigma (empty : t). ((fst E) -> t -> t)
 (define TreeSig (Pi ((E ORD)) (Type 1))
-  (lam (E)
-    (Sigma ((t (Type 0)))
-      (Sigma ((empty t))
-        (Pi ((x (fst E)) (tr t)) t)))))
+  (lam (E) (Sigma ((t (Type 0))) (Sigma ((empty t)) (Pi ((x (fst E)) (tr t)) t)))))
 
 ; A non-recursive Bool selector so `tree-insert`'s recursive calls sit directly in the outer
 ; match's method body. The matched `b` is the last parameter (no trailing-binder generalization).
@@ -26,24 +24,16 @@
 
 ; Ordered-insert for a concrete carrier `A` given a comparison `cmp`. The tree is the last argument
 ; (its type depends on `A`); structural recursion is detected on the `l`/`r` sub-trees.
-(deftotal tree-insert
-  (Pi ((A (Type 0)) (cmp (Pi ((x A) (y A)) Bool)) (x A) (tr (Tree A))) (Tree A))
+(deftotal tree-insert (Pi ((A (Type 0)) (cmp (Pi ((x A) (y A)) Bool)) (x A) (tr (Tree A))) (Tree A))
   (lam (A cmp x tr)
-    (match tr
-      [(leaf) (node (leaf) x (leaf))]
+    (match tr [(leaf) (node (leaf) x (leaf))]
       [(node l y r)
-        (tree-if A
-          (node (tree-insert A cmp x l) y r)
-          (node l y (tree-insert A cmp x r))
-          (cmp x y))])))
+        (tree-if A (node (tree-insert A cmp x l) y r) (node l y (tree-insert A cmp x r)) (cmp x y))])))
 
 ; functor RedBlackTree : (E : ORD) -> TreeSig E. Uses the module's carrier `(fst E)` and
 ; comparison `(snd E)`.
 (define RedBlackTree (Pi ((E ORD)) (TreeSig E))
-  (lam (E)
-    (pair (Tree (fst E))
-      (pair (leaf)
-        (lam (x tr) (tree-insert (fst E) (snd E) x tr))))))
+  (lam (E) (pair (Tree (fst E)) (pair (leaf) (lam (x tr) (tree-insert (fst E) (snd E) x tr))))))
 
 ; Apply the functor to the Nat module — the §9 acceptance: a functorized tree typechecks.
 (define NatTree (TreeSig Nat-Ord) (RedBlackTree Nat-Ord))

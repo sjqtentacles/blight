@@ -11,9 +11,5 @@
 ;
 ; Requires `Nat` and `plus` in scope (load tactics.bl first).
 
-(define-by plus-zero
-  (Pi ((n Nat)) (Path Nat (plus n Zero) n))
-  (intro n
-    (induction n
-      [(Zero)   refl]
-      [(Succ k) (cong Succ (exact k#ih))])))
+(define-by plus-zero (Pi ((n Nat)) (Path Nat (plus n Zero) n))
+  (intro n (induction n [(Zero) refl] [(Succ k) (cong Succ (exact k#ih))])))

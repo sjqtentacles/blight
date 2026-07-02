@@ -1,0 +1,28 @@
+; file_roundtrip.bl — the smallest `FileIO`-effect program (C1, std/io.bl).
+;
+; `main : (! FileIO String)` writes a string to a temp file, reads the whole file back, and *returns*
+; its contents. It exercises the C1 `FileIO` effect (`write-file`/`read-file`) folded by the same
+; native top-level handler the `Console` effect uses (`bl_run_console`, runtime/effects.c) — the build
+; driver installs it for any `main` whose effect row carries `Console` or `FileIO`, then prints the
+; pure `String` result with the same `bl_print_string` path a pure `main : String` uses.
+;
+; The continuation of each `perform` (`λ_. read-file …`) is captured by the OpNode-aware backend and
+; resumed by the handler with the I/O result: `write-file` resumes with `tt`; `read-file` resumes with
+; the file's contents as a `String`, which becomes `main`'s result.
+;
+; (The surface `(! E A)` row carries a *single* effect name, so this program uses only `FileIO` and
+; returns its result rather than also `print`ing it over `Console`.)
+;
+; Effects are now MODELED at the type level by the independent re-checker (not declined), so
+; `--recheck` AGREES with the seed kernel on this program; it compiles and runs natively.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/file_roundtrip.bl -o file_roundtrip
+;   ./file_roundtrip            # => hello from blight FileIO
+
+(load "std/io.bl")
+
+(define path String "/tmp/blight_file_roundtrip.txt")
+(define payload String "hello from blight FileIO\n")
+
+(define main (! FileIO String)
+  (let ((_ (perform write-file (mk-pair path payload)))) (perform read-file path)))

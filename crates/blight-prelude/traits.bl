@@ -1,5 +1,8 @@
 ; traits.bl — compatibility shim (spec §6.4). The `Show`/`Ord` traits + dictionary-passing that used
 ; to live here now reside in `std/order.bl` (with `show`, `cmp`, and the `Nat`/`Bool` instances).
 ; This shim preserves the historical `(load "traits.bl")` entry point.
-
-(load "std/order.bl")
+;
+; `(import …)`, not `(load …)`: `order.bl` declares the `(instance (Show Nat) …)` — the only
+; `instance` in the prelude — so `import` (idempotent; see `crates/blight-elab/src/program.rs`)
+; keeps `(load "traits.bl")` safe to combine with any other module that also needs `order.bl`.
+(import "std/order.bl")

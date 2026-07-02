@@ -18,47 +18,37 @@
 ; ---- object-language types: a minimal closed simply-typed slice -------------------------------
 ; `BTy` is the universe of object types: a single base type plus a function type. Closed (no
 ; indices), the natural "types" layer beneath the intrinsic terms.
-(defdata BTy ()
-  (Base)
-  (Arr (dom BTy) (cod BTy)))
+(defdata BTy () (Base) (Arr (dom BTy) (cod BTy)))
 
 (deftotal bty-size (Pi ((a BTy)) Nat)
-  (lam (a) (match a
-    [(Base)        (Succ Zero)]
-    [(Arr dom cod) (Succ (plus (bty-size dom) (bty-size cod)))])))
+  (lam (a)
+    (match a [(Base) (Succ Zero)] [(Arr dom cod) (Succ (plus (bty-size dom) (bty-size cod)))])))
 
 ; ---- typing contexts as snoc-lists of object types -------------------------------------------
-(defdata BTyCtx ()
-  (CNil)
-  (CSnoc (rest BTyCtx) (ty BTy)))
+(defdata BTyCtx () (CNil) (CSnoc (rest BTyCtx) (ty BTy)))
 
 (deftotal btyctx-len (Pi ((g BTyCtx)) Nat)
-  (lam (g) (match g
-    [(CNil)          Zero]
-    [(CSnoc rest ty) (Succ (btyctx-len rest))])))
+  (lam (g) (match g [(CNil) Zero] [(CSnoc rest ty) (Succ (btyctx-len rest))])))
 
 ; ---- intrinsic de Bruijn membership: BVarIn g a is inhabited iff `a` is in `g` -----------------
 ; A two-INDEX inductive family (indices `g : BTyCtx` and `a : BTy`). `VZ` witnesses that the
 ; freshly-bound type is in scope; `VS` weakens a membership proof under one more binder. By
 ; construction every inhabitant is a valid, in-scope, correctly-typed variable. The index variables
 ; `g`/`a`/`b` are ordinary constructor fields whose values pin the result indices via `(=> ...)`.
-(defdata BVarIn () ((g BTyCtx) (a BTy))
-  (VZ (g BTyCtx) (a BTy)                              (=> (CSnoc g a) a))
-  (VS (g BTyCtx) (a BTy) (b BTy) (x (BVarIn g a))     (=> (CSnoc g b) a)))
+(defdata BVarIn () ((g BTyCtx) (a BTy)) (VZ (g BTyCtx) (a BTy) (=> (CSnoc g a) a))
+  (VS (g BTyCtx) (a BTy) (b BTy) (x (BVarIn g a)) (=> (CSnoc g b) a)))
 
 ; ---- intrinsically-typed terms: BTm g a is the type of well-typed terms of type `a` in ctx `g` --
 ; The headline two-INDEX family (indices `g : BTyCtx` and `a : BTy`). `TVar` embeds a membership
 ; proof; `TLam` introduces an arrow by extending the context; `TApp` eliminates one. No ill-typed
 ; term can be formed, and no term can escape its context — the indices enforce both.
-(defdata BTm () ((g BTyCtx) (a BTy))
-  (TVar (g BTyCtx) (a BTy)         (x (BVarIn g a))                       (=> g a))
-  (TLam (g BTyCtx) (a BTy) (b BTy) (body (BTm (CSnoc g a) b))             (=> g (Arr a b)))
-  (TApp (g BTyCtx) (a BTy) (b BTy) (f (BTm g (Arr a b))) (x (BTm g a))    (=> g b)))
+(defdata BTm () ((g BTyCtx) (a BTy)) (TVar (g BTyCtx) (a BTy) (x (BVarIn g a)) (=> g a))
+  (TLam (g BTyCtx) (a BTy) (b BTy) (body (BTm (CSnoc g a) b)) (=> g (Arr a b)))
+  (TApp (g BTyCtx) (a BTy) (b BTy) (f (BTm g (Arr a b))) (x (BTm g a)) (=> g b)))
 
 ; A structural size measure over the intrinsic terms — proves the family is genuinely recursive and
 ; usable as a termination metric, exactly as `bsize` does for the extrinsic `BTerm`.
 (deftotal btm-size (Pi ((g BTyCtx) (a BTy) (t (BTm g a))) Nat)
-  (lam (g a t) (match t
-    [(TVar g a x)       (Succ Zero)]
-    [(TLam g a b body)  (Succ (btm-size (CSnoc g a) b body))]
-    [(TApp g a b f x)   (Succ (plus (btm-size g (Arr a b) f) (btm-size g a x)))])))
+  (lam (g a t)
+    (match t [(TVar g a x) (Succ Zero)] [(TLam g a b body) (Succ (btm-size (CSnoc g a) b body))]
+      [(TApp g a b f x) (Succ (plus (btm-size g (Arr a b) f) (btm-size g a x)))])))

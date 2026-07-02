@@ -1,0 +1,49 @@
+; std/bytes.bl — the `Bytes` effect: a mutable, runtime-backed byte buffer (C2, spec §4, §8 stdlib).
+;
+; UNTRUSTED tower code. `Bytes` is an ordinary user effect (like `Console` in std/io.bl), folded by
+; the SAME native top-level deep handler the build driver installs (`bl_run_console`, runtime/
+; effects.c, extended with `new-bytes`/`bytes-len`/`get-byte`/`set-byte` branches). The mutable
+; storage lives entirely in C, outside the GC graph: each buffer is reached through an opaque `Int`
+; HANDLE (a trusted, re-checkable kernel base type) indexing a runtime-side table. Pure code only ever
+; passes the `Int` handle around — so the byte arrays add ZERO new kernel surface, ZERO traced object
+; kinds, and ZERO TCB, exactly like `FileIO` keeps a file in the OS rather than the heap.
+;
+; This is the mutable substrate a self-hosted lexer/parser (C3) walks: `read-file` (C1) gives the
+; file's text, the lexer copies it into a `Bytes` buffer once, then scans it with O(1) `get-byte`
+; index reads instead of rebuilding a unary-`Nat` cons-list per character.
+;
+; Operations (all total; out-of-range handles/indices are saturating no-ops, never a crash):
+;   * `new-bytes : Nat -> Int`   — allocate a zero-filled buffer of the given length; returns its
+;                                  handle (`Int -1` only on allocation failure — an always-invalid
+;                                  handle, so subsequent ops degrade to no-ops rather than trapping).
+;   * `bytes-len : Int -> Nat`   — the length of the buffer named by the handle (0 if invalid).
+;   * `get-byte  : (Pair Int Nat) -> Nat`            — read byte `i` of buffer `h` (0 if out of range).
+;   * `set-byte  : (Pair Int (Pair Nat Nat)) -> Unit`— write `(h, (i, v))`: store the low 8 bits of
+;                                  `v` at index `i` of buffer `h` (no-op if out of range).
+;
+; A program `main : (! Bytes A)` performs these and is run by the same top-level handler. Multi-arg
+; ops are packed with `Pair` (the surface `(! E A)` row carries a single effect name and each op a
+; single argument type). Effects are now MODELED at the type level by the independent re-checker
+; (not declined), so `--recheck` agrees with the seed kernel on such a program, which type-checks it.
+
+(load "std/nat.bl")
+(load "std/int.bl")
+(load "std/pair.bl")
+
+; `Unit` is the result of the void ops. Re-declaring an identical inductive is fine.
+(defdata Unit () (tt))
+
+(effect Bytes (new-bytes Nat Int) (bytes-len Int Nat) (get-byte (Pair Int Nat) Nat)
+  (set-byte (Pair Int (Pair Nat Nat)) Unit))
+
+; ── Convenience wrappers so user code reads naturally ────────────────────────────────────────────
+
+(deftotal bytes-new (Pi ((len Nat)) (! Bytes Int)) (lam (len) (perform new-bytes len)))
+
+(deftotal bytes-length (Pi ((h Int)) (! Bytes Nat)) (lam (h) (perform bytes-len h)))
+
+(deftotal bytes-get (Pi ((h Int) (i Nat)) (! Bytes Nat))
+  (lam (h i) (perform get-byte (mk-pair h i))))
+
+(deftotal bytes-set (Pi ((h Int) (i Nat) (v Nat)) (! Bytes Unit))
+  (lam (h i v) (perform set-byte (mk-pair h (mk-pair i v)))))

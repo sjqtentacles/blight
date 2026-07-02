@@ -19,40 +19,31 @@
 ; UNTRUSTED tower code; loadable in isolation.
 
 ; Addition.
-(deftotal int-add (Pi ((a Int) (b Int)) Int)
-  (lam (a b) (int+ a b)))
+(deftotal int-add (Pi ((a Int) (b Int)) Int) (lam (a b) (int+ a b)))
 
 ; Subtraction.
-(deftotal int-sub (Pi ((a Int) (b Int)) Int)
-  (lam (a b) (int- a b)))
+(deftotal int-sub (Pi ((a Int) (b Int)) Int) (lam (a b) (int- a b)))
 
 ; Multiplication.
-(deftotal int-mul (Pi ((a Int) (b Int)) Int)
-  (lam (a b) (int* a b)))
+(deftotal int-mul (Pi ((a Int) (b Int)) Int) (lam (a b) (int* a b)))
 
 ; Truncating division (kernel semantics: division by zero is the kernel's primitive behavior).
-(deftotal int-div (Pi ((a Int) (b Int)) Int)
-  (lam (a b) (int/ a b)))
+(deftotal int-div (Pi ((a Int) (b Int)) Int) (lam (a b) (int/ a b)))
 
 ; Equality flag: `1` when `a = b`, else `0` (an `Int`, not a `Bool` — see the file header).
-(deftotal int-eq (Pi ((a Int) (b Int)) Int)
-  (lam (a b) (int= a b)))
+(deftotal int-eq (Pi ((a Int) (b Int)) Int) (lam (a b) (int= a b)))
 
 ; Strict-less-than flag: `1` when `a < b`, else `0` (an `Int`, not a `Bool`).
-(deftotal int-lt (Pi ((a Int) (b Int)) Int)
-  (lam (a b) (int< a b)))
+(deftotal int-lt (Pi ((a Int) (b Int)) Int) (lam (a b) (int< a b)))
 
 ; Common literals, for readable accumulators / unit / zero elements.
 (define int-zero Int (int 0))
 (define int-one Int (int 1))
 
 ; Double: a tiny derived op, demonstrating wrappers compose like any other function.
-(deftotal int-double (Pi ((a Int)) Int)
-  (lam (a) (int+ a a)))
+(deftotal int-double (Pi ((a Int)) Int) (lam (a) (int+ a a)))
 
 ; Successor / predecessor on machine integers (O(1), unlike unary `Succ`/`pred`).
-(deftotal int-succ (Pi ((a Int)) Int)
-  (lam (a) (int+ a (int 1))))
+(deftotal int-succ (Pi ((a Int)) Int) (lam (a) (int+ a (int 1))))
 
-(deftotal int-pred (Pi ((a Int)) Int)
-  (lam (a) (int- a (int 1))))
+(deftotal int-pred (Pi ((a Int)) Int) (lam (a) (int- a (int 1))))

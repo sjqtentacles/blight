@@ -1,0 +1,120 @@
+; std/map.bl — ordered map/set built as a PURE tree over std/ordering's three-way `compare`
+; (roadmap Wave 2 / L1: "hash map/set breadth").
+;
+; UNTRUSTED tower code. Deliberately built on a plain search tree (the `std/tree.bl` shape, extended
+; to carry a value per key) rather than on the A3a `Arrays` effect: `Arrays` holds only `Int`
+; elements (A3a is scalar-only; see `docs/design-a3b-boxed-arrays.md` for why a *generic*-element
+; array is gated), so a map/set of arbitrary keys/values has to live on the GC-heap inductive side,
+; not on an off-heap buffer. Every operation here is a plain total structural fold — no effects.
+;
+; NOTE ("hash" in the roadmap task name is a loose name for "an associative map/set data structure";
+; the actual implementation is an ordered binary search tree keyed by an explicit three-way
+; `compare`, exactly like `std/ordering.bl`'s `nat-compare` — hashing needs a `Hash` typeclass and a
+; real hash-table effect, neither of which exists yet, and an ordered tree is the honest, in-fragment
+; alternative available today). The tree is a plain (unbalanced) BST, like `std/tree.bl`'s
+; `RedBlackTree` (whose name is aspirational — see that file — no rotation logic exists there
+; either); a real self-balancing rebalance pass is future work, tracked as an open item rather than
+; silently assumed.
+;
+; Depends on std/ordering (for `Ordering`/`nat-compare`), std/list, std/pair, std/maybe, std/bool.
+
+(load "std/ordering.bl")
+(load "std/list.bl")
+(load "std/pair.bl")
+(load "std/maybe.bl")
+
+; ---- TreeMap: an ordered association tree, keyed by an explicit `compare : k -> k -> Ordering` ----
+(defdata TreeMap ((k (Type 0)) (v (Type 0))) (tm-leaf)
+  (tm-node (l (TreeMap k v)) (key k) (val v) (r (TreeMap k v))))
+
+(deftotal map-empty (Pi ((K (Type 0)) (V (Type 0))) (TreeMap K V)) (lam (K V) tm-leaf))
+
+; Insert (or, if `key` is already present, overwrite the value for) `key`/`val` into `m`. Structural
+; recursion on `m`; the recursive call sits inside a NESTED match on the 3-way `compare` result (the
+; `sub`/`min`/`max` nested-match shape from std/nat.bl), so only the taken branch is ever evaluated —
+; unlike `std/tree.bl`'s `tree-insert` (which eagerly computes both the "insert-left" and
+; "insert-right" trees via `tree-if` before picking one); this avoids that doubling-per-level cost.
+(deftotal map-insert
+  (Pi
+    ((K (Type 0)) (V (Type 0)) (compare (Pi ((x K) (y K)) Ordering)) (key K) (val V)
+      (m (TreeMap K V)))
+    (TreeMap K V))
+  (lam (K V compare key val m)
+    (match m [(tm-leaf) (tm-node tm-leaf key val tm-leaf)]
+      [(tm-node l k0 v0 r)
+        (match (compare key k0) [(LT) (tm-node (map-insert K V compare key val l) k0 v0 r)]
+          [(EQ) (tm-node l k0 val r)]
+          [(GT) (tm-node l k0 v0 (map-insert K V compare key val r))])])))
+
+; Look up `key` in `m`, returning `just` its value or `nothing`. Structural recursion on `m`.
+(deftotal map-lookup
+  (Pi ((K (Type 0)) (V (Type 0)) (compare (Pi ((x K) (y K)) Ordering)) (key K) (m (TreeMap K V)))
+    (Maybe V))
+  (lam (K V compare key m)
+    (match m [(tm-leaf) nothing]
+      [(tm-node l k0 v0 r)
+        (match (compare key k0) [(LT) (map-lookup K V compare key l)] [(EQ) (just v0)]
+          [(GT) (map-lookup K V compare key r)])])))
+
+(deftotal map-member
+  (Pi ((K (Type 0)) (V (Type 0)) (compare (Pi ((x K) (y K)) Ordering)) (key K) (m (TreeMap K V)))
+    Bool)
+  (lam (K V compare key m) (match (map-lookup K V compare key m) [(nothing) false] [(just v) true])))
+
+; In-order traversal to a `List (Pair K V)` (ascending by key) — structural recursion on `m`; the
+; nested `append`s put the left subtree's entries, then this node's, then the right subtree's.
+(deftotal map-to-list (Pi ((K (Type 0)) (V (Type 0)) (m (TreeMap K V))) (List (Pair K V)))
+  (lam (K V m)
+    (match m [(tm-leaf) nil]
+      [(tm-node l k0 v0 r)
+        (append (Pair K V) (map-to-list K V l) (cons (mk-pair k0 v0) (map-to-list K V r)))])))
+
+; The number of entries. Structural recursion on `m`.
+(deftotal map-size (Pi ((K (Type 0)) (V (Type 0)) (m (TreeMap K V))) Nat)
+  (lam (K V m)
+    (match m [(tm-leaf) Zero] [(tm-node l k0 v0 r) (Succ (plus (map-size K V l) (map-size K V r)))])))
+
+; Build a map from a `List (Pair K V)`, later entries overwriting earlier ones on key collision
+; (left fold via `map-insert`, reusing `list_extra`'s `foldl` shape inline since `map-insert`'s
+; leading `compare`/type arguments do not fit `foldl`'s two-argument `f` directly).
+(deftotal map-from-list-acc
+  (Pi
+    ((K (Type 0)) (V (Type 0)) (compare (Pi ((x K) (y K)) Ordering)) (xs (List (Pair K V)))
+      (acc (TreeMap K V)))
+    (TreeMap K V))
+  (lam (K V compare xs)
+    (match xs [(nil) (lam (acc) acc)]
+      [(cons p rest)
+        (lam (acc)
+          (match p
+            [(mk-pair k v) (map-from-list-acc K V compare rest (map-insert K V compare k v acc))]))])))
+
+(deftotal map-from-list
+  (Pi ((K (Type 0)) (V (Type 0)) (compare (Pi ((x K) (y K)) Ordering)) (xs (List (Pair K V))))
+    (TreeMap K V))
+  (lam (K V compare xs) (map-from-list-acc K V compare xs (map-empty K V))))
+
+; ---- concrete `Nat`-keyed convenience instantiation (mirrors std/tree.bl's `NatTree`) --------------
+(deftotal nat-map-insert (Pi ((V (Type 0)) (key Nat) (val V) (m (TreeMap Nat V))) (TreeMap Nat V))
+  (lam (V key val m) (map-insert Nat V nat-compare key val m)))
+
+(deftotal nat-map-lookup (Pi ((V (Type 0)) (key Nat) (m (TreeMap Nat V))) (Maybe V))
+  (lam (V key m) (map-lookup Nat V nat-compare key m)))
+
+; ---- TreeSet: a `TreeMap k Unit` in disguise — membership/insert with no payload ------------------
+(defdata Unit () (tt))
+
+(define TreeSet (Pi ((k (Type 0))) (Type 0)) (lam (k) (TreeMap k Unit)))
+
+(deftotal set-empty (Pi ((K (Type 0))) (TreeSet K)) (lam (K) (map-empty K Unit)))
+
+(deftotal set-insert
+  (Pi ((K (Type 0)) (compare (Pi ((x K) (y K)) Ordering)) (x K) (s (TreeSet K))) (TreeSet K))
+  (lam (K compare x s) (map-insert K Unit compare x tt s)))
+
+(deftotal set-member
+  (Pi ((K (Type 0)) (compare (Pi ((x K) (y K)) Ordering)) (x K) (s (TreeSet K))) Bool)
+  (lam (K compare x s) (map-member K Unit compare x s)))
+
+(deftotal set-to-list (Pi ((K (Type 0)) (s (TreeSet K))) (List K))
+  (lam (K s) (map (Pair K Unit) K (lam (p) (pair-fst K Unit p)) (map-to-list K Unit s))))

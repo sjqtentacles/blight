@@ -1,0 +1,27 @@
+; f64_scratch.bl — dogfooding the UNVERIFIED IEEE-754 `F64` hatch (Wave 2 / L2, std/f64.bl).
+;
+; Exercises conversion, all four arithmetic ops, and negation, then rounds back to a checked `Int`
+; so the result is printable by ordinary trusted machinery:
+;
+;   (((3.0 + 4.0) * 2.0) - 1.0) / 3.0, negated, rounded
+;   = ((7.0 * 2.0) - 1.0) / 3.0, negated, rounded  =  (14.0 - 1.0) / 3.0, negated, rounded
+;   = 13.0 / 3.0, negated, rounded  =  4.333..., negated, rounded  =  -4.333..., rounded  =  -4
+;
+;   cargo run -p blight-repl --features llvm -- build examples/f64_scratch.bl -o f64_scratch
+;   ./f64_scratch        # => -4
+;
+; Built *without* `--recheck`: like foreign_answer.bl, `F64` is a `foreign` postulate outside the
+; independent re-checker's certifiable fragment — it honestly DECLINES (see
+; crates/blight-repl/tests/examples.rs's `f64_scratch_example_loads` for the pinned decline check).
+
+(load "std/int.bl")
+(load "std/f64.bl")
+
+(define main Int
+  (f64-round
+    (f64-neg
+      (f64-over
+        (f64-minus
+          (f64-times (f64-plus (f64-of-int (int 3)) (f64-of-int (int 4))) (f64-of-int (int 2)))
+          (f64-of-int (int 1)))
+        (f64-of-int (int 3))))))

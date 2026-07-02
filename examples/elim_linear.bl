@@ -1,0 +1,21 @@
+; elim_linear.bl — a NON-tail linear structural fold (the P3 (3b) elim-worklist shape).
+;
+; `double-up` is a `deftotal` that recurses on its `Nat` argument and consumes the induction
+; hypothesis `(double-up k)` in *non-tail* position (under two `Succ`s). Lowered eagerly it descends
+; the whole spine on the C stack; the (3a) tail-accumulator loop correctly declines it (there is no
+; accumulator), so the P3 (3b) reverse-then-fold transform rebuilds it as
+; `λx. fold_loop (rev_loop x Zero) Zero` — two tail-accumulator catamorphisms the (3a) loop then makes
+; bounded-stack. The transform fires on the *pattern*, independent of `n`, so `n` is kept small (20)
+; so even the all-slow-paths-off reference arm (`BL_NO_ELIMLOOP` + generic eager eliminator) stays
+; within the C stack; both arms must print the identical value (2·n = 40).
+
+(load "std/nat.bl")
+
+(deftotal double-up (Pi ((n Nat)) Nat)
+  (lam (n) (match n [(Zero) Zero] [(Succ k) (Succ (Succ (double-up k)))])))
+
+(define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+; n = 10 * 2 = 20; double-up 20 = 40.
+(define n Nat (mult ten (Succ (Succ Zero))))
+
+(define main Nat (double-up n))

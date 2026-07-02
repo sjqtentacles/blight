@@ -1,0 +1,79 @@
+; std/actor.bl — the actor / CSP concurrency surface as graded algebraic effects (M16).
+;
+; UNTRUSTED tower code. This declares Blight's concurrency API as an ordinary user effect, exactly
+; like `State` (std examples) or `Console` (std/io.bl). The kernel never learns about threads,
+; schedulers, or sockets — it only sees effect operations and their handlers, type-checked by the
+; seed kernel. Concrete execution is provided by an *untrusted* handler:
+;   * the cooperative single-core scheduler below (proof the API works end-to-end), and
+;   * later, a native share-nothing worker pool (M17) and a data-only distributed transport (M19),
+;     both of which install a handler for these same ops and add ZERO new `foreign` axioms.
+;
+; ── Effect surface ────────────────────────────────────────────────────────────────────────────
+; v1 messages carry *data only* (a `Nat` here; M18 generalizes to any first-order value via a
+; structural serializer). Code/continuation mobility is deliberately out of scope (Erlang model).
+;
+;   * `spawn  : Nat  -> Nat`   — start a new actor running the body identified by the `Nat` tag;
+;                                returns the new actor's id. (Bodies are looked up by the scheduler;
+;                                first-class closures as actor bodies await M18 code mobility.)
+;   * `send   : Nat  -> Unit`  — enqueue a message (the `Nat`) to the current peer's mailbox.
+;   * `receive: Unit -> Nat`   — dequeue the next message addressed to this actor (blocks/yields).
+;   * `yield  : Unit -> Unit`  — cooperatively hand control to the scheduler.
+;
+; ── Continuation grades (the safety story) ──────────────────────────────────────────────────────
+; The surface assigns every op continuation-multiplicity ω (multi-shot) — the kernel-level finer
+; grade is a kernel concern (see blight_kernel::OpSig). What matters: the SAME continuation-grade
+; discipline that the kernel enforces for `State`/exceptions is what makes a scheduler safe. A
+; *linear* (grade-1) `send`/`receive` means the scheduler must resume the performing actor's
+; continuation EXACTLY ONCE; a buggy scheduler that double-delivers (resumes `k` twice) is a
+; `GradeViolation` caught by the kernel, not a runtime data race. A *nondeterministic* (grade-ω)
+; `fork`/speculative op may resume `k` any number of times (branching execution). These guarantees
+; are proven as kernel tests `linear_actor_send_double_resume_rejected` /
+; `nondet_actor_fork_multi_resume_ok` (crates/blight-kernel/src/check.rs).
+;
+; ── Placement / pinning (M16 runtime constraint) ─────────────────────────────────────────────────
+; An actor is *pinned to a worker for the duration of a computation*: its handler frame and captured
+; continuation live on one worker's (thread-local, M15) C stack and are non-serializable. The
+; scheduler may therefore place an actor on a worker only at SPAWN/MESSAGE boundaries; mid-flight
+; migration / work-stealing of in-flight continuations is out of scope.
+;
+; Effects are now MODELED at the type level by the independent re-checker (not declined), so
+; `--recheck` agrees with the seed kernel on a program using `Actor`, which fully type-checks it.
+
+(load "std/nat.bl")
+(load "std/list.bl")
+(load "std/maybe.bl")
+
+; `Unit` is the parameter/result of the no-payload ops. Re-declaring an identical inductive is fine.
+(defdata Unit () (tt))
+
+(effect Actor (spawn Nat Nat) (send Nat Unit) (receive Unit Nat) (yield Unit Unit))
+
+; ── Convenience wrappers so user code reads naturally ────────────────────────────────────────────
+
+(deftotal actor-spawn (Pi ((tag Nat)) (! Actor Nat)) (lam (tag) (perform spawn tag)))
+
+(deftotal actor-send (Pi ((msg Nat)) (! Actor Unit)) (lam (msg) (perform send msg)))
+
+(deftotal actor-receive (Pi ((u Unit)) (! Actor Nat)) (lam (u) (perform receive tt)))
+
+(deftotal actor-yield (Pi ((u Unit)) (! Actor Unit)) (lam (u) (perform yield tt)))
+
+; ── A cooperative single-core scheduler handler (proof the API works) ─────────────────────────────
+;
+; The scheduler is a deep `handle` over the four ops that threads a `Nat` mailbox through the
+; captured continuation (the same tail-resumptive shape as the State handler). The actor program is
+; written *lexically inside* the `handle`, exactly like std/io.bl's `Console` programs run under the
+; driver-installed top-level handler: under call-by-value an effect must be performed inside the
+; dynamic extent of its handler, so the proof scheduler is an inline handler shape rather than a
+; function that takes an already-evaluated computation. `examples/actor_pingpong.bl` shows the shape:
+;
+;   (handle <actor-body performing Actor ops>
+;     (return x x)               ; the actor's final value
+;     (receive u k (k inbox))    ; deliver the next message
+;     (send    m k (k tt))       ; enqueue (no-op in the single-core proof; real in M17 worker pool)
+;     (yield   u k (k tt))       ; cooperative reschedule
+;     (spawn tag k (k Zero)))    ; start a peer (returns a fresh id)
+;
+; The native worker-pool scheduler (M17) and distributed transport (M19) install a richer handler
+; for these same ops; user code that performs them is unchanged. (Resuming each linear op exactly
+; once is the kernel-enforced contract; see the grade discussion above.)

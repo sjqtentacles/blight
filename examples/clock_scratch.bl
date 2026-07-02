@@ -1,0 +1,19 @@
+; clock_scratch.bl — the smallest `Clock`-effect program (Wave 2 / L1, std/time.bl).
+;
+; `main : (! Clock Int)` takes two `clock-now` readings back to back and asserts the wall clock never
+; runs backwards: `elapsed-ms start end` (an `Int`) must be `>= 0`. `Int` has no eliminator (see
+; std/int.bl's header), so this is phrased as the `Int`-valued boolean flag `int-lt` already returns
+; (`1`/`0`, not `Bool`) via `1 - (end < start)`, i.e. "NOT (end < start)" — deterministically `1` on
+; any correctly functioning clock, so this is exactly as reproducible as `bytes_scratch.bl`/
+; `array_scratch.bl`'s handle round-trips despite `Clock` itself being the one genuinely
+; non-deterministic L1 effect. Folded by the same native top-level handler the `Console`/`Bytes`/
+; `Arrays` examples use (`bl_run_console`, extended with the `now` branch reading `gettimeofday`).
+;
+;   cargo run -p blight-repl --features llvm -- build examples/clock_scratch.bl -o clock_scratch
+;   ./clock_scratch            # => 1
+
+(load "std/time.bl")
+
+(define main (! Clock Int)
+  (let ((start (perform now tt)))
+    (let ((end (perform now tt))) (int-sub int-one (int-lt end start)))))

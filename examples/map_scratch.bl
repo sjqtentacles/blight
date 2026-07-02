@@ -1,0 +1,88 @@
+; map_scratch.bl — dogfooding `std/test.bl` against `std/map.bl` (roadmap Wave 2 / L1).
+;
+; A pure `TestSuite` exercising the `Nat`-keyed `TreeMap`/`TreeSet` convenience API: insertion,
+; overwrite-on-collision, lookup (hit/miss via `map-member`), size, and the ascending-by-key order
+; `map-to-list`'s in-order traversal produces. `main : Bool` is `suite-all-passed` — a Rust-side
+; test (`crates/blight-repl/tests/examples.rs`) normalizes it with the trusted kernel evaluator and
+; asserts it reduces to `true`, giving `std/map.bl` genuine *behavioral* coverage — not just "loads
+; and type-checks", which `every_std_module_loads_in_isolation` already covers.
+;
+; `main` is deliberately a bare `Bool`, not a `(! Console …)` program: the suite is pure, so there is
+; no need for the native effect-handler driver here (unlike e.g. `bytes_scratch.bl`).
+;
+; Each test case is its own top-level `define` (rather than one giant nested `cons` literal) so a
+; failing case's name is easy to find and the parenthesis nesting stays shallow and reviewable.
+
+(load "std/map.bl")
+(load "std/test.bl")
+
+; ---- small Nat constants (keys 1..3, values 10x the key so a wrong lookup is easy to spot) --------
+(define n0 Nat Zero)
+(define n1 Nat (Succ n0))
+(define n2 Nat (Succ n1))
+(define n3 Nat (Succ n2))
+(define n4 Nat (Succ n3))
+(define n9 Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ n0))))))))))
+(define n10 Nat (Succ n9))
+(define n11 Nat (Succ n10))
+(define n22 Nat (mult n2 n11))
+(define n33 Nat (mult n3 n11))
+(define n99 Nat (mult n9 n11))
+
+; ---- build {1 -> 11, 2 -> 22, 3 -> 33} via three `nat-map-insert`s -------------------------------
+(define m0 (TreeMap Nat Nat) (map-empty Nat Nat))
+(define m1 (TreeMap Nat Nat) (nat-map-insert Nat n1 n11 m0))
+(define m2 (TreeMap Nat Nat) (nat-map-insert Nat n2 n22 m1))
+(define m (TreeMap Nat Nat) (nat-map-insert Nat n3 n33 m2))
+
+; Overwriting an existing key updates the value without growing the map (`map-insert`'s `EQ` arm).
+(define m-overwritten (TreeMap Nat Nat) (nat-map-insert Nat n2 n99 m))
+
+; The first (smallest-key) entry of `map-to-list`'s ascending traversal.
+(deftotal list-head-key (Pi ((xs (List (Pair Nat Nat))) (fallback Nat)) Nat)
+  (lam (xs fallback) (match xs [(nil) fallback] [(cons p rest) (pair-fst Nat Nat p)])))
+
+(define lookup-4-is-nothing Bool (match (nat-map-lookup Nat n4 m) [(nothing) true] [(just v) false]))
+
+; ---- test cases -------------------------------------------------------------------------------
+(define t01 TestCase (deftest "member-hit-1" (map-member Nat Nat nat-compare n1 m)))
+(define t02 TestCase (deftest "member-hit-3" (map-member Nat Nat nat-compare n3 m)))
+(define t03 TestCase (deftest "member-miss-4" (assert-false (map-member Nat Nat nat-compare n4 m))))
+(define t04 TestCase
+  (deftest "member-miss-empty" (assert-false (map-member Nat Nat nat-compare n1 m0))))
+(define t05 TestCase
+  (deftest "lookup-value-1" (assert-eq-nat (from-maybe Nat n0 (nat-map-lookup Nat n1 m)) n11)))
+(define t06 TestCase
+  (deftest "lookup-value-2" (assert-eq-nat (from-maybe Nat n0 (nat-map-lookup Nat n2 m)) n22)))
+(define t07 TestCase (deftest "lookup-miss-4" lookup-4-is-nothing))
+(define t08 TestCase (deftest "size-is-3" (assert-eq-nat (map-size Nat Nat m) n3)))
+(define t09 TestCase (deftest "empty-size-is-0" (assert-eq-nat (map-size Nat Nat m0) n0)))
+(define t10 TestCase
+  (deftest "to-list-length-3" (assert-eq-nat (length (Pair Nat Nat) (map-to-list Nat Nat m)) n3)))
+(define t11 TestCase
+  (deftest "to-list-ascending" (assert-eq-nat (list-head-key (map-to-list Nat Nat m) n0) n1)))
+(define t12 TestCase
+  (deftest "overwrite-updates-value"
+    (assert-eq-nat (from-maybe Nat n0 (nat-map-lookup Nat n2 m-overwritten)) n99)))
+(define t13 TestCase
+  (deftest "overwrite-keeps-size" (assert-eq-nat (map-size Nat Nat m-overwritten) n3)))
+(define t14 TestCase
+  (deftest "set-member-hit"
+    (set-member Nat nat-compare n1 (set-insert Nat nat-compare n1 (set-empty Nat)))))
+(define t15 TestCase
+  (deftest "set-member-miss-empty" (assert-false (set-member Nat nat-compare n1 (set-empty Nat)))))
+
+(define all-cases (List TestCase)
+  (cons t01
+    (cons t02
+      (cons t03
+        (cons t04
+          (cons t05
+            (cons t06
+              (cons t07
+                (cons t08
+                  (cons t09 (cons t10 (cons t11 (cons t12 (cons t13 (cons t14 (cons t15 nil))))))))))))))))
+
+(define map-suite TestSuite (mk-suite "map" all-cases))
+
+(define main Bool (suite-all-passed map-suite))

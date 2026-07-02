@@ -20,20 +20,15 @@
 ; vec-map : (A -> B) -> (Vec A n) -> (Vec B n). The `match` reconstructs the spine with the same
 ; shape: `vnil` maps to `vnil` (length `Zero`), `vcons m x xs` maps to `vcons m (f x) (map xs)`
 ; (length `Succ m`). Both arms preserve the length index, so the result is `Vec B n`.
-(define-rec vec-map (Pi ((A (Type 0)) (B (Type 0)) (f (Pi ((x A)) B)) (n Nat) (v (Vec A n))) (Vec B n))
-  (lam (A B f n v)
-    (match v
-      [(vnil) vnil]
-      [(vcons m x xs) (vcons m (f x) (vec-map A B f m xs))])))
+(define-rec vec-map
+  (Pi ((A (Type 0)) (B (Type 0)) (f (Pi ((x A)) B)) (n Nat) (v (Vec A n))) (Vec B n))
+  (lam (A B f n v) (match v [(vnil) vnil] [(vcons m x xs) (vcons m (f x) (vec-map A B f m xs))])))
 
 (define one Nat (Succ Zero))
 (define two Nat (Succ (Succ Zero)))
 
 ; sample : Vec Nat 2 = [0, 0]. (vcons takes tail-length, element, tail; lengths count down 1, 0.)
-(define sample (Vec Nat two)
-  (vcons one Zero
-    (vcons Zero Zero
-      (vnil))))
+(define sample (Vec Nat two) (vcons one Zero (vcons Zero Zero (vnil))))
 
 ; main = 2. Mapping `Succ` over a length-2 vector yields another length-2 vector; `vec-length`
 ; reads the preserved length back as a concrete Nat. The whole point: the length `2` is the SAME

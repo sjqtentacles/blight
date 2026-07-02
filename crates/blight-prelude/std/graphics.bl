@@ -1,0 +1,49 @@
+; std/graphics.bl — the `Graphics` effect (Wave 10 / P2, docs/design-wave4-gobars.md §5): a small,
+; purpose-built real-time-rendering effect sized to make a `snake`/`pong`-class game buildable, not a
+; general 2D-graphics API.
+;
+; UNTRUSTED tower code, same TCB accounting as every prior FFI-adjacent milestone (M7/M8/M9/A3a/A3b):
+; this does not enlarge the trusted kernel at all — `Graphics` is an ordinary user effect the
+; re-checker already type-checks with no decline, and the honest cost is entirely in the untrusted
+; tower (runtime/graphics.c's native handler, linked against SDL2 only when the `graphics` cargo
+; feature is enabled). Design B was chosen over raw `foreign` SDL bindings (Design A) precisely so
+; that no raw pointer, and no SDL type, is ever visible to Blight code: every op below crosses the
+; boundary as a single Pair-packed Int/Nat argument (A3a's convention), and `graphics.c`'s native
+; handler hides the window/renderer handle entirely in its own thread-local state.
+;
+; Ops (mirroring `bl_run_console`'s existing native-loop-resumes-continuation shape, just paced by
+; the SDL frame loop instead of blocking on stdin):
+;   * `init-window : (Pair Int Int) -> Unit` = (width, height). Opens the window/renderer once; a
+;     second call while a window is already open is a no-op (see graphics.c's own comment for why).
+;   * `poll-input   : Unit -> Int` — at most one pending input event, non-blocking: -1 = none,
+;     0 = quit requested, 1/2/3/4 = up/down/left/right, 10 = any other key.
+;   * `clear        : Unit -> Unit` — clear the whole frame to black.
+;   * `draw-rect    : (Pair Int (Pair Int (Pair Int Int))) -> Unit` = (x, (y, (w, h))). Fills a
+;     rectangle (fixed white — no color argument in this minimal go-bar scope).
+;   * `present      : Unit -> Unit` — flip the back buffer to the window.
+; A program `main : (! Graphics A)` performs these and is run by the native `bl_run_graphics` handler
+; the build driver installs when the `graphics` cargo feature is enabled (linking `runtime/graphics.c`
+; + SDL2); without that feature, compiling such a `main` fails fast with a clear error instead of an
+; undefined-symbol link failure.
+
+(load "std/int.bl")
+(load "std/pair.bl")
+
+(defdata Unit () (tt))
+
+(effect Graphics (init-window (Pair Int Int) Unit) (poll-input Unit Int) (clear Unit Unit)
+  (draw-rect (Pair Int (Pair Int (Pair Int Int))) Unit)
+  (present Unit Unit))
+
+; Convenience wrappers so game code reads naturally.
+(deftotal gfx-init-window (Pi ((w Int) (h Int)) (! Graphics Unit))
+  (lam (w h) (perform init-window (mk-pair w h))))
+
+(deftotal gfx-poll-input (Pi ((u Unit)) (! Graphics Int)) (lam (u) (perform poll-input tt)))
+
+(deftotal gfx-clear (Pi ((u Unit)) (! Graphics Unit)) (lam (u) (perform clear tt)))
+
+(deftotal gfx-draw-rect (Pi ((x Int) (y Int) (w Int) (h Int)) (! Graphics Unit))
+  (lam (x y w h) (perform draw-rect (mk-pair x (mk-pair y (mk-pair w h))))))
+
+(deftotal gfx-present (Pi ((u Unit)) (! Graphics Unit)) (lam (u) (perform present tt)))

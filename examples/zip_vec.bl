@@ -30,30 +30,19 @@
 (define-rec zip-vec
   (Pi ((A (Type 0)) (B (Type 0)) (n Nat) (v (Vec A n)) (w (Vec B n))) (Vec (Pair A B) n))
   (lam (A B n v w)
-    (match v
-      [(vnil) vnil]
+    (match v [(vnil) vnil]
       [(vcons m x xs)
-        (match w
-          [(vnil) vnil]
-          [(vcons k y ys)
-            (vcons m (mk-pair x y) (zip-vec A B m xs ys))])])))
+        (match w [(vnil) vnil] [(vcons k y ys) (vcons m (mk-pair x y) (zip-vec A B m xs ys))])])))
 
 (define one Nat (Succ Zero))
 (define two Nat (Succ (Succ Zero)))
 
 ; sample-a : Vec Nat 2 = [0, 0]; sample-b : Vec Nat 2 = [1, 1]. (vcons takes tail-length, element,
 ; tail; lengths count down 1, 0.)
-(define sample-a (Vec Nat two)
-  (vcons one Zero
-    (vcons Zero Zero
-      (vnil))))
-(define sample-b (Vec Nat two)
-  (vcons one one
-    (vcons Zero one
-      (vnil))))
+(define sample-a (Vec Nat two) (vcons one Zero (vcons Zero Zero (vnil))))
+(define sample-b (Vec Nat two) (vcons one one (vcons Zero one (vnil))))
 
 ; main = 2. Zipping two length-2 vectors yields a length-2 vector of pairs; `vec-length` reads the
 ; preserved length back as a concrete Nat. The shared-length guarantee lives in zip-vec's TYPE and
 ; is re-verified by the independent re-checker under `--recheck`.
-(define main Nat
-  (vec-length (Pair Nat Nat) two (zip-vec Nat Nat two sample-a sample-b)))
+(define main Nat (vec-length (Pair Nat Nat) two (zip-vec Nat Nat two sample-a sample-b)))

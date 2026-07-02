@@ -1,0 +1,49 @@
+; ua_compute_reverse.bl — the *reverse* univalence computation rule, end-to-end on a closed
+; instance (spec §7 cubical layer; Wave 7/E3 generalization of A2b).
+;
+; `ua_compute.bl` witnesses the forward direction: transporting *along* `ua e` reduces to `e`'s
+; forward map. This file witnesses the symmetric fact: transporting along `ua e` traversed
+; *backward* (`plam i. (ua e) @ (~i)`, the same construction `sym` — `std/path.bl` — computes)
+; reduces to `e`'s *inverse* map, via the `transp`-over-`Glue` reduction generalized in
+; `crates/blight-kernel/src/kan.rs::transp_glue` (Wave 7/E3) to also cover the `i=1`
+; (De Morgan-negated) face this reversal produces.
+;
+; With `e := id-equiv Bool` (self-inverse, `λx.x`), transporting `true` along the reversed line
+; must reduce to `true` again, so the reflexivity proof `ua-computes-bool-reverse` type-checks
+; *only because* the kernel performs the reversed Glue transport. (The genuine inverse-map
+; application, with distinct endpoints and an inverse map observably different from the forward
+; map, is covered by the kernel white-box tests
+; `kan.rs::transp_ua_glue_line_reverse_face_applies_inverse_map` and
+; `kan.rs::transp_ua_glue_line_negated_dim_reverse_face_applies_inverse_map` — the latter pinned in
+; the *exact* syntactic cofibration shape this reversal actually produces,
+; `Cofib::Eq0(Neg(Dim))`, rather than the simpler-looking `Cofib::Eq1(Dim)`; here the closed
+; instance keeps the example self-contained while still driving `ua` + `Glue` formation + `transp`
+; through the full pipeline, exactly as `ua_compute.bl` does for the forward direction.)
+;
+; Buildable / checkable:
+;   cargo run -p blight-repl --features llvm -- build examples/ua_compute_reverse.bl -o ua_rev
+; (it has no runtime `main`; it is a checked proof obligation, like the *_proof.bl examples).
+
+(load "std/bool.bl")
+(load "std/path.bl")
+
+; The identity equivalence on `Bool`, the closed `e : Equiv Bool Bool` we transport along.
+(define e-bool (Equiv Bool Bool) (id-equiv Bool))
+
+; `ua e-bool : Path (Type 0) Bool Bool` — the univalence path induced by the identity equivalence.
+(define ua-bool (Path (Type 0) Bool Bool) (ua Bool Bool e-bool))
+
+; `ua e-bool` traversed backward: `Path (Type 0) Bool Bool`. This is what `sym` (`std/path.bl`)
+; would compute (`sym A x y p = plam i. p @ (~i)`), but `sym`'s domain is fixed at `Type 0`
+; (the codebase has no universe polymorphism yet — see `std/path.bl`'s header), so it cannot be
+; applied with `A := Type 0` (a path *between types* lives one universe up, at `Type 1`); we inline
+; the same one-line construction at the type this instance actually needs. Its underlying `Glue`
+; line carries the `i=1` (De Morgan-negated) face, the shape `transp_glue`'s reverse rule handles.
+(define ua-bool-rev (Path (Type 0) Bool Bool) (plam (i) (ua-bool @ (~ i))))
+
+; The reverse univalence computation rule on this closed instance: transporting `true` along
+; `sym (ua e-bool)` computes to `true` (the identity equivalence is its own inverse). Provable by
+; `refl` *iff* the kernel reduces the reversed Glue transport (otherwise the two sides would be
+; distinct neutrals and the boundary check fails).
+(define ua-computes-bool-reverse (Path Bool (transp (plam (i) (ua-bool-rev @ i)) cbot true) true)
+  (plam (i) true))

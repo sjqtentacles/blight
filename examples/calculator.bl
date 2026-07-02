@@ -10,25 +10,17 @@
 ;
 ;   cargo run -p blight-repl --features llvm -- build examples/calculator.bl -o calc && ./calc  # => 19
 
-(defdata Expr ()
-  (lit (v Int))
-  (add (l Expr) (r Expr))
-  (sub (l Expr) (r Expr))
+(defdata Expr () (lit (v Int)) (add (l Expr) (r Expr)) (sub (l Expr) (r Expr))
   (mul (l Expr) (r Expr)))
 
 ; Evaluate an expression to an `Int` by structural recursion on the tree. Each recursive call is on
 ; an immediate sub-term (`l`/`r`) of the scrutinee, so this is in the structural fragment.
 (deftotal eval (Pi ((e Expr)) Int)
-  (lam (e) (match e
-    [(lit v)   v]
-    [(add l r) (int+ (eval l) (eval r))]
-    [(sub l r) (int- (eval l) (eval r))]
-    [(mul l r) (int* (eval l) (eval r))])))
+  (lam (e)
+    (match e [(lit v) v] [(add l r) (int+ (eval l) (eval r))] [(sub l r) (int- (eval l) (eval r))]
+      [(mul l r) (int* (eval l) (eval r))])))
 
 ; (2 + 3) * 4 - 1
-(define expr Expr
-  (sub
-    (mul (add (lit (int 2)) (lit (int 3))) (lit (int 4)))
-    (lit (int 1))))
+(define expr Expr (sub (mul (add (lit (int 2)) (lit (int 3))) (lit (int 4))) (lit (int 1))))
 
 (define main Int (eval expr))

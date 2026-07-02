@@ -1,0 +1,30 @@
+; flat_pair.bl — nested-product leaf-drilling (A1 differential coverage).
+;
+; Builds a nested product `Pair (Pair Nat Nat) Nat` and reads it back *only* by drilling all the way
+; to its leaf `Nat`s (never matching the whole pair, never reading the inner pair as a value). This
+; is the canonical "escaping product whose nested child is leaf-only" shape the A1 flattening
+; substrate targets. In practice M27 `unbox` (SRA) already collapses this fully-static case to a
+; constant, so `flatten.rs` does not fire here (the genuine A1 win is the *recursive*/cross-function
+; escaping case, which needs whole-program layout — see docs/roadmap-post-m6.md A1). It is kept in the
+; corpus as a differential check that the nested-pair lowering stays bit-identical under every
+; fast-path flag (`BL_NO_FLATTEN` included).
+;
+;   cargo run -p blight-repl --features llvm -- build examples/flat_pair.bl -o flat_pair
+;   ./flat_pair      # prints 6  ((2 + 3) + 1)
+
+(load "std/nat.bl")
+(load "std/pair.bl")
+
+(define two Nat (Succ (Succ Zero)))
+(define three Nat (Succ (Succ (Succ Zero))))
+(define one Nat (Succ Zero))
+
+; The nested pair: outer = ((two, three), one). It escapes `built` (a top-level definition), but
+; every *use* below drills straight to a leaf — the inner pair is never read as a whole value.
+(define built (Pair (Pair Nat Nat) Nat) (mk-pair (mk-pair two three) one))
+
+(define main Nat
+  (plus
+    (plus (pair-fst Nat Nat (pair-fst (Pair Nat Nat) Nat built))
+      (pair-snd Nat Nat (pair-fst (Pair Nat Nat) Nat built)))
+    (pair-snd (Pair Nat Nat) Nat built)))

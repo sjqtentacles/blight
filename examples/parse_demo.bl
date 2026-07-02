@@ -1,0 +1,24 @@
+; parse_demo.bl — the self-hosted s-expression reader end-to-end (Grand Arc SH1, std/parser.bl).
+;
+; `main : (! Bytes Nat)` copies a literal source `String` into a runtime `Bytes` buffer (C3), tokenizes
+; it byte-by-byte, and parses the tokens into a surface `BSexp` AST — a tokenizer + parser written
+; entirely in `.bl`, the frontend of the self-hosting track. It then returns the number of ATOMS in
+; the parsed tree as a witness that parsing succeeded and produced the expected structure.
+;
+; The tokenizer is `(! Bytes …)` (it reads the buffer); effects are now MODELED at the type level by
+; the independent re-checker (not declined), so `--recheck` agrees on the whole program, tokenizer
+; included, exactly like `bytes_scratch.bl`/`paren_depth.bl`. The PURE stack-machine parser
+; (`parse-tokens` and friends) needs no effect row at all and is in the re-checker's fragment on that
+; basis too. The seed kernel type-checks the whole program and it compiles + runs natively under the
+; same top-level handler the `Console`/`FileIO`/`paren_depth` examples use.
+;
+; The source `"(a (b c) d)"` has four atoms — `a`, `b`, `c`, `d` — so `main` returns **4**.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/parse_demo.bl -o parse_demo
+;   ./parse_demo            # => 4
+
+(load "std/parser.bl")
+
+(define source String "(a (b c) d)")
+
+(define main (! Bytes Nat) (let ((m (parse-string source))) (count-atoms m)))

@@ -9,8 +9,8 @@
 ; bubbles a `Console` effect tree that the native top-level handler (`bl_run_console`) folds against
 ; real stdio, resuming the captured continuation with each line of input.
 ;
-; Effects sit outside the independent re-checker's fragment, so `--recheck` *declines* this program;
-; the seed kernel type-checks it and it compiles and runs natively.
+; Effects are now MODELED at the type level by the independent re-checker (not declined), so
+; `--recheck` AGREES with the seed kernel on this program; it compiles and runs natively.
 ;
 ;   cargo run -p blight-repl --features llvm -- build examples/game/guess.bl -o guess
 ;   printf 'cat\ndog\n' | ./guess
@@ -34,16 +34,17 @@
 ; recurse with one fewer attempt. `attempts` is the fuel; recursion descends on its immediate
 ; predecessor, so `play` is a terminating loop.
 (define-rec play (Pi ((attempts Nat)) (! Console Unit))
-  (lam (attempts) (match attempts
-    [(Zero) (perform print "out of guesses!\n")]
-    [(Succ k)
-      (let ((_ (perform print "guess: ")))
-        (let ((g (perform read tt)))
-          (console-if
-            (perform print "you win!\n")                       ; correct: stop
-            (let ((_ (perform print "nope, try again.\n")))    ; wrong: hint + recurse
-              (play k))
-            (string-eq g secret))))])))
+  (lam (attempts)
+    (match attempts [(Zero) (perform print "out of guesses!\n")]
+      [(Succ k)
+        (let ((_ (perform print "guess: ")))
+          (let ((g (perform read tt)))
+            (console-if
+              (perform print "you win!\n")  ; correct: stop
+              (let
+                ((_ (perform print "nope, try again.\n")))  ; wrong: hint + recurse
+                (play k))
+              (string-eq g secret))))])))
 
 ; Up to three attempts.
 (define main (! Console Unit) (play (Succ (Succ (Succ Zero)))))

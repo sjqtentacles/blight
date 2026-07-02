@@ -7,7 +7,7 @@
 
 (load "std/nat.bl")
 
-(define a Nat (Succ (Succ Zero)))                 ; 2
-(define b Nat (Succ (Succ (Succ (Succ (Succ Zero)))))) ; 5
+(define a Nat (Succ (Succ Zero)))  ; 2
+(define b Nat (Succ (Succ (Succ (Succ (Succ Zero))))))  ; 5
 
 (define main Nat (plus (min a b) (max a b)))

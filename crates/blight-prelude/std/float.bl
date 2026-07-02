@@ -1,0 +1,76 @@
+; std/float.bl — fixed-point rationals as an UNTRUSTED library `Float` (M23, zero TCB growth).
+;
+; The plan's headline constraint: give Blight floating-point-style arithmetic *without* growing the
+; trusted computing base. We deliberately do NOT add a kernel `FloatTy` or hardware-`double`
+; primitive (that would be trusted, like `Int`). Instead `Float` is ordinary inductive `Data` built
+; entirely from the existing trusted `Int` base type, so the kernel and the independent re-checker
+; only ever see a plain one-field constructor over `Int` — nothing new to trust.
+;
+; REPRESENTATION. A `Float` is a fixed-point rational with an implicit common scale of 10^6: the
+; single `Int` field holds the value multiplied by `SCALE = 1_000_000`. So the real number `x` is
+; represented as `round(x * 10^6)`, giving 6 decimal digits of fraction. Two `Float`s therefore share
+; one scale, which makes every operation exact `Int` arithmetic:
+;   - add/sub : add/subtract the scaled mantissas directly.
+;   - mul     : multiply mantissas (now scaled by 10^12) and divide back by 10^6.
+;   - div     : scale the numerator up by 10^6 first, then integer-divide.
+; This is a *genuinely computable, re-checkable reference semantics* — every `deftotal` here bottoms
+; out in the kernel's `Int` primitives through the spore re-check.
+;
+; THE POINT (see std/nat.bl for the same trick on `Nat`). The backend recognizer (M23b, recognize.rs)
+; fingerprints these exact wrapper shapes and rewrites them to O(1) hardware-`double` `bl_float_*`
+; helpers — so runtime arithmetic runs at machine-float speed while the *checked* meaning stays this
+; exact fixed-point rational. A differential fuzz test gates that the fast double path agrees with
+; this reference (within the representable fixed-point grid) over a wide range; a divergence fails the
+; build. A buggy recognizer can thus only ever produce a wrong number, never a false proof.
+;
+; UNTRUSTED tower code; loadable in isolation. Depends only on the trusted `Int` base (std/int.bl
+; names the same primitives but we use the kernel primitives directly here to stay dependency-light).
+
+; The implicit fixed-point scale, 10^6, as a plain `Int`. Six fractional decimal digits.
+(define float-scale Int (int 1000000))
+
+; A `Float` is a one-field wrapper over the scaled mantissa (value * 10^6). Inductive `Data`, so the
+; kernel sees nothing but a constructor over `Int`.
+(defdata Float () (mkfloat (mantissa Int)))
+
+; Project the scaled mantissa back out (the recognizer never needs this, but tower code and the
+; differential harness do).
+(deftotal float-mantissa (Pi ((x Float)) Int) (lam (x) (match x [(mkfloat m) m])))
+
+; Inject a whole `Int` as a `Float` (n.0): scale it up by 10^6.
+(deftotal float-of-int (Pi ((n Int)) Float) (lam (n) (mkfloat (int* n float-scale))))
+
+; Common constants.
+(define float-zero Float (mkfloat (int 0)))
+(define float-one Float (mkfloat (int 1000000)))
+
+; Addition: same scale, so add the mantissas directly.
+(deftotal float-add (Pi ((a Float) (b Float)) Float)
+  (lam (a b) (match a [(mkfloat x) (match b [(mkfloat y) (mkfloat (int+ x y))])])))
+
+; Subtraction: same scale, subtract the mantissas.
+(deftotal float-sub (Pi ((a Float) (b Float)) Float)
+  (lam (a b) (match a [(mkfloat x) (match b [(mkfloat y) (mkfloat (int- x y))])])))
+
+; Multiplication: (x/S)*(y/S) = (x*y)/S^2, so divide the product back down by one scale factor.
+(deftotal float-mul (Pi ((a Float) (b Float)) Float)
+  (lam (a b) (match a [(mkfloat x) (match b [(mkfloat y) (mkfloat (int/ (int* x y) float-scale))])])))
+
+; Division: (x/S)/(y/S) = x/y, but we want the result scaled, so compute (x*S)/y.
+(deftotal float-div (Pi ((a Float) (b Float)) Float)
+  (lam (a b) (match a [(mkfloat x) (match b [(mkfloat y) (mkfloat (int/ (int* x float-scale) y))])])))
+
+; Equality flag (`1`/`0`, an `Int` — `Float` has no `Bool` bridge, mirroring std/int.bl): the
+; mantissas are equal iff the fixed-point values are.
+(deftotal float-eq (Pi ((a Float) (b Float)) Int)
+  (lam (a b) (match a [(mkfloat x) (match b [(mkfloat y) (int= x y)])])))
+
+; Strict-less-than flag (`1`/`0`): the scaled mantissas order exactly as the values do.
+(deftotal float-lt (Pi ((a Float) (b Float)) Int)
+  (lam (a b) (match a [(mkfloat x) (match b [(mkfloat y) (int< x y)])])))
+
+; Negation and doubling, showing the wrappers compose like any other function.
+(deftotal float-neg (Pi ((a Float)) Float)
+  (lam (a) (match a [(mkfloat x) (mkfloat (int- (int 0) x))])))
+
+(deftotal float-double (Pi ((a Float)) Float) (lam (a) (float-add a a)))

@@ -1,0 +1,179 @@
+; std/parser.bl — a self-hosted s-expression reader (Grand Arc SH1: the `.bl` parser).
+;
+; UNTRUSTED tower code, written entirely in Blight. This is the frontend of the self-hosting track:
+; over C3's `std/lexer.bl` byte scanner it tokenizes a source buffer and parses it into a surface
+; `BSexp` AST (the "BSurf" the later `belaborate`/`bcompile` stages consume). Zero kernel growth —
+; everything stays in the established inductive + effect fragment.
+;
+; Pipeline (mirrors std/lexer.bl):
+;   read-file/string->bytes (C1/C3) : source text -> a runtime `Bytes` buffer
+;   tokenize                (here)   : the buffer    -> a `List Token`   (effectful, O(1) byte reads)
+;   parse-tokens            (here)   : the tokens    -> a `Maybe BSexp`  (PURE, total, re-checkable)
+;
+; The two halves are deliberately split by the effect boundary:
+;   * `tokenize` walks the byte buffer with O(1) `get-byte` reads, recursing on a structural `Nat`
+;     FUEL (the buffer length, descending) while the index ascends as data and the in-progress atom's
+;     bytes ride along as a TRAILING accumulator — exactly `std/lexer.bl`'s `scan-depth` shape. It is
+;     `(! Bytes …)` and so is *declined* (not rejected) by the independent re-checker.
+;   * `parse-tokens` is a **pure, total, structural** stack machine over the token-list spine: one
+;     token consumed per step, the parser state threaded as a trailing accumulator (the `reverse-onto`
+;     shape). No fuel, no `later` — it is in the re-checker's fragment, so the second checker
+;     re-verifies it (`Ok`), not merely declines it. Nested lists are handled by an explicit frame
+;     STACK rather than mutual `parse-sexp`/`parse-list` recursion.
+;
+;     NOTE (MR milestone): Blight now *has* mutual recursion (the `(mutual …)` form; see
+;     examples/mutual_even_odd.bl). It is deliberately NOT used here. A recursive-descent
+;     `parse-sexp`/`parse-list` pair over a flat token list is inherently *non-structural* — parsing a
+;     nested sub-form returns an arbitrary token suffix, not a structural sub-term of the input — so a
+;     mutual rewrite would fall to the partial `Delay` lane and be *declined* by the re-checker. The
+;     explicit-stack machine below stays total, structural, and re-verified `Ok`; that is strictly
+;     stronger, so it is kept. (`(mutual …)` shines for structurally-decreasing groups such as
+;     `even?`/`odd?`, where it compiles to a single kernel `Elim`.)
+
+(load "std/lexer.bl")  ; byte-lparen, byte-rparen, is-space, string->bytes (transitively: bytes, string, nat, list-of-nat helpers)
+(load "std/list.bl")  ; List, cons/nil, append, reverse, foldr
+(load "std/maybe.bl")  ; Maybe, just/nothing
+
+; ── Surface syntax ────────────────────────────────────────────────────────────────────────────────
+; A token: an open paren, a close paren, or an atom carrying its raw bytes (a symbol or number; the
+; later elaborator interprets the bytes). Whitespace produces no token.
+(defdata Token () (tok-lparen) (tok-rparen) (tok-atom (bytes (List Nat))))
+
+; The surface AST ("BSurf"): an s-expression is an atom, the empty list, or a cons cell. A list
+; `(a b c)` is the right-nested chain `(s-cons a (s-cons b (s-cons c s-nil)))`. This Lisp-style
+; cons-cell encoding keeps `BSexp` *directly* recursive (each field is a `BSexp`, like a binary tree —
+; trivially strictly positive), sidestepping any `List BSexp` positivity question.
+(defdata BSexp () (s-atom (bytes (List Nat))) (s-nil) (s-cons (head BSexp) (rest BSexp)))
+
+; ── Tokenizer (effectful: walks the `Bytes` buffer) ─────────────────────────────────────────────────
+; A byte is a token delimiter if it is whitespace or a paren.
+(deftotal is-delim (Pi ((b Nat)) Bool)
+  (lam (b) (or (is-space b) (or (nat-eq b byte-lparen) (nat-eq b byte-rparen)))))
+
+; The accumulator update for one scanned byte: a delimiter ends the current atom (reset to empty); an
+; atom byte is pushed onto the (reversed) in-progress atom.
+(deftotal step-acc (Pi ((b Nat) (acc (List Nat))) (List Nat))
+  (lam (b acc) (match (is-delim b) [(true) nil] [(false) (cons b acc)])))
+
+; Flush a (reversed) in-progress atom accumulator to a token list: the empty accumulator yields no
+; token; a nonempty one yields a single `tok-atom` carrying the bytes restored to source order.
+(deftotal flush (Pi ((acc (List Nat))) (List Token))
+  (lam (acc) (match acc [(nil) nil] [(cons x xs) (cons (tok-atom (reverse Nat acc)) nil)])))
+
+; The paren token a delimiter byte itself contributes (whitespace contributes none).
+(deftotal paren-tok (Pi ((b Nat)) (List Token))
+  (lam (b)
+    (match (nat-eq b byte-lparen) [(true) (cons tok-lparen nil)]
+      [(false) (match (nat-eq b byte-rparen) [(true) (cons tok-rparen nil)] [(false) nil])])))
+
+; The tokens completed AT this byte: a delimiter flushes the pending atom and then emits its own paren
+; (if any); an atom byte completes nothing yet (it extends the accumulator instead).
+(deftotal step-emit (Pi ((b Nat) (acc (List Nat))) (List Token))
+  (lam (b acc) (match (is-delim b) [(true) (append Token (flush acc) (paren-tok b))] [(false) nil])))
+
+; `tok-go fuel h i acc` scans buffer `h` from index `i` for at most `fuel` more bytes, with `acc` the
+; reversed bytes of the atom currently being built, and returns the token list. Structural recursion
+; on `fuel` (leading scrutinee); `h`/`i`/`acc` are trailing accumulators (the effectful-recursor shape
+; `std/lexer.bl` documents). At `Zero` it flushes any final atom — a pure `List Token` accepted as
+; `(! Bytes (List Token))` by the empty-row-≤-any-row subsumption (`scan-depth`'s `Zero` arm).
+(define-rec tok-go (Pi ((fuel Nat) (h Int) (i Nat) (acc (List Nat))) (! Bytes (List Token)))
+  (lam (fuel h i acc)
+    (match fuel [(Zero) (flush acc)]
+      [(Succ rest)
+        (let ((b (perform get-byte (mk-pair h i))))
+          (let ((toks-rest (tok-go rest h (Succ i) (step-acc b acc))))
+            (append Token (step-emit b acc) toks-rest)))])))
+
+; `tokenize h n` reads the whole `n`-byte buffer `h` into a token list.
+(define tokenize (Pi ((h Int) (n Nat)) (! Bytes (List Token))) (lam (h n) (tok-go n h Zero nil)))
+
+; ── Parser (pure, total, structural over the token spine) ───────────────────────────────────────────
+; Build a list of `BSexp` items (in source order) into the right-nested s-expression list.
+(deftotal list->sexp (Pi ((items (List BSexp))) BSexp)
+  (lam (items) (foldr BSexp BSexp (lam (x acc) (s-cons x acc)) s-nil items)))
+
+; The parser state: an `ok` flag (sticky: once false it stays false) plus a STACK of frames. Each
+; frame is the reversed list of completed `BSexp`s of one open list; the bottom (root) frame collects
+; the top-level forms. Using an explicit stack — instead of mutual `parse-sexp`/`parse-list` recursion
+; the structural checker cannot express — is what keeps the whole parser a single structural loop.
+(defdata PState () (pstate (ok Bool) (stk (List (List BSexp)))))
+
+(define pstate-error PState (pstate false nil))
+
+; Push a completed atom onto the top (innermost) frame.
+(deftotal push-atom (Pi ((bs (List Nat)) (stk (List (List BSexp)))) PState)
+  (lam (bs stk)
+    (match stk
+      [(nil) pstate-error]  ; atom with no open frame
+      [(cons top rest) (pstate true (cons (cons (s-atom bs) top) rest))])))
+
+; Close the top frame: turn its items into an s-list and add it to the parent frame. Closing when only
+; the root frame is open is an unbalanced `)` — an error.
+(deftotal close-frame (Pi ((stk (List (List BSexp)))) PState)
+  (lam (stk)
+    (match stk [(nil) pstate-error]
+      [(cons top rest)
+        (match rest
+          [(nil) pstate-error]  ; can't close the root frame
+          [(cons top2 rest2) (pstate true (cons (cons (list->sexp (reverse BSexp top)) top2) rest2))])])))
+
+; The state transition for one token (a no-op once in the error state).
+(deftotal next-state (Pi ((t Token) (st PState)) PState)
+  (lam (t st)
+    (match st
+      [(pstate ok stk)
+        (match ok [(false) pstate-error]
+          [(true)
+            (match t
+              [(tok-lparen) (pstate true (cons nil stk))]  ; open a fresh frame
+              [(tok-rparen) (close-frame stk)]
+              [(tok-atom bs) (push-atom bs stk)])])])))
+
+; The main loop: consume one token per step, threading the state. Structural recursion on the token
+; list spine (the `reverse-onto` accumulator shape) — total and inside the re-checker's fragment.
+(deftotal parse-go (Pi ((toks (List Token)) (st PState)) PState)
+  (lam (toks st) (match toks [(nil) st] [(cons t rest) (parse-go rest (next-state t st))])))
+
+; The initial state: a single empty root frame.
+(define parse-init PState (pstate true (cons nil nil)))
+
+; Read the final state: success iff still `ok` and the root frame holds exactly one top-level form.
+(deftotal finish (Pi ((st PState)) (Maybe BSexp))
+  (lam (st)
+    (match st
+      [(pstate ok stk)
+        (match ok [(false) nothing]
+          [(true)
+            (match stk [(nil) nothing]
+              [(cons top rest)
+                (match rest
+                  [(cons a b) nothing]  ; an unclosed '(' left extra frames
+                  [(nil)
+                    (match top
+                      [(nil) nothing]  ; no form at all
+                      [(cons x xs)
+                        (match xs
+                          [(cons y ys) nothing]  ; more than one top-level form
+                          [(nil) (just x)])])])])])])))
+
+; `parse-tokens toks` parses a single top-level s-expression from `toks`.
+(deftotal parse-tokens (Pi ((toks (List Token))) (Maybe BSexp))
+  (lam (toks) (finish (parse-go toks parse-init))))
+
+; ── End-to-end: parse a source `String` ─────────────────────────────────────────────────────────────
+; Copy `s` into a `Bytes` buffer (C3), tokenize it, then parse. The pure `parse-tokens` result is
+; lifted into `(! Bytes …)` by subsumption (the `string->bytes` pattern in std/lexer.bl).
+(define parse-string (Pi ((s String)) (! Bytes (Maybe BSexp)))
+  (lam (s)
+    (let ((h (string->bytes s)))
+      (let ((n (perform bytes-len h))) (let ((toks (tokenize h n))) (parse-tokens toks))))))
+
+; ── A measure over the parsed AST (for demos/tests): the number of atoms ────────────────────────────
+(deftotal sexp-atoms (Pi ((e BSexp)) Nat)
+  (lam (e)
+    (match e [(s-atom bs) (Succ Zero)] [(s-nil) Zero]
+      [(s-cons head rest) (plus (sexp-atoms head) (sexp-atoms rest))])))
+
+; `count-atoms m` : the atom count of a parse result (0 on parse failure).
+(deftotal count-atoms (Pi ((m (Maybe BSexp))) Nat)
+  (lam (m) (match m [(nothing) Zero] [(just e) (sexp-atoms e)])))
