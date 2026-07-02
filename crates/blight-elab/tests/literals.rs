@@ -18,7 +18,6 @@ const NAT: &str = "(defdata Nat () (Zero) (Succ (n Nat)))\n";
 
 /// A bare decimal atom parses to `Surface::NatLit`, not `Surface::Var`.
 #[test]
-#[ignore = "E1 red: bare-decimal detection in parse_surface lands in the next commit"]
 fn bare_decimal_parses_as_nat_literal() {
     let s = parse_surface(&sexpr("3")).expect("`3` parses");
     assert_eq!(s, Surface::NatLit(3));
@@ -28,7 +27,6 @@ fn bare_decimal_parses_as_nat_literal() {
 
 /// A decimal literal elaborates and kernel-checks as the `Succ`-chain it abbreviates.
 #[test]
-#[ignore = "E1 red: bare-decimal detection in parse_surface lands in the next commit"]
 fn decimal_elaborates_and_checks_against_nat() {
     let mut env = ElabEnv::new();
     let mut prog = Program::new(&mut env);
@@ -41,7 +39,6 @@ fn decimal_elaborates_and_checks_against_nat() {
 /// A decimal in an *index* position (not just a bare term) checks — e.g. `Vec Nat 3` — exercising
 /// literal sugar inside a dependent type, not only at the top level.
 #[test]
-#[ignore = "E1 red: bare-decimal detection in parse_surface lands in the next commit"]
 fn decimal_in_defdata_index_position_checks() {
     let mut env = ElabEnv::new();
     let mut prog = Program::new(&mut env);

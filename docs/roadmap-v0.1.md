@@ -48,7 +48,7 @@ Ordering within the arc: E1 → E2 → E3 → E5 → E6 → E4 → E7 → E8. Li
 readability; E3's coverage pass is a dependency of E5's equation coverage; E6 builds on E5's
 desugaring path; E7/E8 sweep last, once messages and formatting are stable.
 
-### [ ] E1 — Numeric literals
+### [x] E1 — Numeric literals
 
 Bare decimal atoms parse as literals via a new `Surface::NatLit(u64)` variant (not immediate
 Succ-chain expansion at parse time), elaborated to the existing `nat_to_surface` chain. v1 rule:

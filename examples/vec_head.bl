@@ -9,9 +9,9 @@
 (load "std/nat.bl")
 (load "std/vec.bl")
 
-(define one Nat (Succ Zero))
-(define two Nat (Succ (Succ Zero)))
-(define three Nat (Succ (Succ (Succ Zero))))
+(define one Nat 1)
+(define two Nat 2)
+(define three Nat 3)
 
 ; [a, b, c] : Vec Nat 3. `vcons` takes (tail-length, element, tail), so the tail lengths count
 ; down 2, 1, 0 as the spine shrinks (matching `containers.bl`).

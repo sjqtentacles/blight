@@ -9,7 +9,6 @@ use blight_elab::{pretty_concl, ElabEnv, Outcome, Program};
 const NAT: &str = "(defdata Nat () (Zero) (Succ (n Nat)))\n";
 
 #[test]
-#[ignore = "E1 red: bare-decimal detection in parse_surface lands in the next commit"]
 fn repl_prints_canonical_nat_as_decimal() {
     let mut env = ElabEnv::new();
     let mut prog = Program::new(&mut env);

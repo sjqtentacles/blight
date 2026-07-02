@@ -7,9 +7,9 @@
 
 (load "std/list.bl")
 
-(define one Nat (Succ Zero))
-(define two Nat (Succ (Succ Zero)))
-(define three Nat (Succ (Succ (Succ Zero))))
+(define one Nat 1)
+(define two Nat 2)
+(define three Nat 3)
 
 ; [1, 2, 3] : List Nat
 (define sample (List Nat) (cons one (cons two (cons three nil))))

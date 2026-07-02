@@ -209,6 +209,7 @@ fn kernel_normal_form_matches_intended_value() {
         ("list_sum.bl", example("list_sum.bl"), "6".into()),
         ("fib.bl", example("fib.bl"), "13".into()),
         ("minmax.bl", example("minmax.bl"), "7".into()),
+        ("vec_head.bl", example("vec_head.bl"), "3".into()),
         (
             "either_compute.bl",
             example("either_compute.bl"),

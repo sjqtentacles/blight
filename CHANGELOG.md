@@ -8,6 +8,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **v0.1 roadmap arc E, milestone E1 (numeric literals):** a bare decimal atom (`3`) in term
+  position is now `Nat` sugar for `(Succ (Succ (Succ Zero)))` — elaborator-only (`Surface::NatLit`),
+  no reader or kernel changes. The pretty-printer re-sugars canonical `Nat` numerals back to
+  decimal in REPL/diagnostic output. See [docs/roadmap-v0.1.md](docs/roadmap-v0.1.md).
 - Top-level `README.md`, dual `LICENSE-MIT` / `LICENSE-APACHE`, `CONTRIBUTING.md`, this changelog,
   and a curated [`examples/`](examples/) tree (including the first checked-in `spore.toml` package).
 - GitHub CI workflow and issue/PR templates.

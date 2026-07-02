@@ -482,7 +482,18 @@ pub fn parse_surface(s: &Sexpr) -> Result<Surface, ElabError> {
             if a == "Int" {
                 return Ok(Surface::IntTy);
             }
-            // TODO(E1 red): bare-decimal-numeral detection lands in the next commit.
+            // A bare decimal numeral (E1) — `Nat` sugar. Recognized only when every character is
+            // an ASCII digit, so `x2`/`2x`/`-5` all stay ordinary symbols (the last elaborates to
+            // a clean "unbound variable" error, not a numeral). NOTE: a binder grade slot `(x A 0)`
+            // is parsed through this very function (`parse_one_binder` calls `parse_surface` on
+            // the grade position), so `0`/`1` there now arrive as `Surface::NatLit` rather than
+            // `Surface::Var` — `parse_grade` below matches both forms so grade literals keep their
+            // grade meaning rather than being read as `Nat` values.
+            if !a.is_empty() && a.bytes().all(|b| b.is_ascii_digit()) {
+                if let Ok(n) = a.parse::<u64>() {
+                    return Ok(Surface::NatLit(n));
+                }
+            }
             Ok(Surface::Var(a.clone()))
         }
         Sexpr::List(items) => parse_list(items),
@@ -2660,12 +2671,19 @@ fn term_mentions_var(t: &Term, k: usize) -> bool {
 /// Translate a surface binder grade into a kernel [`Grade`] (spec §3.2 surface syntax §5):
 /// `0` ⟼ erased, `1` ⟼ linear, absent or `omega`/`w` ⟼ unrestricted. Any other token is a
 /// (caught) user error rather than a silent default.
-// TODO(E1 red): once bare-decimal detection lands, this must also match `Surface::NatLit(0|1)` —
-// see the hazard noted in the E1 milestone (docs/roadmap-v0.1.md).
+///
+/// `0`/`1` in a grade slot arrive as `Surface::NatLit` (E1's bare-decimal sugar parses through the
+/// same `parse_surface` used for the grade position), not `Surface::Var` — matched here so a
+/// grade literal keeps meaning a grade, never a `Nat` value.
 fn parse_grade(grade: Option<&Surface>) -> Result<blight_kernel::Grade, ElabError> {
     use blight_kernel::Grade;
     match grade {
         None => Ok(Grade::Omega),
+        Some(Surface::NatLit(0)) => Ok(Grade::Zero),
+        Some(Surface::NatLit(1)) => Ok(Grade::One),
+        Some(Surface::NatLit(other)) => Err(ElabError::BadForm(format!(
+            "binder grade must be 0, 1, or omega; got `{other}`"
+        ))),
         Some(Surface::Var(s)) => match s.as_str() {
             "0" => Ok(Grade::Zero),
             "1" => Ok(Grade::One),

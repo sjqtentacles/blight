@@ -62,9 +62,9 @@ argument (from [std/nat.bl](crates/blight-prelude/std/nat.bl)):
 
 ```scheme
 (load "std/nat.bl")
-(define two   Nat (Succ (Succ Zero)))
-(define three Nat (Succ (Succ (Succ Zero))))
-(define main  Nat (plus (mult two three) (Succ Zero)))
+(define two   Nat 2)
+(define three Nat 3)
+(define main  Nat (plus (mult two three) 1))
 ```
 
 ```bash
