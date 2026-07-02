@@ -37,6 +37,7 @@ syntax, and compiles checked terms to native (or WebAssembly) code.
 - Performance: [docs/performance.md](docs/performance.md) — cost model, benchmarks, advantages/disadvantages.
 - Benchmarks game: [docs/benchmarks-game.md](docs/benchmarks-game.md) — scaling tables + a measured cross-language table (fib/sum/factorial vs C/Rust/OCaml/Haskell/Python) where Blight-Int lands in the C/Rust/OCaml cluster.
 - Roadmap: [docs/roadmap.md](docs/roadmap.md) — can we build games / be fast / do I/O, and what each costs the trusted kernel.
+- v0.1 program: [docs/roadmap-v0.1.md](docs/roadmap-v0.1.md) — the forward roadmap (ergonomics, self-hosting Stage-1, proof track, release), red-commit-first TDD per milestone.
 - Examples: [examples/](examples/) — small runnable programs and a sample package.
 
 ## Blight in 60 seconds

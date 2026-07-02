@@ -776,6 +776,8 @@ both closes the gap the informal metatheory notes could previously only sketch i
 
 ## Cross-references
 
+- **Forward roadmap (what comes next)**: [docs/roadmap-v0.1.md](roadmap-v0.1.md) — the v0.1
+  program: ergonomics sweep, self-hosting Stage-1, proof-track continuation, and release.
 - M0–M6 tables: [docs/implementation.md](implementation.md) §"Milestones" and spec §9.
 - Capability axis (TCB vs tower): [docs/roadmap.md](roadmap.md).
 - Soundness-corner evidence: [docs/metatheory.md](metatheory.md).
