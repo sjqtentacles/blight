@@ -40,6 +40,12 @@ pub struct Clause {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Surface {
     Var(String),
+    /// A bare decimal numeral `42` in term position — sugar for the unary `Nat` numeral
+    /// `(Succ (Succ … Zero))`, `n` deep (spec §5, ergonomics arc E1). Kept as its own variant
+    /// (rather than expanding eagerly at parse time) so binder-grade parsing — which matches
+    /// `Surface::Var("0"|"1"|"omega")` — is unaffected: a grade slot's `0`/`1` still denotes the
+    /// erased/linear grade literal, not a `Nat` value. See `elab::parse_grade`.
+    NatLit(u64),
     /// `(the T e)` — type ascription (the `check` entry point).
     The(Box<Surface>, Box<Surface>),
     /// `(lam (x ...) body)`.

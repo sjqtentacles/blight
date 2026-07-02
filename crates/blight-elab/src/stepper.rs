@@ -26,7 +26,7 @@
 //! [`StepOutcome::BudgetExceeded`] instead of hanging the REPL.
 
 use crate::elab::{elaborate, parse_surface};
-use crate::pretty::pretty_term;
+use crate::pretty::{nat_value, pretty_term};
 use crate::sexpr::read_one;
 use crate::ElabEnv;
 use blight_kernel::normalize::{eval, quote, run_metered};
@@ -117,6 +117,14 @@ pub fn trace(env: &ElabEnv, expr_src: &str, budget: u64) -> Result<StepTrace, St
 fn pretty_folding_globals(env: &ElabEnv, term: &Term) -> String {
     if let Some(name) = fold_whole_term(env, term) {
         return name;
+    }
+    // E1: a canonical `Nat` numeral (a `Succ`-chain ending in `Zero`) re-sugars to decimal via
+    // `pretty_term`, same as the top-level renderer — checked before the generic non-empty-`Con`
+    // case below, which would otherwise recurse per-`Succ` and print e.g. `(Succ 0)` instead of
+    // `1` (only the innermost nullary `Zero` is itself a `Term::Con` with empty args, so it alone
+    // would hit `pretty_term`'s re-sugaring while the outer `Succ` shell would not).
+    if nat_value(term).is_some() {
+        return pretty_term(term);
     }
     match term {
         Term::App(..) => {
@@ -245,12 +253,10 @@ mod tests {
             "only argument 1 has a visible reduction: {t:?}"
         );
         assert_eq!(t.steps[0].label, "argument 1");
-        assert_eq!(t.steps[0].before, "(plus Zero (Succ Zero))");
-        assert_eq!(t.steps[0].after, "(Succ Zero)");
-        assert_eq!(
-            t.outcome,
-            StepOutcome::NormalForm("(Succ (Succ (Succ Zero)))".to_string())
-        );
+        // E1: canonical Nat numerals re-sugar to decimal in pretty-printed output.
+        assert_eq!(t.steps[0].before, "(plus 0 1)");
+        assert_eq!(t.steps[0].after, "1");
+        assert_eq!(t.outcome, StepOutcome::NormalForm("3".to_string()));
     }
 
     #[test]
@@ -258,10 +264,7 @@ mod tests {
         let env = env_with_nat();
         let t = trace(&env, "(Succ Zero)", DEFAULT_STEP_BUDGET).expect("traces");
         assert!(t.steps.is_empty());
-        assert_eq!(
-            t.outcome,
-            StepOutcome::NormalForm("(Succ Zero)".to_string())
-        );
+        assert_eq!(t.outcome, StepOutcome::NormalForm("1".to_string()));
     }
 
     #[test]

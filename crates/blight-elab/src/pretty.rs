@@ -18,6 +18,28 @@ pub fn pretty_term(term: &Term) -> String {
     p.term(term)
 }
 
+/// Recognize a canonical `Nat` term — a chain of `Succ` applications ending in `Zero` — and
+/// return its decimal value (E1). Iterative (not recursive) so printing a large unary numeral
+/// cannot add stack depth proportional to its value. Matches by constructor *name* only (core
+/// `Term::Con` carries no data-type tag), the same heuristic the reader's char-literal desugaring
+/// already relies on; a user-defined type that happens to name its constructors `Zero`/`Succ`
+/// would print as a decimal too, which is the accepted trade-off for readable `Nat` output.
+/// Returns `None` for anything else, which falls back to the general `Con` printer.
+pub(crate) fn nat_value(t: &Term) -> Option<u64> {
+    let mut cur = t;
+    let mut n: u64 = 0;
+    loop {
+        match cur {
+            Term::Con(c, args) if c.0 == "Zero" && args.is_empty() => return Some(n),
+            Term::Con(c, args) if c.0 == "Succ" && args.len() == 1 => {
+                n = n.checked_add(1)?;
+                cur = &args[0];
+            }
+            _ => return None,
+        }
+    }
+}
+
 /// Pretty-print a proof's conclusion, e.g. `⊢ (lam (x) x) : (Pi ((x A)) A)`.
 pub fn pretty_concl(proof: &Proof) -> String {
     match proof.concl() {
@@ -153,7 +175,11 @@ impl Printer {
                 }
             }
             Term::Con(c, args) => {
-                if args.is_empty() {
+                // E1: re-sugar a canonical `Nat` numeral (a `Succ`-chain ending in `Zero`) back to
+                // decimal, so REPL/diagnostic output round-trips with the surface literal syntax.
+                if let Some(n) = nat_value(t) {
+                    n.to_string()
+                } else if args.is_empty() {
                     Self::con_name(c).to_string()
                 } else {
                     let mut parts = vec![Self::con_name(c).to_string()];
@@ -296,10 +322,42 @@ mod tests {
     fn prints_data_and_con() {
         let nat = Term::Data(DataName("Nat".into()), vec![], vec![]);
         assert_eq!(pretty_term(&nat), "Nat");
-        let two = Term::Con(
+    }
+
+    /// E1: a canonical `Nat` numeral re-sugars to decimal, not the raw `Succ`-chain — the
+    /// pretty-printer half of the literal round-trip (parse `1` -> `Succ Zero` -> print `1`).
+    #[test]
+    fn prints_canonical_nat_as_decimal() {
+        let zero = Term::Con(ConName("Zero".into()), vec![]);
+        assert_eq!(pretty_term(&zero), "0");
+        let one = Term::Con(ConName("Succ".into()), vec![zero.clone()]);
+        assert_eq!(pretty_term(&one), "1");
+        let three = Term::Con(
             ConName("Succ".into()),
-            vec![Term::Con(ConName("Zero".into()), vec![])],
+            vec![Term::Con(ConName("Succ".into()), vec![one.clone()])],
         );
-        assert_eq!(pretty_term(&two), "(Succ Zero)");
+        assert_eq!(pretty_term(&three), "3");
+    }
+
+    /// A `Succ`/`Zero`-shaped `Con` that is *not* a canonical chain (wrong arity, or an
+    /// unrelated constructor) still falls back to the general s-expression printer.
+    #[test]
+    fn non_canonical_con_falls_back_to_sexpr_printing() {
+        let two_args = Term::Con(
+            ConName("Succ".into()),
+            vec![
+                Term::Con(ConName("Zero".into()), vec![]),
+                Term::Con(ConName("Zero".into()), vec![]),
+            ],
+        );
+        assert_eq!(pretty_term(&two_args), "(Succ 0 0)");
+        let cons = Term::Con(
+            ConName("cons".into()),
+            vec![
+                Term::Con(ConName("Zero".into()), vec![]),
+                Term::Con(ConName("nil".into()), vec![]),
+            ],
+        );
+        assert_eq!(pretty_term(&cons), "(cons 0 nil)");
     }
 }

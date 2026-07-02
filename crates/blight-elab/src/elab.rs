@@ -482,6 +482,7 @@ pub fn parse_surface(s: &Sexpr) -> Result<Surface, ElabError> {
             if a == "Int" {
                 return Ok(Surface::IntTy);
             }
+            // TODO(E1 red): bare-decimal-numeral detection lands in the next commit.
             Ok(Surface::Var(a.clone()))
         }
         Sexpr::List(items) => parse_list(items),
@@ -1743,6 +1744,13 @@ fn elab(
 ) -> Result<Term, ElabError> {
     use blight_kernel::ConName;
     match term {
+        Surface::NatLit(n) => {
+            // Sugar: `(Succ (Succ … Zero))`, `n` deep — elaborate exactly as if the user had
+            // written the expansion by hand (E1). Delegating to `nat_to_surface` keeps this a
+            // single source of truth with the char/string literal desugarings above, which build
+            // the same chain.
+            elab(env, scope, &nat_to_surface(*n), expected)
+        }
         Surface::Var(name) => {
             // 1) a bound term variable (exact match — hygiene marks are significant for locals).
             if let Some(i) = scope.var_index(name) {
@@ -2652,6 +2660,8 @@ fn term_mentions_var(t: &Term, k: usize) -> bool {
 /// Translate a surface binder grade into a kernel [`Grade`] (spec §3.2 surface syntax §5):
 /// `0` ⟼ erased, `1` ⟼ linear, absent or `omega`/`w` ⟼ unrestricted. Any other token is a
 /// (caught) user error rather than a silent default.
+// TODO(E1 red): once bare-decimal detection lands, this must also match `Surface::NatLit(0|1)` —
+// see the hazard noted in the E1 milestone (docs/roadmap-v0.1.md).
 fn parse_grade(grade: Option<&Surface>) -> Result<blight_kernel::Grade, ElabError> {
     use blight_kernel::Grade;
     match grade {
@@ -2999,7 +3009,7 @@ fn collect_escaping_vars(
             }
         }
         // Leaves with no variable sub-terms.
-        Univ(_) | IntTy | IntLit(_) => {}
+        Univ(_) | IntTy | IntLit(_) | NatLit(_) => {}
     }
 }
 

@@ -1582,7 +1582,8 @@ mod tests {
             "turnstile in conclusion: {}",
             msgs[0]
         );
-        assert!(msgs[0].contains("(Succ Zero)"), "pretty term: {}", msgs[0]);
+        // E1: a canonical Nat numeral re-sugars to decimal in pretty-printed output.
+        assert!(msgs[0].contains('1'), "pretty term: {}", msgs[0]);
         assert!(!msgs[0].contains("Con("), "no Debug leakage: {}", msgs[0]);
     }
 
