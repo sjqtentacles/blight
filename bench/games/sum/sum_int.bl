@@ -11,9 +11,7 @@
 (load "std/nat.bl")
 
 (deftotal sum-go (Pi ((fuel Nat) (i Int) (acc Int)) Int)
-  (lam (fuel i acc) (match fuel
-    [(Zero) acc]
-    [(Succ f) (sum-go f (int+ i (int 1)) (int+ acc i))])))
+  (lam (fuel i acc) (match fuel [(Zero) acc] [(Succ f) (sum-go f (int+ i (int 1)) (int+ acc i))])))
 
 (define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
 (define hundred Nat (mult ten ten))

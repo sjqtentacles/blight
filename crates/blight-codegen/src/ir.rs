@@ -39,6 +39,66 @@ pub enum Alloc {
     Arena,
 }
 
+/// One logical field of a flattened product ([`Cir::Flat`], A1). A flattened object lays its fields
+/// out as a flat array of pointer slots; this descriptor records, per *logical* field, how many
+/// runtime slots it occupies and (for an inlined sub-product) its shape so a projection can
+/// re-materialize it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FlatField {
+    /// An ordinary single-pointer field: occupies exactly one runtime slot holding this value.
+    Leaf(Box<Cir>),
+    /// An inlined sub-product whose own slots are spliced contiguously into the parent object (so it
+    /// is NOT separately allocated). `tag` is `Some(con)` for a constructor child or `None` for a
+    /// tuple child; `slots` are the child's already-flattened slot values (each a [`FlatField`]),
+    /// width = the sum of their widths. Projecting this logical field re-boxes a `tag`/tuple object
+    /// from these slots, identical to the original nested product.
+    Nested {
+        tag: Option<ConName>,
+        slots: Vec<FlatField>,
+    },
+}
+
+impl FlatField {
+    /// The number of runtime pointer slots this logical field occupies (1 for a `Leaf`, the sum of
+    /// the nested slots' widths for a `Nested`).
+    pub fn width(&self) -> usize {
+        match self {
+            FlatField::Leaf(_) => 1,
+            FlatField::Nested { slots, .. } => slots.iter().map(FlatField::width).sum(),
+        }
+    }
+
+    /// Map a `Cir → Cir` transform over every embedded `Cir` in this field (a leaf's value, or every
+    /// slot of an inlined sub-product), preserving the field's shape. Since `Flat`/`FlatProj` bind no
+    /// variables, every embedded `Cir` sits at the *same* de Bruijn depth as the enclosing flattened
+    /// node, so a de Bruijn shift/subst can apply `f` uniformly without changing depth. (A1)
+    pub fn map_cir(&self, mut f: impl FnMut(&Cir) -> Cir) -> FlatField {
+        self.map_cir_ref(&mut f)
+    }
+
+    fn map_cir_ref(&self, f: &mut impl FnMut(&Cir) -> Cir) -> FlatField {
+        match self {
+            FlatField::Leaf(c) => FlatField::Leaf(Box::new(f(c))),
+            FlatField::Nested { tag, slots } => FlatField::Nested {
+                tag: tag.clone(),
+                slots: slots.iter().map(|s| s.map_cir_ref(f)).collect(),
+            },
+        }
+    }
+
+    /// Run a predicate/visitor over every embedded `Cir` in this field, short-circuiting on `true`.
+    pub fn any_cir(&self, mut f: impl FnMut(&Cir) -> bool) -> bool {
+        self.any_cir_ref(&mut f)
+    }
+
+    fn any_cir_ref(&self, f: &mut impl FnMut(&Cir) -> bool) -> bool {
+        match self {
+            FlatField::Leaf(c) => f(c),
+            FlatField::Nested { slots, .. } => slots.iter().any(|s| s.any_cir_ref(f)),
+        }
+    }
+}
+
 /// The backend IR: an untyped functional core (spec §7.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cir {
@@ -78,6 +138,40 @@ pub enum Cir {
     Tuple(Vec<Cir>, Alloc),
     /// `Proj i e` — project the `i`-th component of a tuple (the rep of `Fst`/`Snd`).
     Proj(usize, Box<Cir>),
+
+    // ---- flattened (escaping-product) layout (A1, flatten.rs) ----
+    /// A *flattened* constructor/tuple value: the runtime allocates ONE object whose pointer slots
+    /// are the concatenation of each logical field's `slots`, instead of one box per nested product.
+    /// Produced ONLY by [`crate::flatten`] (post-unbox, pre-region), gated by `BL_NO_FLATTEN`.
+    ///
+    /// Each [`FlatField`] is either a single pointer slot (a `Leaf`) or an inlined sub-product
+    /// (`Nested`) whose own `slots` are spliced contiguously into this object. Because *every* slot
+    /// is a `BlValue` pointer (Blight fields are uniformly boxed), the precise GC tracer traces a
+    /// flattened object correctly by its (widened) `nfields` with **zero collector change** — the
+    /// flattening only elides intermediate boxes, never introduces a non-pointer slot. The original
+    /// nested `Con`/`Tuple` + `Proj`/`Case` is what the kernel/re-checker saw; this is a pure backend
+    /// representation choice, bit-identical and differentially gated.
+    ///
+    /// `tag` is `Some(con)` for a constructor (its index rides in `header.aux`) or `None` for a
+    /// tuple. `total_slots` is the cached total pointer-slot count (sum of each field's width).
+    Flat {
+        tag: Option<ConName>,
+        fields: Vec<FlatField>,
+        total_slots: usize,
+        alloc: Alloc,
+    },
+    /// Project the leaf slot at physical offset `index` of a flattened value `scrut` (built by
+    /// [`crate::flatten`]). [`crate::flatten`] resolves a logical projection *chain* — possibly
+    /// drilling through inlined nested sub-products — down to the single pointer slot it names, and
+    /// records that resolved physical offset here, so the emitter lowers it to one `Comp::Proj`. This
+    /// first cut never projects a whole nested sub-product (those have no standalone cell), so the
+    /// offset always names exactly one slot. `layout` is the parent's field descriptor list (the same
+    /// one its `Flat` carries), kept for diagnostics and so the offset's provenance is checkable.
+    FlatProj {
+        index: usize,
+        layout: Vec<FlatField>,
+        scrut: Box<Cir>,
+    },
 
     // ---- the delay monad (spec §4.5), the partial-recursion runtime substrate ----
     /// `now e : Delay A` — an immediately-available value. The [`Alloc`] tag records where the
@@ -130,11 +224,18 @@ pub enum Cir {
     /// `App` whose head is a closure.
     CallClosure(Box<Cir>, Box<Cir>),
 
-    /// `foreign "sym"` — the value produced by calling the external C function `sym()` (an opaque
-    /// trusted FFI postulate, spec §7.6). The C symbol takes no arguments and returns a `BlValue`
-    /// (so a function-typed foreign is a C thunk returning a Blight closure). The kernel trusts it;
-    /// the re-checker declines any term mentioning it. Has no de Bruijn content.
-    Foreign(String),
+    /// `foreign "sym"` (0-arg) or `foreign "sym" arg` (1-arg) — an opaque trusted FFI postulate
+    /// (spec §7.6, extended Wave 2 / L2 for the IEEE-754 `F64` hatch). `None` calls the external C
+    /// function `sym()` with no arguments (a plain postulate — e.g. `foreign_answer.bl`'s
+    /// `bl_foreign_answer`); `Some(arg)` calls `sym(arg_value)`, a single packed `BlValue` argument
+    /// — multi-operand foreign ops (e.g. `f64+`) pack their operands into a `Pair` first, exactly
+    /// the convention `std/bytes.bl`'s/`std/array.bl`'s multi-arg effect ops already use, so this
+    /// mirrors [`Cir::Op`]'s single boxed `arg` rather than introducing curried foreign application
+    /// (a bare, unapplied function-typed `Foreign` would silently miscompile as a 0-arg call — see
+    /// `lower.rs`'s `Term::App` handling, which is the ONLY place that ever constructs `Some`, and
+    /// `lower.rs`'s bare-`Term::Foreign` case, which hard-panics if a function-typed postulate
+    /// reaches it unapplied). The kernel trusts it; the re-checker declines any term mentioning it.
+    Foreign(String, Option<Box<Cir>>),
 
     // ---- primitive machine integers (M11) ----
     /// An `Int` literal — a boxed `BL_INT` machine integer (`i64` in `header.aux`). Has no de
@@ -147,6 +248,96 @@ pub enum Cir {
         lhs: Box<Cir>,
         rhs: Box<Cir>,
     },
+
+    // ---- recognized fast `Nat` arithmetic (M20, recognize.rs) ----
+    /// A machine-word `Nat` literal, produced ONLY by the recognizer when it folds a fully-canonical
+    /// `Succ`/`Zero` chain (e.g. `Succ (Succ Zero)` => `2`). Lowers to `bl_nat_from_u64`. The kernel
+    /// still only ever sees the inductive chain; this is a backend constant-fold. Observationally
+    /// identical to the chain (materialized by `bl_nat_to_con` for any generic consumer).
+    NatLit(u64),
+    /// A packed `String` literal: the codepoint sequence of a fully-canonical `push`/`empty`
+    /// cons-list (std/string.bl), produced ONLY by the recognizer ([`crate::recognize`]) when it
+    /// folds a static string literal (`push cp0 (push cp1 … empty)` with every `cp` a canonical
+    /// `Succ`/`Zero` Nat). Lowers to a single `bl_string_from_codepoints` allocation (one BL_STRING
+    /// object over a program-lifetime side buffer) instead of one heap `push` cell per codepoint.
+    ///
+    /// This is a pure backend *representation* optimization: the kernel and re-checker only ever see
+    /// the inductive `empty`/`push` definition. A packed `String` is observationally identical to the
+    /// cons-list — `bl_string_to_con` (numeric.c) materializes one `empty`/`push` layer on demand for
+    /// any generic `case`/projection — and a differential test (`runtime/tests/string_diff.c`) gates
+    /// it bit-for-bit. The codepoints are stored in declaration (head-first) order: index `i` is the
+    /// `i`-th `push`ed codepoint, i.e. the same order `bl_print_string` walks the spine.
+    StrLit(Vec<u64>),
+    /// A primitive machine-word `Nat` operation, produced ONLY by the backend recognizer
+    /// ([`crate::recognize`]) when it structurally proves a sub-term computes exactly the prelude's
+    /// `plus`/`mult`/`sub`/`pred` over the inductive `Zero`/`Succ` encoding. It lowers to an O(1)
+    /// `bl_nat_*` runtime call on machine-word `Nat`s instead of the O(n) eliminator unrolling.
+    ///
+    /// This is a pure *representation* optimization in the untrusted backend: the kernel and
+    /// re-checker only ever see the inductive definition, the result is observationally identical to
+    /// the chain (numeric.c `bl_nat_to_con` materializes `Zero`/`Succ` for any generic consumer), and
+    /// a differential fuzz test gates correctness. Unary (`pred`) ops leave `rhs` `None`.
+    NatPrim {
+        op: NatPrimOp,
+        lhs: Box<Cir>,
+        rhs: Option<Box<Cir>>,
+    },
+
+    // ---- recognized fast `Float` arithmetic (M23, recognize.rs) ----
+    /// A primitive fixed-point `Float` operation, produced ONLY by the backend recognizer
+    /// ([`crate::recognize`]) when it structurally proves a sub-term computes exactly one of the
+    /// `std/float.bl` wrappers (`float-add`/`float-sub`/`float-mul`/`float-div`/`float-neg`) over the
+    /// `(mkfloat (mantissa Int))` library representation. It lowers to an O(1) `bl_float_*` runtime
+    /// helper (numeric.c) that collapses the `match … match … mkfloat (int op)` wrapper tower into a
+    /// single call on the scaled `Int` mantissa.
+    ///
+    /// Like [`Cir::NatPrim`], this is a pure *representation* optimization in the untrusted backend:
+    /// the kernel and re-checker only ever see the inductive `Data` definition over `Int`, the result
+    /// is observationally identical to the wrapper (the helper produces the *same* `mkfloat` of the
+    /// *same* scaled mantissa), and a differential fuzz test (`runtime/tests/float_diff.c`) gates that
+    /// the fast helper agrees bit-for-bit with the fixed-point reference. A bug here can only ever
+    /// produce a wrong *number*, never a false *proof*. Unary (`neg`) ops leave `rhs` `None`.
+    FloatPrim {
+        op: FloatPrimOp,
+        lhs: Box<Cir>,
+        rhs: Option<Box<Cir>>,
+    },
+}
+
+/// The primitive fixed-point `Float` operations the recognizer can introduce. Each mirrors a
+/// `deftotal` in `std/float.bl` and a `bl_float_*` runtime helper (numeric.c). The representation is
+/// the library's: a `Float` is `(mkfloat m)` where `m : Int` is the value scaled by `10^6`, so every
+/// helper is exact `Int` arithmetic on the mantissa — bit-identical to the checked semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloatPrimOp {
+    /// `float-add` — `bl_float_add` (mantissas add directly).
+    Add,
+    /// `float-sub` — `bl_float_sub` (mantissas subtract directly).
+    Sub,
+    /// `float-mul` — `bl_float_mul` (`(x*y)/SCALE`).
+    Mul,
+    /// `float-div` — `bl_float_div` (`(x*SCALE)/y`).
+    Div,
+    /// `float-neg` — `bl_float_neg` (unary; `0 - x`).
+    Neg,
+}
+
+/// The primitive machine-word `Nat` operations the recognizer can introduce. Each mirrors a total
+/// prelude function (std/nat.bl) and a `bl_nat_*` runtime helper (numeric.c).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NatPrimOp {
+    /// `plus` — `bl_nat_add`.
+    Add,
+    /// `mult` — `bl_nat_mul`.
+    Mul,
+    /// `sub` (truncated) — `bl_nat_sub`.
+    Sub,
+    /// `pred` (truncated, unary) — `bl_nat_pred`.
+    Pred,
+    /// `min` — `bl_nat_min`.
+    Min,
+    /// `max` — `bl_nat_max`.
+    Max,
 }
 
 /// A lifted top-level function (the output of closure conversion). The body refers to its single

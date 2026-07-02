@@ -1,0 +1,24 @@
+; hofold_mono.bl — hand-defunctionalized twin of hofold_int.bl (P10 lower bound).
+;
+; Identical workload to hofold_int.bl, but the `+1` step is a DIRECT, monomorphic call instead of an
+; indirect closure apply: `iterate-add1` inlines `(int+ acc 1)` in its own body, so there is no
+; closure, no function-pointer load, and no indirect call. Its runtime is the lower bound that
+; hofold_int.bl's *defunctionalized* form should approach — the gap between the two is exactly the
+; closure-indirection cost P10 removes.
+;
+;   cargo run -p blight-repl --features llvm -- build bench/games/hofold/hofold_mono.bl -o hofold_mono \
+;     && ./hofold_mono   # => 1000000
+
+(load "std/nat.bl")
+(load "std/int.bl")
+
+; Apply `+1` to `acc`, `fuel` times — the step is a direct primitive, no higher-order parameter.
+(deftotal iterate-add1 (Pi ((fuel Nat) (acc Int)) Int)
+  (lam (fuel acc) (match fuel [(Zero) acc] [(Succ f) (iterate-add1 f (int+ acc (int 1)))])))
+
+(define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+(define hundred Nat (mult ten ten))
+(define thousand Nat (mult hundred ten))
+(define million Nat (mult thousand thousand))
+
+(define main Int (iterate-add1 million (int 0)))

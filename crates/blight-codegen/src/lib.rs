@@ -23,11 +23,26 @@
 //! LLVM emission and the linked-binary integration tests are gated behind the `llvm` feature.
 
 pub mod anf;
+pub mod autopar;
+pub mod capspec;
+pub(crate) mod cfa;
 pub mod closure;
+pub mod cse;
+pub mod ctnorm;
+pub mod defunc;
+pub mod elimloop;
+pub mod elimworklist;
+pub mod flatten;
+pub mod fusion;
+pub mod inline;
 pub mod ir;
+pub mod layout;
+pub mod linearity;
 pub mod lower;
 pub mod mono;
+pub mod recognize;
 pub mod region;
+pub mod unbox;
 
 #[cfg(feature = "llvm")]
 pub mod driver;

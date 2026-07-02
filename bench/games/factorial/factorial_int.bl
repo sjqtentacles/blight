@@ -10,9 +10,7 @@
 (load "std/nat.bl")
 
 (deftotal fact-go (Pi ((fuel Nat) (i Int) (acc Int)) Int)
-  (lam (fuel i acc) (match fuel
-    [(Zero) acc]
-    [(Succ f) (fact-go f (int+ i (int 1)) (int* acc i))])))
+  (lam (fuel i acc) (match fuel [(Zero) acc] [(Succ f) (fact-go f (int+ i (int 1)) (int* acc i))])))
 
 (define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
 (define twenty Nat (mult (Succ (Succ Zero)) ten))

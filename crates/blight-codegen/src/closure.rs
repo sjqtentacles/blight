@@ -48,8 +48,12 @@ impl Converter {
             | Cir::Global(_)
             | Cir::EnvRef(_)
             | Cir::Erased
-            | Cir::Foreign(_)
-            | Cir::IntLit(_) => c.clone(),
+            | Cir::IntLit(_)
+            | Cir::NatLit(_)
+            | Cir::StrLit(_) => c.clone(),
+            Cir::Foreign(sym, arg) => {
+                Cir::Foreign(sym.clone(), arg.as_ref().map(|a| Box::new(self.go(a))))
+            }
 
             Cir::Lam(body) => self.lift(body, false, "lam"),
             // `Fix(Lam(inner))` is a *recursive function*: the `Fix` binder is the function's own
@@ -116,6 +120,19 @@ impl Converter {
                 lhs: Box::new(self.go(lhs)),
                 rhs: Box::new(self.go(rhs)),
             },
+            Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
+                op: *op,
+                lhs: Box::new(self.go(lhs)),
+                rhs: rhs.as_ref().map(|r| Box::new(self.go(r))),
+            },
+            Cir::FloatPrim { op, lhs, rhs } => Cir::FloatPrim {
+                op: *op,
+                lhs: Box::new(self.go(lhs)),
+                rhs: rhs.as_ref().map(|r| Box::new(self.go(r))),
+            },
+            Cir::Flat { .. } | Cir::FlatProj { .. } => {
+                unreachable!("flatten runs after closure conversion")
+            }
         }
     }
 
@@ -213,7 +230,17 @@ fn collect_free_norm(c: &Cir, start: usize, depth: usize, out: &mut Vec<usize>) 
                 out.push(*i - (depth - start));
             }
         }
-        Cir::Global(_) | Cir::EnvRef(_) | Cir::Erased | Cir::Foreign(_) | Cir::IntLit(_) => {}
+        Cir::Global(_)
+        | Cir::EnvRef(_)
+        | Cir::Erased
+        | Cir::IntLit(_)
+        | Cir::NatLit(_)
+        | Cir::StrLit(_) => {}
+        Cir::Foreign(_, arg) => {
+            if let Some(a) = arg {
+                rec!(a, depth)
+            }
+        }
         Cir::Lam(b) | Cir::Fix(b) => rec!(b, depth + 1),
         Cir::App(f, a) | Cir::CallClosure(f, a) => {
             rec!(f, depth);
@@ -222,6 +249,18 @@ fn collect_free_norm(c: &Cir, start: usize, depth: usize, out: &mut Vec<usize>) 
         Cir::IntPrim { lhs, rhs, .. } => {
             rec!(lhs, depth);
             rec!(rhs, depth);
+        }
+        Cir::NatPrim { lhs, rhs, .. } => {
+            rec!(lhs, depth);
+            if let Some(r) = rhs {
+                rec!(r, depth);
+            }
+        }
+        Cir::FloatPrim { lhs, rhs, .. } => {
+            rec!(lhs, depth);
+            if let Some(r) = rhs {
+                rec!(r, depth);
+            }
         }
         Cir::Let(v, b) => {
             rec!(v, depth);
@@ -248,6 +287,9 @@ fn collect_free_norm(c: &Cir, start: usize, depth: usize, out: &mut Vec<usize>) 
             rec!(return_clause, depth);
             op_clauses.iter().for_each(|(_, e)| rec!(e, depth));
         }
+        Cir::Flat { .. } | Cir::FlatProj { .. } => {
+            unreachable!("flatten runs after closure conversion")
+        }
     }
 }
 
@@ -271,8 +313,14 @@ fn rebind(c: &Cir, fvs: &[usize]) -> Cir {
                     Cir::Var(*i)
                 }
             }
-            Cir::Global(_) | Cir::EnvRef(_) | Cir::Erased | Cir::Foreign(_) | Cir::IntLit(_) => {
-                c.clone()
+            Cir::Global(_)
+            | Cir::EnvRef(_)
+            | Cir::Erased
+            | Cir::IntLit(_)
+            | Cir::NatLit(_)
+            | Cir::StrLit(_) => c.clone(),
+            Cir::Foreign(sym, arg) => {
+                Cir::Foreign(sym.clone(), arg.as_ref().map(|a| Box::new(go(a, fvs, depth))))
             }
             Cir::Lam(b) => Cir::Lam(Box::new(go(b, fvs, depth + 1))),
             Cir::Fix(b) => Cir::Fix(Box::new(go(b, fvs, depth + 1))),
@@ -284,6 +332,16 @@ fn rebind(c: &Cir, fvs: &[usize]) -> Cir {
                 op: *op,
                 lhs: Box::new(go(lhs, fvs, depth)),
                 rhs: Box::new(go(rhs, fvs, depth)),
+            },
+            Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
+                op: *op,
+                lhs: Box::new(go(lhs, fvs, depth)),
+                rhs: rhs.as_ref().map(|r| Box::new(go(r, fvs, depth))),
+            },
+            Cir::FloatPrim { op, lhs, rhs } => Cir::FloatPrim {
+                op: *op,
+                lhs: Box::new(go(lhs, fvs, depth)),
+                rhs: rhs.as_ref().map(|r| Box::new(go(r, fvs, depth))),
             },
             Cir::Let(v, b) => {
                 Cir::Let(Box::new(go(v, fvs, depth)), Box::new(go(b, fvs, depth + 1)))
@@ -333,6 +391,9 @@ fn rebind(c: &Cir, fvs: &[usize]) -> Cir {
                     .map(|(n, e)| (n.clone(), go(e, fvs, depth)))
                     .collect(),
             },
+            Cir::Flat { .. } | Cir::FlatProj { .. } => {
+                unreachable!("flatten runs after closure conversion")
+            }
         }
     }
     // Entry depth is 1: index 0 is the parameter/self.
@@ -371,9 +432,16 @@ fn rebind_recursive(c: &Cir, fvs: &[usize], name: &str, captures: &[Cir]) -> Cir
                     }
                 }
             }
-            Cir::Global(_) | Cir::EnvRef(_) | Cir::Erased | Cir::Foreign(_) | Cir::IntLit(_) => {
-                c.clone()
-            }
+            Cir::Global(_)
+            | Cir::EnvRef(_)
+            | Cir::Erased
+            | Cir::IntLit(_)
+            | Cir::NatLit(_)
+            | Cir::StrLit(_) => c.clone(),
+            Cir::Foreign(sym, arg) => Cir::Foreign(
+                sym.clone(),
+                arg.as_ref().map(|a| Box::new(go(a, fvs, depth, selfc))),
+            ),
             Cir::Lam(b) => Cir::Lam(Box::new(go(b, fvs, depth + 1, selfc))),
             Cir::Fix(b) => Cir::Fix(Box::new(go(b, fvs, depth + 1, selfc))),
             Cir::App(f, a) => Cir::App(
@@ -388,6 +456,16 @@ fn rebind_recursive(c: &Cir, fvs: &[usize], name: &str, captures: &[Cir]) -> Cir
                 op: *op,
                 lhs: Box::new(go(lhs, fvs, depth, selfc)),
                 rhs: Box::new(go(rhs, fvs, depth, selfc)),
+            },
+            Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
+                op: *op,
+                lhs: Box::new(go(lhs, fvs, depth, selfc)),
+                rhs: rhs.as_ref().map(|r| Box::new(go(r, fvs, depth, selfc))),
+            },
+            Cir::FloatPrim { op, lhs, rhs } => Cir::FloatPrim {
+                op: *op,
+                lhs: Box::new(go(lhs, fvs, depth, selfc)),
+                rhs: rhs.as_ref().map(|r| Box::new(go(r, fvs, depth, selfc))),
             },
             Cir::Let(v, b) => Cir::Let(
                 Box::new(go(v, fvs, depth, selfc)),
@@ -438,6 +516,9 @@ fn rebind_recursive(c: &Cir, fvs: &[usize], name: &str, captures: &[Cir]) -> Cir
                     .map(|(n, e)| (n.clone(), go(e, fvs, depth, selfc)))
                     .collect(),
             },
+            Cir::Flat { .. } | Cir::FlatProj { .. } => {
+                unreachable!("flatten runs after closure conversion")
+            }
         }
     }
     // Entry depth: at the top of the body no extra local binders have been crossed yet, so the raw
@@ -453,12 +534,20 @@ pub fn has_free_lambdas(c: &Cir) -> bool {
         | Cir::Global(_)
         | Cir::EnvRef(_)
         | Cir::Erased
-        | Cir::Foreign(_)
-        | Cir::IntLit(_) => false,
+        | Cir::IntLit(_)
+        | Cir::NatLit(_)
+        | Cir::StrLit(_) => false,
+        Cir::Foreign(_, arg) => arg.as_ref().is_some_and(|a| has_free_lambdas(a)),
         Cir::App(f, a) | Cir::CallClosure(f, a) | Cir::Let(f, a) => {
             has_free_lambdas(f) || has_free_lambdas(a)
         }
         Cir::IntPrim { lhs, rhs, .. } => has_free_lambdas(lhs) || has_free_lambdas(rhs),
+        Cir::NatPrim { lhs, rhs, .. } => {
+            has_free_lambdas(lhs) || rhs.as_ref().map(|r| has_free_lambdas(r)).unwrap_or(false)
+        }
+        Cir::FloatPrim { lhs, rhs, .. } => {
+            has_free_lambdas(lhs) || rhs.as_ref().map(|r| has_free_lambdas(r)).unwrap_or(false)
+        }
         Cir::Con(_, args, _) | Cir::Tuple(args, _) | Cir::MkClosure(_, args, _) => {
             args.iter().any(has_free_lambdas)
         }
@@ -476,6 +565,17 @@ pub fn has_free_lambdas(c: &Cir) -> bool {
                 || has_free_lambdas(return_clause)
                 || op_clauses.iter().any(|(_, e)| has_free_lambdas(e))
         }
+        Cir::Flat { fields, .. } => fields.iter().any(flatfield_has_free_lambdas),
+        Cir::FlatProj { scrut, .. } => has_free_lambdas(scrut),
+    }
+}
+
+/// `has_free_lambdas` lifted to a flattened field (A1): recurse into a leaf's value or every slot
+/// of an inlined sub-product.
+fn flatfield_has_free_lambdas(f: &crate::ir::FlatField) -> bool {
+    match f {
+        crate::ir::FlatField::Leaf(c) => has_free_lambdas(c),
+        crate::ir::FlatField::Nested { slots, .. } => slots.iter().any(flatfield_has_free_lambdas),
     }
 }
 

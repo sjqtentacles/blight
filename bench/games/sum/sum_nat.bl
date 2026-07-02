@@ -1,18 +1,28 @@
-; sum_nat.bl — sum of 1..10 = 55 in the unary `Nat` tower (its OWN golden = 55, a small n so the
-; unary arithmetic stays tractable). The result is `Succ^55 Zero` and every `plus` is O(value); the
-; gap versus sum_int.bl / C / Rust at n = 1000 is what the benchmark game illustrates.
+; sum_nat.bl — sum of 1..1000 = 500500 in the unary `Nat` tower, now SCALED to the same n = 1000 as
+; sum_int.bl / C / Rust (shared golden = 500500). Pre-M20 this was intractable in unary; the M20
+; fast-`Nat` recognizer (recognize.rs) rewrites the prelude `plus` to an O(1) machine-word add, so the
+; whole fold runs at register speed and the result is a single `BL_NAT` word — no `Succ^500500` chain
+; is ever materialized.
 ;
-;   cargo run -p blight-repl --features llvm -- build bench/games/sum/sum_nat.bl -o sumn && ./sumn  # => 55
+; The recognizer only fires when every `plus`/`mult` operand is a settled value (a variable, a folded
+; `NatLit`, or a nested recognized op) — NOT a reconstructed `(Succ k)`. So we carry the running index
+; as its own `Nat` accumulator advanced by `(plus idx one)` (var + literal, recognized) instead of
+; rebuilding `(Succ k)` inside the sum. `fuel` drives the loop count, built as a Nat *value* via `mult`
+; (not a thousand-deep source literal).
+;
+;   cargo run -p blight-repl --features llvm -- build bench/games/sum/sum_nat.bl -o sumn && ./sumn  # => 500500
 
 (load "std/nat.bl")
 
-; sum-go i acc : structural on the unary index `i`, accumulating `i + (i-1) + ... + 1` into `acc`.
-(define-rec sum-go (Pi ((i Nat) (acc Nat)) Nat)
-  (lam (i acc) (match i
-    [(Zero) acc]
-    [(Succ k) (sum-go k (plus (Succ k) acc))])))
+(define one Nat (Succ Zero))
 
-(define ten Nat
-  (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+; sum-go fuel idx acc : structural on `fuel`; `idx` is the running 1..n index, `acc` the partial sum.
+; Every `plus` here has variable / literal operands, so M20 recognizes both as O(1) machine-word adds.
+(deftotal sum-go (Pi ((fuel Nat) (idx Nat) (acc Nat)) Nat)
+  (lam (fuel idx acc) (match fuel [(Zero) acc] [(Succ f) (sum-go f (plus idx one) (plus acc idx))])))
 
-(define main Nat (sum-go ten Zero))
+(define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+(define hundred Nat (mult ten ten))
+(define thousand Nat (mult hundred ten))
+
+(define main Nat (sum-go thousand one Zero))

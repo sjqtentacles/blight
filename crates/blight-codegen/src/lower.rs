@@ -17,9 +17,9 @@
 //! (`erase.rs`): an application whose argument is `Erased` (or a `let` binding an `Erased` value
 //! whose bound variable is unused) is removed.
 
-use crate::ir::{Arm, Cir};
+use crate::ir::{Alloc, Arm, Cir};
 use blight_kernel::signature::Arg;
-use blight_kernel::{DataName, Grade, Signature, Term};
+use blight_kernel::{ConName, DataName, Grade, Signature, Term};
 
 /// The region capability token constructor (declared in the untrusted prelude `regions.bl`). The
 /// elaborator threads exactly this token into a `(region …)` desugaring.
@@ -28,6 +28,30 @@ const REGION_TOKEN: &str = "rgn-tok";
 /// Whether `App(f, a)` is the desugared region redex `App(Ann(λ body, Π(1, _, _)), Con("rgn-tok"))`
 /// the elaborator produces for `(region r body)`. Recognizing the grade-1 binder and the token
 /// constructor keeps this from misfiring on ordinary applications.
+/// Is `ty` (transparently through `Ann`) a `Pi` — i.e. would a bare reference to a `foreign`
+/// postulate of this type be a function that must be called saturated, never used point-free?
+fn is_pi_type(ty: &Term) -> bool {
+    match ty {
+        Term::Pi(..) => true,
+        Term::Ann(t, _) => is_pi_type(t),
+        _ => false,
+    }
+}
+
+/// If `f` is (transparently through `Ann`) a `Term::Foreign`, return its C symbol — the head
+/// recognized by `lower_term`'s `Term::App` case to flatten a saturated foreign call (spec §7.6,
+/// Wave 2 / L2). Elaborated global references are inlined at their use site (this whole-program
+/// compiler substitutes a global's definition wherever it is referenced — see `mono.rs`), so a call
+/// to a `foreign`-declared name reaches `lower_term` as a literal `Term::Foreign` head, not an
+/// indirection to resolve.
+fn foreign_head(f: &Term) -> Option<&str> {
+    match f {
+        Term::Foreign { symbol, .. } => Some(symbol.as_str()),
+        Term::Ann(t, _) => foreign_head(t),
+        _ => None,
+    }
+}
+
 fn is_region_redex(f: &Term, a: &Term) -> bool {
     let arg_is_token = matches!(a, Term::Con(c, args) if c.0 == REGION_TOKEN && args.is_empty());
     if !arg_is_token {
@@ -77,6 +101,16 @@ fn lower_term(term: &Term, sig: &Signature) -> Cir {
                 let inner = Cir::App(Box::new(lower_term(f, sig)), Box::new(lower_term(a, sig)));
                 return Cir::Region(Box::new(inner));
             }
+            // A saturated (single-application) foreign call (spec §7.6, Wave 2 / L2's `F64` hatch):
+            // `App(Foreign{symbol,..}, a)` lowers directly to the flat `Cir::Foreign(symbol, Some(a))`
+            // rather than the generic curried `Cir::App`, which would (wrongly) try to treat the
+            // 0-arg foreign *call's result* as a closure to further apply. Multi-operand foreign ops
+            // (e.g. `f64+`) are declared with a SINGLE `Pi` argument that is itself a packed `Pair` —
+            // exactly the `std/bytes.bl`/`std/array.bl` multi-arg-effect-op convention — so this one
+            // case covers every arity the hatch supports; see `ir.rs`'s `Cir::Foreign` doc comment.
+            if let Some(symbol) = foreign_head(f) {
+                return Cir::Foreign(symbol.to_string(), Some(Box::new(lower_term(a, sig))));
+            }
             Cir::App(Box::new(lower_term(f, sig)), Box::new(lower_term(a, sig)))
         }
 
@@ -106,13 +140,44 @@ fn lower_term(term: &Term, sig: &Signature) -> Cir {
         }
 
         // The delay monad: the partial-recursion runtime substrate.
+        //
+        // `now a` is eager: its payload is an already-available value, stored directly in the
+        // `BL_NOW` node. `later a` is the *guarded* step of a (possibly diverging) `define-rec`
+        // self-call; it must stay **lazy**, so we defer `a` behind a *thunk closure* `λ_. a`
+        // (an ignored unit parameter) rather than evaluating it now. The runtime trampoline
+        // `bl_force` drives a `BL_LATER` by *applying* that thunk through the ordinary closure
+        // calling convention (`fn(clo, _)`), one step per back-edge, in bounded C stack — the M4
+        // "million-deep recursion does not overflow" property. Eagerly lowering `later a` (the
+        // previous behavior) both defeated that bound and stored a *value* where the trampoline
+        // expects a thunk closure, so any program that actually reached the partial path
+        // (`bl_force` on a real `later`) read a bogus function pointer and crashed. Wrapping in a
+        // `Lam` here lets closure conversion lift the thunk and capture `self`/the step arguments
+        // exactly like any other lambda.
         Term::Now(a) => Cir::now(lower_term(a, sig)),
-        Term::Later(a) => Cir::later(lower_term(a, sig)),
+        Term::Later(a) => {
+            let inner = lower_term(a, sig);
+            Cir::later(Cir::Lam(Box::new(shift_cir(&inner, 1))))
+        }
         // `force d` drives the delay trampoline to a value (anf.rs lowers a tail `Force` to the
         // `bl_force` trampoline; bounded stack).
         Term::Force(a) => Cir::Force(Box::new(lower_term(a, sig))),
-        // A foreign postulate lowers to a call to its external C symbol (spec §7.6, the FFI hatch).
-        Term::Foreign { symbol, .. } => Cir::Foreign(symbol.clone()),
+        // A BARE (unapplied) foreign postulate lowers to a 0-arg call to its external C symbol
+        // (spec §7.6, the FFI hatch). `lower_term`'s `Term::App` case (`foreign_head`) intercepts
+        // every SATURATED call of a function-typed foreign before it reaches here; a function-typed
+        // `Term::Foreign` arriving here unapplied (e.g. a point-free reference passed as a value,
+        // never called) would silently 0-arg-call a C function expecting a real argument — a
+        // miscompile, not a runtime hazard, but one worth failing loudly on rather than emitting
+        // silently wrong code (spec's "a claim that cannot close must fail, never be faked").
+        Term::Foreign { symbol, ty } => {
+            if is_pi_type(ty) {
+                panic!(
+                    "internal: function-typed `foreign` postulate `{symbol}` used unapplied \
+                     (point-free) — every `foreign` of Pi type must be called fully saturated at \
+                     each use site; see `lower.rs`'s `foreign_head`"
+                );
+            }
+            Cir::Foreign(symbol.clone(), None)
+        }
         // ---- primitive machine integers (M11) ----
         // `Int` is a *type*: no runtime content. A literal becomes a boxed `BL_INT`; an `IntPrim`
         // lowers to a runtime helper call on its (lowered) operands.
@@ -126,8 +191,15 @@ fn lower_term(term: &Term, sig: &Signature) -> Cir {
         // `Delay A` is a *type*; it has no runtime content of its own.
         Term::Delay(_) => Cir::Erased,
 
-        // Effects (if not fully handled before codegen).
-        Term::Op { effect, op, arg } => Cir::Op {
+        // Effects (if not fully handled before codegen). A parameterized effect's `type_args`
+        // (Wave 7/E2) are erased type-level content, like a `Data`'s params — they carry no
+        // runtime representation, so codegen only lowers the value argument.
+        Term::Op {
+            effect,
+            op,
+            arg,
+            type_args: _,
+        } => Cir::Op {
             effect: effect.0.clone(),
             op: op.clone(),
             arg: Box::new(lower_term(arg, sig)),
@@ -167,12 +239,23 @@ fn lower_term(term: &Term, sig: &Signature) -> Cir {
 
         // Everything else is type-level / cubical Kan machinery with no runtime content. After
         // erasure these only appear in erased positions; map them to the poison placeholder.
+        //
+        // `PCon` (Wave 7/E4 HITs) belongs in this bucket too: unlike `PLam`/`PApp` (an ordinary
+        // function over an erased dimension, so the *function* has real runtime content even
+        // though its argument does not), a path constructor's dimension argument would have to be
+        // *observed* to pick which boundary/interior point it denotes — but a dimension carries no
+        // runtime data at all (module doc, spec §2.6). A well-typed program can only route a `PCon`
+        // through positions the grading discipline already marks irrelevant (the classic circle
+        // recursor's codomain is a Kan-filled type precisely so eliminating it never needs to
+        // *inspect* the dimension at runtime), so this placeholder is unreachable in practice, same
+        // as its cubical siblings below.
         Term::Univ(_)
         | Term::Pi(_, _, _)
         | Term::Sigma(_, _)
         | Term::Data(_, _, _)
         | Term::Interval(_)
         | Term::PathP { .. }
+        | Term::PCon { .. }
         | Term::Partial(_, _)
         | Term::System(_)
         | Term::Transp { .. }
@@ -299,7 +382,10 @@ fn shift_cir(c: &Cir, by: usize) -> Cir {
                     Cir::Var(*i)
                 }
             }
-            Cir::Global(_) | Cir::Erased | Cir::Foreign(_) => c.clone(),
+            Cir::Global(_) | Cir::Erased => c.clone(),
+            Cir::Foreign(sym, arg) => {
+                Cir::Foreign(sym.clone(), arg.as_ref().map(|a| Box::new(go(a, by, depth))))
+            }
             Cir::Lam(b) => Cir::Lam(Box::new(go(b, by, depth + 1))),
             Cir::Fix(b) => Cir::Fix(Box::new(go(b, by, depth + 1))),
             Cir::App(f, a) => Cir::App(Box::new(go(f, by, depth)), Box::new(go(a, by, depth))),
@@ -351,11 +437,47 @@ fn shift_cir(c: &Cir, by: usize) -> Cir {
             Cir::CallClosure(f, a) => {
                 Cir::CallClosure(Box::new(go(f, by, depth)), Box::new(go(a, by, depth)))
             }
-            Cir::IntLit(_) => c.clone(),
+            Cir::IntLit(_) | Cir::NatLit(_) | Cir::StrLit(_) => c.clone(),
             Cir::IntPrim { op, lhs, rhs } => Cir::IntPrim {
                 op: *op,
                 lhs: Box::new(go(lhs, by, depth)),
                 rhs: Box::new(go(rhs, by, depth)),
+            },
+            Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
+                op: *op,
+                lhs: Box::new(go(lhs, by, depth)),
+                rhs: rhs.as_ref().map(|r| Box::new(go(r, by, depth))),
+            },
+            Cir::FloatPrim { op, lhs, rhs } => Cir::FloatPrim {
+                op: *op,
+                lhs: Box::new(go(lhs, by, depth)),
+                rhs: rhs.as_ref().map(|r| Box::new(go(r, by, depth))),
+            },
+            Cir::Flat {
+                tag,
+                fields,
+                total_slots,
+                alloc,
+            } => Cir::Flat {
+                tag: tag.clone(),
+                fields: fields
+                    .iter()
+                    .map(|fl| fl.map_cir(|x| go(x, by, depth)))
+                    .collect(),
+                total_slots: *total_slots,
+                alloc: *alloc,
+            },
+            Cir::FlatProj {
+                index,
+                layout,
+                scrut,
+            } => Cir::FlatProj {
+                index: *index,
+                layout: layout
+                    .iter()
+                    .map(|fl| fl.map_cir(|x| go(x, by, depth)))
+                    .collect(),
+                scrut: Box::new(go(scrut, by, depth)),
             },
         }
     }
@@ -373,7 +495,11 @@ fn shift_cir(c: &Cir, by: usize) -> Cir {
 /// unused (a curried grade-0 argument).
 pub fn dead_bindings(c: &Cir) -> Cir {
     match c {
-        Cir::Var(_) | Cir::Global(_) | Cir::Erased | Cir::Foreign(_) | Cir::IntLit(_) => c.clone(),
+        Cir::Var(_) | Cir::Global(_) | Cir::Erased | Cir::IntLit(_) | Cir::NatLit(_)
+        | Cir::StrLit(_) => c.clone(),
+        Cir::Foreign(sym, arg) => {
+            Cir::Foreign(sym.clone(), arg.as_ref().map(|a| Box::new(dead_bindings(a))))
+        }
         Cir::Lam(b) => Cir::Lam(Box::new(dead_bindings(b))),
         Cir::Fix(b) => Cir::Fix(Box::new(dead_bindings(b))),
         Cir::App(f, a) => {
@@ -445,6 +571,36 @@ pub fn dead_bindings(c: &Cir) -> Cir {
             lhs: Box::new(dead_bindings(lhs)),
             rhs: Box::new(dead_bindings(rhs)),
         },
+        Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
+            op: *op,
+            lhs: Box::new(dead_bindings(lhs)),
+            rhs: rhs.as_ref().map(|r| Box::new(dead_bindings(r))),
+        },
+        Cir::FloatPrim { op, lhs, rhs } => Cir::FloatPrim {
+            op: *op,
+            lhs: Box::new(dead_bindings(lhs)),
+            rhs: rhs.as_ref().map(|r| Box::new(dead_bindings(r))),
+        },
+        Cir::Flat {
+            tag,
+            fields,
+            total_slots,
+            alloc,
+        } => Cir::Flat {
+            tag: tag.clone(),
+            fields: fields.iter().map(|fl| fl.map_cir(dead_bindings)).collect(),
+            total_slots: *total_slots,
+            alloc: *alloc,
+        },
+        Cir::FlatProj {
+            index,
+            layout,
+            scrut,
+        } => Cir::FlatProj {
+            index: *index,
+            layout: layout.iter().map(|fl| fl.map_cir(dead_bindings)).collect(),
+            scrut: Box::new(dead_bindings(scrut)),
+        },
     }
 }
 
@@ -452,7 +608,8 @@ pub fn dead_bindings(c: &Cir) -> Cir {
 pub(crate) fn cir_uses(c: &Cir, i: usize) -> bool {
     match c {
         Cir::Var(j) => *j == i,
-        Cir::Global(_) | Cir::Erased | Cir::Foreign(_) => false,
+        Cir::Global(_) | Cir::Erased => false,
+        Cir::Foreign(_, arg) => arg.as_ref().is_some_and(|a| cir_uses(a, i)),
         Cir::Lam(b) | Cir::Fix(b) => cir_uses(b, i + 1),
         Cir::App(f, a) => cir_uses(f, i) || cir_uses(a, i),
         Cir::Let(v, b) => cir_uses(v, i) || cir_uses(b, i + 1),
@@ -476,8 +633,18 @@ pub(crate) fn cir_uses(c: &Cir, i: usize) -> bool {
         Cir::MkClosure(_, env, _) => env.iter().any(|e| cir_uses(e, i)),
         Cir::EnvRef(_) => false,
         Cir::CallClosure(f, a) => cir_uses(f, i) || cir_uses(a, i),
-        Cir::IntLit(_) => false,
+        Cir::IntLit(_) | Cir::NatLit(_) | Cir::StrLit(_) => false,
         Cir::IntPrim { lhs, rhs, .. } => cir_uses(lhs, i) || cir_uses(rhs, i),
+        Cir::NatPrim { lhs, rhs, .. } => {
+            cir_uses(lhs, i) || rhs.as_ref().map(|r| cir_uses(r, i)).unwrap_or(false)
+        }
+        Cir::FloatPrim { lhs, rhs, .. } => {
+            cir_uses(lhs, i) || rhs.as_ref().map(|r| cir_uses(r, i)).unwrap_or(false)
+        }
+        Cir::Flat { fields, .. } => fields.iter().any(|fl| fl.any_cir(|x| cir_uses(x, i))),
+        Cir::FlatProj { layout, scrut, .. } => {
+            cir_uses(scrut, i) || layout.iter().any(|fl| fl.any_cir(|x| cir_uses(x, i)))
+        }
     }
 }
 
@@ -488,7 +655,7 @@ fn strip_binder(body: &Cir) -> Cir {
     shift_cir_down(body, 0)
 }
 
-fn shift_cir_down(c: &Cir, depth: usize) -> Cir {
+pub(crate) fn shift_cir_down(c: &Cir, depth: usize) -> Cir {
     match c {
         Cir::Var(i) => {
             if *i > depth {
@@ -497,7 +664,13 @@ fn shift_cir_down(c: &Cir, depth: usize) -> Cir {
                 Cir::Var(*i)
             }
         }
-        Cir::Global(_) | Cir::Erased | Cir::Foreign(_) | Cir::IntLit(_) => c.clone(),
+        Cir::Global(_) | Cir::Erased | Cir::IntLit(_) | Cir::NatLit(_) | Cir::StrLit(_) => {
+            c.clone()
+        }
+        Cir::Foreign(sym, arg) => Cir::Foreign(
+            sym.clone(),
+            arg.as_ref().map(|a| Box::new(shift_cir_down(a, depth))),
+        ),
         Cir::Lam(b) => Cir::Lam(Box::new(shift_cir_down(b, depth + 1))),
         Cir::Fix(b) => Cir::Fix(Box::new(shift_cir_down(b, depth + 1))),
         Cir::App(f, a) => Cir::App(
@@ -563,6 +736,42 @@ fn shift_cir_down(c: &Cir, depth: usize) -> Cir {
             lhs: Box::new(shift_cir_down(lhs, depth)),
             rhs: Box::new(shift_cir_down(rhs, depth)),
         },
+        Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
+            op: *op,
+            lhs: Box::new(shift_cir_down(lhs, depth)),
+            rhs: rhs.as_ref().map(|r| Box::new(shift_cir_down(r, depth))),
+        },
+        Cir::FloatPrim { op, lhs, rhs } => Cir::FloatPrim {
+            op: *op,
+            lhs: Box::new(shift_cir_down(lhs, depth)),
+            rhs: rhs.as_ref().map(|r| Box::new(shift_cir_down(r, depth))),
+        },
+        Cir::Flat {
+            tag,
+            fields,
+            total_slots,
+            alloc,
+        } => Cir::Flat {
+            tag: tag.clone(),
+            fields: fields
+                .iter()
+                .map(|fl| fl.map_cir(|x| shift_cir_down(x, depth)))
+                .collect(),
+            total_slots: *total_slots,
+            alloc: *alloc,
+        },
+        Cir::FlatProj {
+            index,
+            layout,
+            scrut,
+        } => Cir::FlatProj {
+            index: *index,
+            layout: layout
+                .iter()
+                .map(|fl| fl.map_cir(|x| shift_cir_down(x, depth)))
+                .collect(),
+            scrut: Box::new(shift_cir_down(scrut, depth)),
+        },
     }
 }
 
@@ -578,9 +787,16 @@ fn shift_cir_up(c: &Cir, depth: usize) -> Cir {
                 Cir::Var(*i)
             }
         }
-        Cir::Global(_) | Cir::Erased | Cir::EnvRef(_) | Cir::Foreign(_) | Cir::IntLit(_) => {
-            c.clone()
-        }
+        Cir::Global(_)
+        | Cir::Erased
+        | Cir::EnvRef(_)
+        | Cir::IntLit(_)
+        | Cir::NatLit(_)
+        | Cir::StrLit(_) => c.clone(),
+        Cir::Foreign(sym, arg) => Cir::Foreign(
+            sym.clone(),
+            arg.as_ref().map(|a| Box::new(shift_cir_up(a, depth))),
+        ),
         Cir::Lam(b) => Cir::Lam(Box::new(shift_cir_up(b, depth + 1))),
         Cir::Fix(b) => Cir::Fix(Box::new(shift_cir_up(b, depth + 1))),
         Cir::App(f, a) => Cir::App(
@@ -643,7 +859,566 @@ fn shift_cir_up(c: &Cir, depth: usize) -> Cir {
             lhs: Box::new(shift_cir_up(lhs, depth)),
             rhs: Box::new(shift_cir_up(rhs, depth)),
         },
+        Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
+            op: *op,
+            lhs: Box::new(shift_cir_up(lhs, depth)),
+            rhs: rhs.as_ref().map(|r| Box::new(shift_cir_up(r, depth))),
+        },
+        Cir::FloatPrim { op, lhs, rhs } => Cir::FloatPrim {
+            op: *op,
+            lhs: Box::new(shift_cir_up(lhs, depth)),
+            rhs: rhs.as_ref().map(|r| Box::new(shift_cir_up(r, depth))),
+        },
+        Cir::Flat {
+            tag,
+            fields,
+            total_slots,
+            alloc,
+        } => Cir::Flat {
+            tag: tag.clone(),
+            fields: fields
+                .iter()
+                .map(|fl| fl.map_cir(|x| shift_cir_up(x, depth)))
+                .collect(),
+            total_slots: *total_slots,
+            alloc: *alloc,
+        },
+        Cir::FlatProj {
+            index,
+            layout,
+            scrut,
+        } => Cir::FlatProj {
+            index: *index,
+            layout: layout
+                .iter()
+                .map(|fl| fl.map_cir(|x| shift_cir_up(x, depth)))
+                .collect(),
+            scrut: Box::new(shift_cir_up(scrut, depth)),
+        },
     }
+}
+
+// ============================================================================================
+// P3 (3a) — the linear tail-accumulator elim-loop transform support.
+//
+// [`crate::elimloop`] recovers, from the eager catamorphism `Fix(Lam(Case(Var0, arms)))` that
+// [`lower_elim_fn`] produced, a per-constructor [`CtorShape`] plus the bare (un-shifted) method for
+// each arm, then calls [`build_elim_loop`] to (when the pattern matches) rebuild the eliminator as a
+// **bounded-stack accumulator loop** — a `Fix(Lam(Case(Proj(0, state), …)))` whose recursive arm is a
+// *tail* self-application over a packed `(scrut, a1…ak)` state tuple. After closure conversion that
+// tail self-call becomes a [`crate::anf::Tail::Jump`] (a loop back-edge), so a `fuel`-deep input runs
+// in O(1) C stack instead of descending the spine with an eager non-tail self-call.
+//
+// Zero TCB: this is a pure `Cir → Cir` rewrite downstream of kernel checking; a bug is a wrong
+// *number* (caught by the `BL_NO_ELIMLOOP` differential), never a false *proof*.
+// ============================================================================================
+
+/// The per-constructor structural shape [`crate::elimloop`] recovers from an eager eliminator arm:
+/// the constructor name and, per kept field (in declaration order), whether that field is recursive
+/// (carries an induction hypothesis).
+pub(crate) struct CtorShape {
+    pub name: ConName,
+    pub is_rec: Vec<bool>,
+}
+
+/// Count the leading `Cir::Lam` binders of `c` (its syntactic arity before the first non-lambda).
+pub(crate) fn count_leading_lams(c: &Cir) -> usize {
+    let mut n = 0;
+    let mut cur = c;
+    while let Cir::Lam(b) = cur {
+        n += 1;
+        cur = b;
+    }
+    n
+}
+
+/// Peel exactly `n` leading `Cir::Lam` binders off `c`, returning the body, or `None` if `c` has
+/// fewer than `n` leading lambdas.
+fn peel_lams(c: &Cir, n: usize) -> Option<&Cir> {
+    let mut cur = c;
+    for _ in 0..n {
+        match cur {
+            Cir::Lam(b) => cur = b,
+            _ => return None,
+        }
+    }
+    Some(cur)
+}
+
+/// Apply `f(var_index, binder_depth)` at every [`Cir::Var`] leaf of `c`, where `binder_depth` counts
+/// the binders entered between the root of `c` and that leaf. A single structural walker used to
+/// build the de Bruijn shift and the method-body substitution the elim-loop transform needs, without
+/// duplicating per-variant recursion.
+fn map_vars(c: &Cir, depth: usize, f: &dyn Fn(usize, usize) -> Cir) -> Cir {
+    match c {
+        Cir::Var(i) => f(*i, depth),
+        Cir::Global(_)
+        | Cir::Erased
+        | Cir::EnvRef(_)
+        | Cir::IntLit(_)
+        | Cir::NatLit(_)
+        | Cir::StrLit(_) => c.clone(),
+        Cir::Foreign(sym, arg) => Cir::Foreign(
+            sym.clone(),
+            arg.as_ref().map(|a| Box::new(map_vars(a, depth, f))),
+        ),
+        Cir::Lam(b) => Cir::Lam(Box::new(map_vars(b, depth + 1, f))),
+        Cir::Fix(b) => Cir::Fix(Box::new(map_vars(b, depth + 1, f))),
+        Cir::App(g, a) => Cir::App(
+            Box::new(map_vars(g, depth, f)),
+            Box::new(map_vars(a, depth, f)),
+        ),
+        Cir::Let(v, b) => Cir::Let(
+            Box::new(map_vars(v, depth, f)),
+            Box::new(map_vars(b, depth + 1, f)),
+        ),
+        Cir::Con(n, args, al) => Cir::Con(
+            n.clone(),
+            args.iter().map(|a| map_vars(a, depth, f)).collect(),
+            *al,
+        ),
+        Cir::Case(s, arms) => Cir::Case(
+            Box::new(map_vars(s, depth, f)),
+            arms.iter()
+                .map(|arm| Arm {
+                    con: arm.con.clone(),
+                    binders: arm.binders,
+                    body: map_vars(&arm.body, depth + arm.binders, f),
+                })
+                .collect(),
+        ),
+        Cir::Tuple(es, al) => Cir::Tuple(es.iter().map(|e| map_vars(e, depth, f)).collect(), *al),
+        Cir::Proj(i, e) => Cir::Proj(*i, Box::new(map_vars(e, depth, f))),
+        Cir::Now(e, al) => Cir::Now(Box::new(map_vars(e, depth, f)), *al),
+        Cir::Later(e, al) => Cir::Later(Box::new(map_vars(e, depth, f)), *al),
+        Cir::Force(e) => Cir::Force(Box::new(map_vars(e, depth, f))),
+        Cir::Region(b) => Cir::Region(Box::new(map_vars(b, depth, f))),
+        Cir::Op { effect, op, arg } => Cir::Op {
+            effect: effect.clone(),
+            op: op.clone(),
+            arg: Box::new(map_vars(arg, depth, f)),
+        },
+        Cir::Handle {
+            body,
+            return_clause,
+            op_clauses,
+        } => Cir::Handle {
+            body: Box::new(map_vars(body, depth, f)),
+            return_clause: Box::new(map_vars(return_clause, depth + 1, f)),
+            op_clauses: op_clauses
+                .iter()
+                .map(|(n, e)| (n.clone(), map_vars(e, depth + 2, f)))
+                .collect(),
+        },
+        Cir::MkClosure(n, env, al) => Cir::MkClosure(
+            n.clone(),
+            env.iter().map(|e| map_vars(e, depth, f)).collect(),
+            *al,
+        ),
+        Cir::CallClosure(g, a) => Cir::CallClosure(
+            Box::new(map_vars(g, depth, f)),
+            Box::new(map_vars(a, depth, f)),
+        ),
+        Cir::IntPrim { op, lhs, rhs } => Cir::IntPrim {
+            op: *op,
+            lhs: Box::new(map_vars(lhs, depth, f)),
+            rhs: Box::new(map_vars(rhs, depth, f)),
+        },
+        Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
+            op: *op,
+            lhs: Box::new(map_vars(lhs, depth, f)),
+            rhs: rhs.as_ref().map(|r| Box::new(map_vars(r, depth, f))),
+        },
+        Cir::FloatPrim { op, lhs, rhs } => Cir::FloatPrim {
+            op: *op,
+            lhs: Box::new(map_vars(lhs, depth, f)),
+            rhs: rhs.as_ref().map(|r| Box::new(map_vars(r, depth, f))),
+        },
+        Cir::Flat {
+            tag,
+            fields,
+            total_slots,
+            alloc,
+        } => Cir::Flat {
+            tag: tag.clone(),
+            fields: fields
+                .iter()
+                .map(|fl| fl.map_cir(|x| map_vars(x, depth, f)))
+                .collect(),
+            total_slots: *total_slots,
+            alloc: *alloc,
+        },
+        Cir::FlatProj {
+            index,
+            layout,
+            scrut,
+        } => Cir::FlatProj {
+            index: *index,
+            layout: layout
+                .iter()
+                .map(|fl| fl.map_cir(|x| map_vars(x, depth, f)))
+                .collect(),
+            scrut: Box::new(map_vars(scrut, depth, f)),
+        },
+    }
+}
+
+/// Raise every free de Bruijn index of `c` (those `>= 0` at its root, accounting for inner binders)
+/// by `by`. Used to slide an arm-scope replacement expression under the binders crossed inside a
+/// substituted accumulator-update expression.
+pub(crate) fn shift_free(c: &Cir, by: usize) -> Cir {
+    if by == 0 {
+        return c.clone();
+    }
+    map_vars(c, 0, &|i, d| {
+        if i >= d {
+            Cir::Var(i + by)
+        } else {
+            Cir::Var(i)
+        }
+    })
+}
+
+/// Substitute, in a recovered method body whose own scope has `nb` leading binders, each local
+/// binder index by its loop-scope replacement from `local_map` (length `nb`, given in the loop arm's
+/// scope at depth 0), and shift every free variable (index `>= nb`, captured from outside the
+/// original eliminator) up by `free_shift`. Replacements are shifted under whatever binders the
+/// substitution descends through, so this is capture-avoiding.
+fn subst_method_body(body: &Cir, nb: usize, local_map: &[Cir], free_shift: usize) -> Cir {
+    map_vars(body, 0, &|i, d| {
+        if i < d {
+            // A binder introduced *inside* the body itself.
+            Cir::Var(i)
+        } else {
+            let j = i - d; // index into the method's own (nb-binder + free) scope
+            if j < nb {
+                shift_free(&local_map[j], d)
+            } else {
+                Cir::Var((j - nb) + free_shift + d)
+            }
+        }
+    })
+}
+
+/// Does `c` contain an effect node ([`Cir::Op`]/[`Cir::Handle`])? The elim-loop transform reorders an
+/// accumulator update relative to the (now tail) recursive call, so it must refuse any update that
+/// performs an effect — purity is what makes the reordering observationally invisible.
+pub(crate) fn cir_has_effect(c: &Cir) -> bool {
+    match c {
+        Cir::Op { .. } | Cir::Handle { .. } => true,
+        _ => {
+            let mut found = false;
+            visit_children(c, &mut |child| {
+                if !found {
+                    found = cir_has_effect(child);
+                }
+            });
+            found
+        }
+    }
+}
+
+/// Visit each immediate `Cir` child of `c` (no de Bruijn tracking — used for structural predicates).
+/// Exposed to [`crate::autopar`] (P4) so its whole-program candidate scan doesn't need a fourth copy
+/// of this traversal (`elimloop`/`cse`/`fusion` each already keep their own transform-shaped one).
+pub(crate) fn visit_children(c: &Cir, f: &mut impl FnMut(&Cir)) {
+    match c {
+        Cir::Var(_)
+        | Cir::Global(_)
+        | Cir::Erased
+        | Cir::EnvRef(_)
+        | Cir::IntLit(_)
+        | Cir::NatLit(_)
+        | Cir::StrLit(_) => {}
+        Cir::Foreign(_, arg) => {
+            if let Some(a) = arg {
+                f(a);
+            }
+        }
+        Cir::Lam(b) | Cir::Fix(b) => f(b),
+        Cir::App(a, b) | Cir::Let(a, b) | Cir::CallClosure(a, b) => {
+            f(a);
+            f(b);
+        }
+        Cir::Con(_, args, _) | Cir::Tuple(args, _) | Cir::MkClosure(_, args, _) => {
+            for a in args {
+                f(a);
+            }
+        }
+        Cir::Case(s, arms) => {
+            f(s);
+            for arm in arms {
+                f(&arm.body);
+            }
+        }
+        Cir::Proj(_, e) | Cir::Now(e, _) | Cir::Later(e, _) | Cir::Force(e) | Cir::Region(e) => {
+            f(e)
+        }
+        Cir::Op { arg, .. } => f(arg),
+        Cir::Handle {
+            body,
+            return_clause,
+            op_clauses,
+        } => {
+            f(body);
+            f(return_clause);
+            for (_, e) in op_clauses {
+                f(e);
+            }
+        }
+        Cir::IntPrim { lhs, rhs, .. } => {
+            f(lhs);
+            f(rhs);
+        }
+        Cir::NatPrim { lhs, rhs, .. } | Cir::FloatPrim { lhs, rhs, .. } => {
+            f(lhs);
+            if let Some(r) = rhs {
+                f(r);
+            }
+        }
+        Cir::Flat { fields, .. } => {
+            for fl in fields {
+                fl.any_cir(|x| {
+                    f(x);
+                    false
+                });
+            }
+        }
+        Cir::FlatProj { layout, scrut, .. } => {
+            f(scrut);
+            for fl in layout {
+                fl.any_cir(|x| {
+                    f(x);
+                    false
+                });
+            }
+        }
+    }
+}
+
+/// One leading binder of a recovered eliminator method, in outer-to-inner declaration order.
+enum BinderKind {
+    /// The `j`-th kept constructor field.
+    Field(usize),
+    /// The induction hypothesis for the `j`-th (recursive) field.
+    Ih(usize),
+    /// A motive accumulator parameter (the function-typed motive's arguments).
+    Acc,
+}
+
+/// Try to rebuild a linear tail-accumulator catamorphism as a bounded-stack accumulator loop.
+///
+/// `ctors`/`methods` are the per-arm shapes and bare (un-shifted, own-scope) methods [`crate::elimloop`]
+/// recovered from the eager `Fix(Lam(Case(Var0, arms)))`. Returns `Some(loop)` — a curried
+/// `λscrut.λa1…λak. (fix loop. λstate. case state.0 …) (scrut, a1…ak)` of the **same type** as the
+/// original eliminator (so it is a drop-in, eta-long replacement even under partial application) —
+/// when every recursive constructor:
+///   * has exactly **one** recursive field (linear recursion; trees fall through to the 3b worklist);
+///   * abstracts `nfields + nrec + k` leading lambdas with the same `k >= 1` (a function-typed motive
+///     with `k` accumulators); and
+///   * uses its induction hypothesis **exactly once, in tail position, saturated to all `k`
+///     accumulators**, with no effect in any accumulator-update expression.
+///
+/// Otherwise returns `None` (the caller falls back to the worklist or the eager form).
+pub(crate) fn build_elim_loop(ctors: &[CtorShape], methods: &[Cir]) -> Option<Cir> {
+    if ctors.len() != methods.len() || ctors.is_empty() {
+        return None;
+    }
+
+    enum ArmInfo {
+        Base,
+        Rec { rec_field: usize, bs: Vec<Cir> },
+    }
+
+    let mut k: Option<usize> = None;
+    let mut infos: Vec<ArmInfo> = Vec::with_capacity(ctors.len());
+
+    for (idx, ctor) in ctors.iter().enumerate() {
+        let nfields = ctor.is_rec.len();
+        let nrec = ctor.is_rec.iter().filter(|&&r| r).count();
+        if nrec == 0 {
+            infos.push(ArmInfo::Base);
+            continue;
+        }
+        // Linear only: a multi-recursive-field constructor (e.g. a binary tree) is the 3b worklist's
+        // job, not this tail-accumulator loop.
+        if nrec != 1 {
+            return None;
+        }
+        let rec_field = ctor.is_rec.iter().position(|&r| r).unwrap();
+
+        // Accumulator arity for this arm = leading lambdas beyond the (fields + IHs) binders.
+        let total_lams = count_leading_lams(&methods[idx]);
+        if total_lams < nfields + nrec {
+            return None;
+        }
+        let kk = total_lams - (nfields + nrec);
+        if kk == 0 {
+            // No accumulator: the IH is consumed non-tail (a fold like `length`/`sum`); 3b's job.
+            return None;
+        }
+        match k {
+            None => k = Some(kk),
+            Some(prev) if prev != kk => return None,
+            _ => {}
+        }
+        let nb = nfields + nrec + kk;
+
+        // The body lives under all `nb` binders. Build the binder list (outer→inner) so we can find
+        // the IH's body-relative de Bruijn index.
+        let mut outer: Vec<BinderKind> = Vec::with_capacity(nb);
+        for j in 0..nfields {
+            outer.push(BinderKind::Field(j));
+            if ctor.is_rec[j] {
+                outer.push(BinderKind::Ih(j));
+            }
+        }
+        for _ in 0..kk {
+            outer.push(BinderKind::Acc);
+        }
+        debug_assert_eq!(outer.len(), nb);
+
+        let body = peel_lams(&methods[idx], nb)?;
+
+        // Body-index of the IH binder: outer position p sits at index nb-1-p inside the body.
+        let ih_outer_pos = outer
+            .iter()
+            .position(|b| matches!(b, BinderKind::Ih(j) if *j == rec_field))
+            .unwrap();
+        let ih_index = nb - 1 - ih_outer_pos;
+
+        // Require the body to be `ih B1 … Bk` (IH in head position, saturated to exactly k args).
+        let (head, args) = body.unapply();
+        if args.len() != kk {
+            return None;
+        }
+        if !matches!(head, Cir::Var(i) if *i == ih_index) {
+            return None;
+        }
+        // The IH must be used *exactly once* (only as the head): it must not appear in any update,
+        // and no update may perform an effect (the loop reorders updates before the recursive call).
+        for a in &args {
+            if cir_uses(a, ih_index) || cir_has_effect(a) {
+                return None;
+            }
+        }
+        let bs: Vec<Cir> = args.iter().map(|a| (*a).clone()).collect();
+        infos.push(ArmInfo::Rec { rec_field, bs });
+    }
+
+    let k = k?; // at least one recursive constructor, else nothing to make stack-safe
+
+    // Build the loop arms. Inside the loop's `Lam` (state = Var 0, self = Var 1), each arm binds the
+    // constructor's `nfields` real fields (no IH binder). The first thing every arm body does is
+    // *alias the state tuple to a fresh local* `s` (`let s = state in …`). This is deliberate and
+    // load-bearing for de Bruijn correctness: the ANF normalizer threads outer-variable shifts
+    // through case-arm scrutinee slots and operand sequencing, and reading a *deep* outer variable
+    // (the `state` tuple, which sits above the field binders) repeatedly across several sequenced
+    // operands is exactly the shape its deferred-shift composition mishandles. By binding `s` once
+    // (a zero-`Comp` atom alias that introduces no shift frame) we make every subsequent
+    // `Proj(1+i, s)` read a *recently bound, low-index* local — the same shape as an ordinary deep
+    // `let` chain — so all the operand sequencing stays within the well-exercised path.
+    //
+    // After `let s = state`, the arm's innermost scope is:
+    //   s         = Var(0)
+    //   field j   = Var(nfields - j)        (the field binders, shifted up by the `s` alias)
+    //   state     = Var(nfields + 1)        (no longer read directly)
+    //   self      = Var(nfields + 2)        (the `Fix` binder)
+    // A captured method free var (index >= `nb` in the eager method body — bound outside the
+    // eliminator) sits `free_shift = k + nfields + 4` binders out: `k+1` wrapper lambdas + `Fix`
+    // self + `Lam` state + `nfields` field binders + the `s` alias.
+    let loop_arms: Vec<Arm> = ctors
+        .iter()
+        .zip(infos.iter())
+        .enumerate()
+        .map(|(idx, (ctor, info))| {
+            let nfields = ctor.is_rec.len();
+            let self_idx = nfields + 2;
+            let free_shift = k + nfields + 4;
+            let field_var = |fj: usize| Cir::Var(nfields - fj);
+            // Accumulator `i` is the (1+i)'th slot of the state tuple, read through the local alias
+            // `s` = Var(0).
+            let acc_proj = |i: usize| Cir::Proj(1 + i, Box::new(Cir::Var(0)));
+
+            let core = match info {
+                ArmInfo::Base => {
+                    // Apply the bare base method (shifted into the arm scope) to its fields then the
+                    // `k` accumulators — exactly the value the eager arm yields once saturated.
+                    let mut applied = shift_free(&methods[idx], free_shift);
+                    for j in 0..nfields {
+                        applied = Cir::App(Box::new(applied), Box::new(field_var(j)));
+                    }
+                    for i in 0..k {
+                        applied = Cir::App(Box::new(applied), Box::new(acc_proj(i)));
+                    }
+                    applied
+                }
+                ArmInfo::Rec { rec_field, bs } => {
+                    let nrec = 1usize;
+                    let nb = nfields + nrec + k;
+                    let mut outer: Vec<BinderKind> = Vec::with_capacity(nb);
+                    for j in 0..nfields {
+                        outer.push(BinderKind::Field(j));
+                        if ctor.is_rec[j] {
+                            outer.push(BinderKind::Ih(j));
+                        }
+                    }
+                    for _ in 0..k {
+                        outer.push(BinderKind::Acc);
+                    }
+                    // Map the method body's `nb` local binders to arm-scope replacements.
+                    let mut local_map = vec![Cir::Erased; nb];
+                    let mut acc_i = 0usize;
+                    for (p, kind) in outer.iter().enumerate() {
+                        let bidx = nb - 1 - p;
+                        local_map[bidx] = match kind {
+                            BinderKind::Field(fj) => field_var(*fj),
+                            BinderKind::Ih(_) => Cir::Erased, // verified unused in any update
+                            BinderKind::Acc => {
+                                let e = acc_proj(acc_i);
+                                acc_i += 1;
+                                e
+                            }
+                        };
+                    }
+                    // New state = (recursive field, B1', …, Bk'); tail self-call → Jump.
+                    let mut state_elems = Vec::with_capacity(k + 1);
+                    state_elems.push(field_var(*rec_field));
+                    for b in bs {
+                        state_elems.push(subst_method_body(b, nb, &local_map, free_shift));
+                    }
+                    Cir::App(
+                        Box::new(Cir::Var(self_idx)),
+                        Box::new(Cir::Tuple(state_elems, Alloc::Gc)),
+                    )
+                }
+            };
+
+            // `let s = state in <core>` — `state` is Var(nfields) *before* this alias binder.
+            Arm {
+                con: ctor.name.clone(),
+                binders: nfields,
+                body: Cir::Let(Box::new(Cir::Var(nfields)), Box::new(core)),
+            }
+        })
+        .collect();
+
+    // LOOP = fix self. λ state. case state.0 of <loop_arms>
+    let loop_fix = Cir::Fix(Box::new(Cir::Lam(Box::new(Cir::Case(
+        Box::new(Cir::Proj(0, Box::new(Cir::Var(0)))),
+        loop_arms,
+    )))));
+
+    // Wrapper: λ scrut. λ a1. … λ ak. LOOP (scrut, a1, …, ak)  (scrut = Var k, ai = Var (k-i)).
+    let init_state: Vec<Cir> = (0..=k).map(|i| Cir::Var(k - i)).collect();
+    let mut wrapper = Cir::App(
+        Box::new(loop_fix),
+        Box::new(Cir::Tuple(init_state, Alloc::Gc)),
+    );
+    for _ in 0..=k {
+        wrapper = Cir::Lam(Box::new(wrapper));
+    }
+    Some(wrapper)
 }
 
 #[cfg(test)]
@@ -833,10 +1608,165 @@ mod tests {
         );
     }
 
+    /// The `sum-go` method shapes: `Zero ↦ λidx.λacc. acc`, and
+    /// `Succ ↦ λf.λih.λidx.λacc. ih (Succ idx) (acc + idx)` (the IH used once, in tail position,
+    /// saturated to the two accumulators — exactly what `recognize` leaves after folding `plus`).
+    fn sum_go_methods() -> (Vec<CtorShape>, Vec<Cir>) {
+        use crate::ir::NatPrimOp;
+        // body indices in Succ method scope: f=3, ih=2, idx=1, acc=0.
+        let succ_body = Cir::App(
+            Box::new(Cir::App(
+                Box::new(Cir::Var(2)),                                         // ih
+                Box::new(Cir::con(ConName("Succ".into()), vec![Cir::Var(1)])), // Succ idx
+            )),
+            Box::new(Cir::NatPrim {
+                op: NatPrimOp::Add,
+                lhs: Box::new(Cir::Var(0)),       // acc
+                rhs: Some(Box::new(Cir::Var(1))), // idx
+            }),
+        );
+        let succ_method = Cir::Lam(Box::new(Cir::Lam(Box::new(Cir::Lam(Box::new(Cir::Lam(
+            Box::new(succ_body),
+        )))))));
+        let zero_method = Cir::Lam(Box::new(Cir::Lam(Box::new(Cir::Var(0))))); // λidx.λacc. acc
+        let ctors = vec![
+            CtorShape {
+                name: ConName("Zero".into()),
+                is_rec: vec![],
+            },
+            CtorShape {
+                name: ConName("Succ".into()),
+                is_rec: vec![true],
+            },
+        ];
+        (ctors, vec![zero_method, succ_method])
+    }
+
+    /// 3a: the tail-accumulator `sum-go` catamorphism rebuilds as a `λscrut.λidx.λacc.` wrapper around
+    /// a `fix loop. λstate. case state.0 …` whose `Succ` arm is a **tail self-application** over the
+    /// updated `(pred, Succ idx, acc+idx)` state — i.e. a loop back-edge, no eager non-tail IH.
+    #[test]
+    fn build_elim_loop_rewrites_tail_accumulator() {
+        use crate::ir::NatPrimOp;
+        let (ctors, methods) = sum_go_methods();
+        let looped = build_elim_loop(&ctors, &methods).expect("sum-go matches the 3a pattern");
+
+        // Wrapper: k+1 = 3 leading lambdas, then `App(Fix, Tuple[scrut, idx, acc])`.
+        assert_eq!(count_leading_lams(&looped), 3, "λscrut.λidx.λacc. …");
+        let inner = peel_lams(&looped, 3).unwrap();
+        let Cir::App(fixfn, init) = inner else {
+            panic!("expected `LOOP init_state`, got {inner:?}");
+        };
+        assert_eq!(
+            **init,
+            Cir::Tuple(vec![Cir::Var(2), Cir::Var(1), Cir::Var(0)], Alloc::Gc),
+            "initial state is (scrut, a1, a2) from the wrapper binders"
+        );
+        let Cir::Fix(lam) = fixfn.as_ref() else {
+            panic!("expected a Fix loop, got {fixfn:?}");
+        };
+        let Cir::Lam(case) = lam.as_ref() else {
+            panic!("expected the loop's λstate, got {lam:?}");
+        };
+        let Cir::Case(scrut, arms) = case.as_ref() else {
+            panic!("expected `case state.0`, got {case:?}");
+        };
+        assert_eq!(
+            **scrut,
+            Cir::Proj(0, Box::new(Cir::Var(0))),
+            "scrutinee is the state's first slot"
+        );
+        assert_eq!(arms.len(), 2);
+
+        // Succ arm: binds the one field; the body aliases the state tuple to a local `s` (= Var 0)
+        // then is the *tail* self-application over the new state tuple, reading each accumulator as
+        // `Proj(1+i, s)`. With k=2, nfields=1 and the `s` alias on top: self = Var 3,
+        // field(pred) = Var 1, s = Var 0.
+        let succ = &arms[1];
+        assert_eq!(succ.con, ConName("Succ".into()));
+        assert_eq!(succ.binders, 1);
+        let s = || Cir::Var(0);
+        let core = Cir::App(
+            Box::new(Cir::Var(3)), // self
+            Box::new(Cir::Tuple(
+                vec![
+                    Cir::Var(1), // pred field (recursive field), shifted past the `s` alias
+                    // Succ idx, where idx = s slot 1
+                    Cir::con(ConName("Succ".into()), vec![Cir::Proj(1, Box::new(s()))]),
+                    // acc + idx = s slot 2 + s slot 1
+                    Cir::NatPrim {
+                        op: NatPrimOp::Add,
+                        lhs: Box::new(Cir::Proj(2, Box::new(s()))),
+                        rhs: Some(Box::new(Cir::Proj(1, Box::new(s())))),
+                    },
+                ],
+                Alloc::Gc,
+            )),
+        );
+        // The whole arm body is `let s = state in <core>`; with nfields = 1, state = Var 1 here.
+        let expected_succ = Cir::Let(Box::new(Cir::Var(1)), Box::new(core));
+        assert_eq!(succ.body, expected_succ, "Succ arm is a tail self-jump");
+
+        // Zero arm: `let s = state in <base method applied to the accumulators>` (no recursion).
+        let zero = &arms[0];
+        assert_eq!(zero.con, ConName("Zero".into()));
+        assert_eq!(zero.binders, 0);
+        assert!(
+            matches!(&zero.body, Cir::Let(v, b) if matches!(**v, Cir::Var(0)) && matches!(**b, Cir::App(_, _))),
+            "Zero arm aliases state then applies the base method to the accumulators: {:?}",
+            zero.body
+        );
+    }
+
+    /// 3a guard: when the induction hypothesis is **not** in tail position (it is consumed by another
+    /// operation, e.g. `(plus (ih …) acc)`), the pattern does not match and `build_elim_loop` declines
+    /// (the caller falls back to the worklist / eager form).
+    #[test]
+    fn build_elim_loop_declines_non_tail_ih() {
+        use crate::ir::NatPrimOp;
+        let (ctors, mut methods) = sum_go_methods();
+        // Succ method: `λf.λih.λidx.λacc. (ih idx acc) + acc` — IH no longer the spine head.
+        let mut non_tail = Cir::NatPrim {
+            op: NatPrimOp::Add,
+            lhs: Box::new(Cir::App(
+                Box::new(Cir::App(Box::new(Cir::Var(2)), Box::new(Cir::Var(1)))),
+                Box::new(Cir::Var(0)),
+            )),
+            rhs: Some(Box::new(Cir::Var(0))),
+        };
+        for _ in 0..4 {
+            non_tail = Cir::Lam(Box::new(non_tail));
+        }
+        methods[1] = non_tail;
+        assert!(
+            build_elim_loop(&ctors, &methods).is_none(),
+            "a non-tail IH must not be looped (falls back)"
+        );
+    }
+
+    /// 3a guard: a multi-recursive-field constructor (a binary tree) is the worklist's job, so the
+    /// tail-accumulator loop declines it.
+    #[test]
+    fn build_elim_loop_declines_multi_recursive_field() {
+        // A `Node l r` style constructor with two recursive fields.
+        let ctors = vec![CtorShape {
+            name: ConName("Node".into()),
+            is_rec: vec![true, true],
+        }];
+        let methods = vec![Cir::Lam(Box::new(Cir::Var(0)))];
+        assert!(
+            build_elim_loop(&ctors, &methods).is_none(),
+            "two recursive fields fall through to 3b"
+        );
+    }
+
     fn contains_erased(c: &Cir) -> bool {
         match c {
             Cir::Erased => true,
-            Cir::Var(_) | Cir::Global(_) | Cir::Foreign(_) | Cir::IntLit(_) => false,
+            Cir::Var(_) | Cir::Global(_) | Cir::IntLit(_) | Cir::NatLit(_) | Cir::StrLit(_) => {
+                false
+            }
+            Cir::Foreign(_, arg) => arg.as_ref().is_some_and(|a| contains_erased(a)),
             Cir::Lam(b) | Cir::Fix(b) => contains_erased(b),
             Cir::App(f, a) => contains_erased(f) || contains_erased(a),
             Cir::Let(v, b) => contains_erased(v) || contains_erased(b),
@@ -863,6 +1793,16 @@ mod tests {
             Cir::EnvRef(_) => false,
             Cir::CallClosure(f, a) => contains_erased(f) || contains_erased(a),
             Cir::IntPrim { lhs, rhs, .. } => contains_erased(lhs) || contains_erased(rhs),
+            Cir::NatPrim { lhs, rhs, .. } => {
+                contains_erased(lhs) || rhs.as_ref().map(|r| contains_erased(r)).unwrap_or(false)
+            }
+            Cir::FloatPrim { lhs, rhs, .. } => {
+                contains_erased(lhs) || rhs.as_ref().map(|r| contains_erased(r)).unwrap_or(false)
+            }
+            Cir::Flat { fields, .. } => fields.iter().any(|fl| fl.any_cir(contains_erased)),
+            Cir::FlatProj { layout, scrut, .. } => {
+                contains_erased(scrut) || layout.iter().any(|fl| fl.any_cir(contains_erased))
+            }
         }
     }
 }

@@ -1,0 +1,38 @@
+; fibrec_int.bl — Fibonacci as a *structural* (primitive-recursive) total function.
+;
+; History / the lesson: the naive double-recursive `fib n = fib (n-1) + fib (n-2)` is NOT primitive
+; recursive — `fib (n-2)` recurses on `k = n-2`, a sub-term reached by a *nested* match, not the
+; immediate predecessor the kernel's `Elim` provides an induction hypothesis for. That is exactly the
+; non-structural boundary `deftotal` must reject (see examples/ackermann.bl's `parity`). The
+; elaborator used to *silently* bind `fib k` to the inner match's induction hypothesis and miscompile
+; (`fib 5` evaluated to 65 in the kernel itself); that unsoundness is now fixed — `deftotal` rejects
+; the non-structural call. For a genuinely naive (call-overhead) recursion benchmark, see
+; bench/games/binrec, which double-recurses on a single match binder and is structural.
+;
+; The total, structural way to compute Fibonacci is the pair accumulator below: a single recursion on
+; the immediate predecessor `m` carrying the window `(fib m, fib (m+1))`. It uses only the structural
+; induction hypothesis `(fib-pair m)`, so it passes `deftotal`. `fibrec 32 = 2178309`.
+;
+;   cargo run -p blight-repl --features llvm -- build bench/games/fibrec/fibrec_int.bl -o fibrec \
+;     && ./fibrec   # => 2178309
+
+(load "std/nat.bl")
+
+; A pair of unboxed Ints: the running Fibonacci window.
+(defdata IntPair () (mk-intpair (a Int) (b Int)))
+
+; fib-pair n = (fib n, fib (n+1)). Structural recursion on `n`; the recursive call `(fib-pair m)` is
+; the induction hypothesis for the immediate predecessor `m`, then we slide the window one step.
+(deftotal fib-pair (Pi ((n Nat)) IntPair)
+  (lam (n)
+    (match n [(Zero) (mk-intpair (int 0) (int 1))]
+      [(Succ m) (match (the IntPair (fib-pair m)) [(mk-intpair a b) (mk-intpair b (int+ a b))])])))
+
+(deftotal fibrec (Pi ((n Nat)) Int)
+  (lam (n) (match (the IntPair (fib-pair n)) [(mk-intpair a b) a])))
+
+(define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+(define two Nat (Succ (Succ Zero)))
+(define thirtytwo Nat (plus (mult ten (Succ two)) two))
+
+(define main Int (fibrec thirtytwo))

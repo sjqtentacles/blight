@@ -10,9 +10,7 @@
 (load "std/nat.bl")
 
 (deftotal fib-go (Pi ((n Nat) (a Int) (b Int)) Int)
-  (lam (n a b) (match n
-    [(Zero) a]
-    [(Succ k) (fib-go k b (int+ a b))])))
+  (lam (n a b) (match n [(Zero) a] [(Succ k) (fib-go k b (int+ a b))])))
 
 (define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
 (define thirty Nat (mult (Succ (Succ (Succ Zero))) ten))

@@ -1,0 +1,31 @@
+; listfold_int.bl — a linear linked-list allocation workload (a different allocation *shape* from the
+; tree in treesum): build the cons-list [1 .. N], `map` (*2) over it, then `foldr (+)` it to one Int.
+; The result is sum_{i=1..N} 2*i = N*(N+1); with N = 10000 that is 100010000 (shared golden),
+; matching the C/Rust/OCaml/Haskell/Python reference impls.
+;
+; SIZE NOTE. N is 10000 (the as-measured size). `range`/`map`/`foldr` are all `deftotal`
+; single-recursive-field, nullary-base structural folds — exactly the P3 (3b) reverse-then-fold shape
+; — so as of P3 they compile to O(1) native stack rather than descending the spine on the C stack.
+; The size is bounded here by the unary-`Nat` fuel's compile cost (a fuel literal of size N is N-deep
+; to elaborate), not by a runtime stack ceiling; this bench measures per-element list-allocation cost
+; + traversal, not collection throughput. There is deliberately no `filter`: a predicate would need an
+; `Int -> Bool` bridge, which the kernel intentionally lacks (`Int` has no eliminator; see std/int.bl).
+;
+;   cargo run -p blight-repl --features llvm -- build bench/games/listfold/listfold_int.bl -o lf \
+;     && ./lf   # => 100010000
+
+(load "std/list.bl")
+(load "std/int.bl")
+
+; [lo .. lo+fuel-1] as a `List Int`: structural recursion on the `Nat` fuel, threading the `Int` index.
+(deftotal range (Pi ((fuel Nat) (lo Int)) (List Int))
+  (lam (fuel lo) (match fuel [(Zero) nil] [(Succ f) (cons lo (range f (int+ lo (int 1))))])))
+
+(define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+(define hundred Nat (mult ten ten))
+(define thousand Nat (mult hundred ten))
+(define tenthousand Nat (mult thousand ten))
+
+; Build [1..10000], double each element (map), then sum (foldr): sum of 2*i = N*(N+1) = 100010000.
+(define main Int
+  (foldr Int Int int-add (int 0) (map Int Int int-double (range tenthousand (int 1)))))

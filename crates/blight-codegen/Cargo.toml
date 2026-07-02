@@ -18,9 +18,18 @@ inkwell = { version = "0.9", features = ["llvm18-1"], optional = true }
 [features]
 default = []
 llvm = ["dep:inkwell"]
+# Graphics FFI (roadmap Wave 10 / P2, docs/design-wave4-gobars.md §5): links `runtime/graphics.c`
+# (a native `Graphics` effect handler, Design B) against a system SDL2 (`pkg-config sdl2`, or
+# `SDL2_CFLAGS`/`SDL2_LIBS` env overrides for a nonstandard install). Off by default so the ordinary
+# build/CI stay entirely SDL-free. Implies `llvm`: the graphics link hook lives entirely in
+# `driver.rs`/`runtime.rs`, both already gated behind `llvm` (`lib.rs`), so `graphics` alone (without
+# also requesting `llvm`) would silently compile nothing — `graphics = ["llvm"]` makes that a real
+# Cargo dependency instead of a comment-only convention.
+graphics = ["llvm"]
 
 [dev-dependencies]
 criterion = "0.5"
+wasmtime = { version = "46.0.1", default-features = false, features = ["cranelift", "runtime", "std"] }
 
 # Compile-pipeline microbenchmarks (lower -> region -> closure -> mono -> anf). Pure Rust, no LLVM
 # required: `cargo bench -p blight-codegen --bench pipeline`.

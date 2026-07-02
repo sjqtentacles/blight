@@ -1,0 +1,37 @@
+; hofold_int.bl — higher-order closure-indirection benchmark (P10 defunctionalization).
+;
+; A tight loop that applies a *capturing* closure `step` to an `Int` accumulator `fuel` times. The
+; closure `(adder (int 1))` captures `k = 1` in its environment, so it is a genuine runtime closure
+; (not a captureless global): each `(step acc)` is an indirect `bl_app` — load the function pointer
+; from the closure header, then an indirect `tailcc` call. `iterate` is tail-recursive on the `Nat`
+; `fuel`, so P3 elim-loop turns it into a `Jump` loop; `step` is loop-invariant, applied once per
+; iteration. With fuel = 10^6 that is ~10^6 indirect closure applies — the workload P10
+; defunctionalization targets (devirtualize `step` to a direct, inlinable call).
+;
+; Why a fold, not a sort: a fuel-bounded mergesort recomputes `(plus (length xs) (length ys))` as a
+; UNARY `Nat` per merge — O(N^2) allocation that would swamp the closure-indirection signal. An
+; iterate over a `mult`-built fuel (which `recognize` folds to a machine word) loops in O(N) with O(1)
+; per-step fuel peeling, isolating the indirect-apply cost. See bench/games/hofold/hofold_mono.bl for
+; the hand-defunctionalized twin (the lower bound this benchmark's defunctionalized form approaches).
+;
+;   cargo run -p blight-repl --features llvm -- build bench/games/hofold/hofold_int.bl -o hofold \
+;     && ./hofold   # => 1000000
+
+(load "std/nat.bl")
+(load "std/int.bl")
+
+; `adder k` returns a closure `(lam (a) (int+ a k))` capturing `k` — a first-class function value.
+(deftotal adder (Pi ((k Int)) (Pi ((a Int)) Int)) (lam (k) (lam (a) (int+ a k))))
+
+; Apply `step` to `acc`, `fuel` times. Structural recursion on the `Nat` `fuel`; `step` is the
+; higher-order parameter applied indirectly at `(step acc)`.
+(deftotal iterate (Pi ((fuel Nat) (step (Pi ((a Int)) Int)) (acc Int)) Int)
+  (lam (fuel step acc) (match fuel [(Zero) acc] [(Succ f) (iterate f step (step acc))])))
+
+(define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+(define hundred Nat (mult ten ten))
+(define thousand Nat (mult hundred ten))
+(define million Nat (mult thousand thousand))
+
+; iterate (+1) a million times starting from 0 => 1000000.
+(define main Int (iterate million (adder (int 1)) (int 0)))

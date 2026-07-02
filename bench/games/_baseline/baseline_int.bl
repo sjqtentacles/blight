@@ -1,0 +1,7 @@
+; baseline_int.bl — near-empty Blight program: initializes the runtime (heap/stack), prints the same
+; single `Int` value the real benches print, and exits. Its peak RSS is Blight's startup/runtime floor
+; (dominated by the initial GC nursery), which bench/game.sh subtracts from each problem's peak RSS to
+; report a startup-adjusted "RSS delta" — the memory actually attributable to the workload.
+;
+;   cargo run -p blight-repl --features llvm -- build bench/games/_baseline/baseline_int.bl -o base && ./base  # => 0
+(define main Int (int 0))

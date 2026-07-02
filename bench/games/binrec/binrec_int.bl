@@ -1,0 +1,28 @@
+; binrec_int.bl — array-free compute / recursion-overhead benchmark: count the nodes of a perfect
+; binary tree of height d *without building it*, by naive binary recursion `t d = 1 + t(d-1) + t(d-1)`
+; (= 2^(d+1) - 1). With d = 21 the result is 4194303 (shared golden) and the function makes ~2^22
+; calls — a pure call-overhead / arithmetic workload that decisively escapes process-startup time.
+;
+; Why this shape. The recursion is only d-deep (a *shallow* call tree, like treesum's `build`), so it
+; scales freely where the linear fib/sum loops overflow the native stack. Both recursive calls use the
+; SAME single-match binder `m` (the pattern treesum uses and that the backend compiles correctly);
+; a naive *Fibonacci* (`t(m) + t(k)` on two nested-match-derived binders) is deliberately NOT used here
+; — see docs/benchmarks-game.md. primes/Collatz are also avoided: they branch on integer
+; divisibility/parity, which needs an `Int -> Bool` eliminator the kernel intentionally lacks
+; (std/int.bl); `binrec` branches on the structural `Nat` and does arithmetic in unboxed `Int`.
+;
+;   cargo run -p blight-repl --features llvm -- build bench/games/binrec/binrec_int.bl -o binrec \
+;     && ./binrec   # => 4194303
+
+(load "std/nat.bl")
+
+; d |-> node count of a perfect binary tree of height d = 1 + t(d-1) + t(d-1) = 2^(d+1) - 1.
+(deftotal binrec (Pi ((d Nat)) Int)
+  (lam (d) (match d [(Zero) (int 1)] [(Succ m) (int+ (int+ (binrec m) (binrec m)) (int 1))])))
+
+(define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+(define two Nat (Succ (Succ Zero)))
+(define one Nat (Succ Zero))
+(define twentyone Nat (plus (mult ten two) one))
+
+(define main Int (binrec twentyone))

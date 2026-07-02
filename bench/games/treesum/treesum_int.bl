@@ -1,0 +1,33 @@
+; treesum_int.bl — alloc-churn / GC benchmark: build a full binary `Tree` of depth 20 carrying
+; `Int 1` at every internal `node`, then fold-sum every node label. A depth-20 full binary tree has
+; 2^20 - 1 = 1048575 internal `node`s (each labeled 1) and 2^20 = 1048576 `leaf`s (labeled 0), so the
+; allocator churns ~2^21 objects while the sum = internal-node count = 1048575 (shared golden),
+; matching the C/Rust/OCaml/Haskell/Python reference impls. (Tree recursion is only depth-20 deep, so
+; it scales freely unlike the linear fib/sum loops — see docs/benchmarks-game.md.)
+;
+; Unlike the fib/sum loops (unboxed `Int` in registers, ~zero allocation), this workload deliberately
+; stresses the allocator + collector: it builds and immediately discards a large tree, exercising the
+; M27 SRA pass, the M28 bl_alloc fast path, and minor-GC throughput. Run with BL_GC_STATS=1 to print
+; the collection count to stderr.
+;
+;   cargo run -p blight-repl --features llvm -- build bench/games/treesum/treesum_int.bl -o treesum \
+;     && ./treesum   # => 262143
+;
+; A structural `Nat` fuel counter bounds the recursion depth (Int has no eliminator).
+
+(load "std/nat.bl")
+(load "std/tree.bl")
+(load "std/int.bl")
+
+; Build a full binary tree of the given Nat depth, `Int 1` at every node.
+(deftotal build (Pi ((depth Nat)) (Tree Int))
+  (lam (depth) (match depth [(Zero) (leaf)] [(Succ d) (node (build d) (int 1) (build d))])))
+
+; Sum every node's Int label (leaf contributes 0).
+(deftotal tree-sum (Pi ((tr (Tree Int))) Int)
+  (lam (tr) (match tr [(leaf) (int 0)] [(node l x r) (int+ (int+ (tree-sum l) x) (tree-sum r))])))
+
+(define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+(define twenty Nat (plus ten ten))
+
+(define main Int (tree-sum (build twenty)))

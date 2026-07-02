@@ -23,16 +23,22 @@ use std::collections::HashMap;
 /// non-recursive closure calls. Returns a program in which residual generic indirection has been
 /// removed where statically determinable.
 pub fn monomorphize(prog: &Program) -> Program {
+    if std::env::var_os("BL_NO_MONO").is_some() {
+        return prog.clone();
+    }
     let func_map: HashMap<String, Func> = prog
         .funcs
         .iter()
         .map(|f| (f.name.clone(), f.clone()))
         .collect();
+    // Whole-program effect analysis (computed once): which functions, fully applied, may perform an
+    // effect. Used to decide whether dropping/duplicating a beta-redex argument is sound.
+    let eff = effectful_funcs(&func_map);
 
     let mut entry = prog.entry.clone();
     // Iterate to a (bounded) fixpoint: each pass may expose new redexes.
     for _ in 0..MAX_ROUNDS {
-        let next = reduce(&entry, &func_map);
+        let next = reduce(&entry, &func_map, &eff);
         if next == entry {
             break;
         }
@@ -47,7 +53,7 @@ pub fn monomorphize(prog: &Program) -> Program {
         .map(|f| {
             let mut body = f.body.clone();
             for _ in 0..MAX_ROUNDS {
-                let next = reduce(&body, &func_map);
+                let next = reduce(&body, &func_map, &eff);
                 if next == body {
                     break;
                 }
@@ -104,8 +110,14 @@ fn collect_closure_names(c: &Cir, out: &mut Vec<String>) {
         | Cir::Global(_)
         | Cir::EnvRef(_)
         | Cir::Erased
-        | Cir::Foreign(_)
-        | Cir::IntLit(_) => {}
+        | Cir::IntLit(_)
+        | Cir::NatLit(_)
+        | Cir::StrLit(_) => {}
+        Cir::Foreign(_, arg) => {
+            if let Some(a) = arg {
+                collect_closure_names(a, out);
+            }
+        }
         Cir::Lam(b) | Cir::Fix(b) => collect_closure_names(b, out),
         Cir::App(f, a) | Cir::CallClosure(f, a) | Cir::Let(f, a) => {
             collect_closure_names(f, out);
@@ -114,6 +126,18 @@ fn collect_closure_names(c: &Cir, out: &mut Vec<String>) {
         Cir::IntPrim { lhs, rhs, .. } => {
             collect_closure_names(lhs, out);
             collect_closure_names(rhs, out);
+        }
+        Cir::NatPrim { lhs, rhs, .. } => {
+            collect_closure_names(lhs, out);
+            if let Some(r) = rhs {
+                collect_closure_names(r, out);
+            }
+        }
+        Cir::FloatPrim { lhs, rhs, .. } => {
+            collect_closure_names(lhs, out);
+            if let Some(r) = rhs {
+                collect_closure_names(r, out);
+            }
         }
         Cir::Con(_, args, _) | Cir::Tuple(args, _) => {
             args.iter().for_each(|a| collect_closure_names(a, out))
@@ -142,14 +166,17 @@ fn collect_closure_names(c: &Cir, out: &mut Vec<String>) {
                 .iter()
                 .for_each(|(_, e)| collect_closure_names(e, out));
         }
+        Cir::Flat { .. } | Cir::FlatProj { .. } => {
+            unreachable!("flatten runs after monomorphization")
+        }
     }
 }
 
 /// One reduction pass: dictionary selection + known-closure-call specialization, applied
-/// bottom-up.
-fn reduce(c: &Cir, funcs: &HashMap<String, Func>) -> Cir {
+/// bottom-up. `eff` is the whole-program set of effectful function names (see `effectful_funcs`).
+fn reduce(c: &Cir, funcs: &HashMap<String, Func>, eff: &std::collections::HashSet<String>) -> Cir {
     // First reduce children, then attempt a redex at the root.
-    let c = reduce_children(c, funcs);
+    let c = reduce_children(c, funcs, eff);
     match &c {
         // Dictionary selection: project a statically-built tuple.
         Cir::Proj(i, e) => {
@@ -164,14 +191,22 @@ fn reduce(c: &Cir, funcs: &HashMap<String, Func>) -> Cir {
         Cir::CallClosure(callee, arg) => {
             if let Cir::MkClosure(name, env, _) = &**callee {
                 if let Some(func) = funcs.get(name) {
-                    // Beta-reducing `(λx. body) arg` to `body[arg/x]` is only sound when it does not
-                    // *discard* an effect: if `arg` performs an effect (e.g. `perform print "A"`) and
-                    // the parameter is unused (a discarded `let _ = …`), substitution would drop the
-                    // operation entirely. In that case keep the call so the native OpNode-aware
-                    // `bl_app` sequences the effect (its continuation is `λx. body`). Pure args, or a
-                    // used parameter, inline freely.
-                    let would_drop_effect = top_effectful(arg) && !body_uses_param(&func.body);
-                    if !func.recursive && should_inline(&func.body) && !would_drop_effect {
+                    // Beta-reducing `(λx. body) arg` to `body[arg/x]` substitutes `arg` at *every* use
+                    // of `x`. With an effectful `arg` (a `perform`/`force`/foreign call, or a *call*
+                    // whose callee performs effects — the lexer's curried `wr …`/`fill-from …`) this
+                    // is only sound when the effect runs exactly as often as before:
+                    //   * unused param (0 uses) → substitution would *drop* the effect;
+                    //   * 2+ uses               → substitution would *duplicate* it.
+                    // So we inline an effectful `arg` only when the parameter is used *exactly once*
+                    // (the effect still runs once); otherwise keep the call and let the native
+                    // OpNode-aware `bl_app` sequence it (continuation = `λx. body`). Pure args inline
+                    // freely regardless of use count. `arg_may_effect` uses the precomputed
+                    // whole-program `eff` set, so it correctly sees a curried call to an effectful
+                    // `define-rec` worker (whose `perform` sits under its parameter binders) while a
+                    // genuinely pure recursor (`string-reverse`, palindrome) stays inlinable.
+                    let uses = count_param_uses(&func.body);
+                    let inhibits_effect_inline = uses != 1 && arg_may_effect(arg, eff);
+                    if !func.recursive && should_inline(&func.body) && !inhibits_effect_inline {
                         // Substitute: de Bruijn 0 = arg; EnvRef(k) = env[k].
                         return instantiate(&func.body, arg, env);
                     }
@@ -190,34 +225,290 @@ fn should_inline(_body: &Cir) -> bool {
     true
 }
 
-/// Does `c` perform an observable effect when evaluated *to a value at this position* — i.e. without
-/// first crossing a binder that suspends evaluation? `perform`/`handle`/`force` are the effectful
-/// eliminators; `Lam`/`Later` thunk their bodies, so an effect underneath them is not performed by
-/// merely evaluating `c`. Used to decide whether dropping an unused beta-redex argument would lose
-/// an effect (in which case we must keep the call so the runtime sequences it).
-fn top_effectful(c: &Cir) -> bool {
-    match c {
-        Cir::Op { .. } | Cir::Handle { .. } | Cir::Force(_) => true,
-        // Suspended: their bodies do not run when this node is evaluated.
-        Cir::Lam(_) | Cir::Fix(_) | Cir::Later(_, _) => false,
-        // A foreign C call may have arbitrary side effects, so never let beta-reduction discard one.
-        Cir::Foreign(_) => true,
-        Cir::Var(_) | Cir::Global(_) | Cir::Erased | Cir::EnvRef(_) | Cir::IntLit(_) => false,
-        Cir::App(f, a) | Cir::CallClosure(f, a) => top_effectful(f) || top_effectful(a),
-        Cir::IntPrim { lhs, rhs, .. } => top_effectful(lhs) || top_effectful(rhs),
-        Cir::Let(v, b) => top_effectful(v) || top_effectful(b),
-        Cir::Con(_, args, _) | Cir::Tuple(args, _) | Cir::MkClosure(_, args, _) => {
-            args.iter().any(top_effectful)
+/// Whole-program effect analysis (computed once, fixpoint): the set of function names whose body —
+/// when **fully applied** — may perform an observable effect (`perform`/`force`/foreign), directly or
+/// by calling another effectful function. Unlike a position-sensitive top-level effect check, this
+/// scans
+/// *through* `Lam`/`Fix`/`Later` binders: a curried recursive worker (the lexer's `wr`/`fill-from`)
+/// carries its `perform set-byte` under the `λh.λi.…` parameter binders, and fully applying it runs
+/// that body. A function calling such a worker (the 3-arg wrapper, or `main`) is transitively
+/// effectful. Call heads are resolved through `MkClosure`/`Global` names (currying chains included).
+/// This is used only to decide whether *dropping/duplicating* a beta-redex argument is sound, so an
+/// over-approximation (treating a never-fully-applied partial as effectful) only costs a missed
+/// inline, never correctness.
+fn effectful_funcs(funcs: &HashMap<String, Func>) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+    // direct[f] = f's body syntactically contains an Op/Force/Foreign (scanning through binders).
+    // calls[f]  = set of function names f's body calls (resolved heads).
+    fn scan(c: &Cir, direct: &mut bool, calls: &mut HashSet<String>) {
+        match c {
+            Cir::Op { arg, .. } => {
+                *direct = true;
+                scan(arg, direct, calls);
+            }
+            Cir::Force(e) => {
+                *direct = true;
+                scan(e, direct, calls);
+            }
+            Cir::Foreign(_, arg) => {
+                *direct = true;
+                if let Some(a) = arg {
+                    scan(a, direct, calls);
+                }
+            }
+            Cir::App(f, a) | Cir::CallClosure(f, a) => {
+                // Resolve the (possibly curried) head to a function name and record the call edge.
+                let mut head = &**f;
+                loop {
+                    match head {
+                        Cir::App(g, _) | Cir::CallClosure(g, _) => head = g,
+                        Cir::MkClosure(name, _, _) | Cir::Global(name) => {
+                            calls.insert(name.clone());
+                            break;
+                        }
+                        _ => break,
+                    }
+                }
+                scan(f, direct, calls);
+                scan(a, direct, calls);
+            }
+            Cir::Lam(b) | Cir::Fix(b) | Cir::Later(b, _) => scan(b, direct, calls),
+            Cir::Let(v, b) => {
+                scan(v, direct, calls);
+                scan(b, direct, calls);
+            }
+            Cir::Con(_, args, _) | Cir::Tuple(args, _) => {
+                for a in args {
+                    scan(a, direct, calls);
+                }
+            }
+            // A `MkClosure(name, caps)` is a *value* that exists to be applied (often indirectly, by
+            // being returned and then called at another site — e.g. the lexer's continuation chain
+            // `rec_1` → `lam_8` returns `MkClosure(lam_7)` which is then applied to the recursion, and
+            // the `perform set-byte` lives in `lam_7`). A purely syntactic "head resolves to a name"
+            // call graph misses these indirect applications, so we conservatively record *every*
+            // referenced closure name as a potential call edge. This over-approximates effectfulness
+            // (a closure that is built but never applied is treated as if called), which for the
+            // drop/duplicate decision only costs a missed inline, never a dropped/duplicated effect.
+            Cir::MkClosure(name, caps, _) => {
+                calls.insert(name.clone());
+                for a in caps {
+                    scan(a, direct, calls);
+                }
+            }
+            Cir::Case(s, arms) => {
+                scan(s, direct, calls);
+                for a in arms {
+                    scan(&a.body, direct, calls);
+                }
+            }
+            Cir::IntPrim { lhs, rhs, .. } => {
+                scan(lhs, direct, calls);
+                scan(rhs, direct, calls);
+            }
+            Cir::NatPrim { lhs, rhs, .. } | Cir::FloatPrim { lhs, rhs, .. } => {
+                scan(lhs, direct, calls);
+                if let Some(r) = rhs {
+                    scan(r, direct, calls);
+                }
+            }
+            Cir::Proj(_, e) | Cir::Now(e, _) | Cir::Region(e) => scan(e, direct, calls),
+            Cir::Handle {
+                body,
+                return_clause,
+                op_clauses,
+            } => {
+                // A `handle` installs a handler and runs its body (which may perform). Treat it as a
+                // direct effect site and scan its sub-terms for call edges.
+                *direct = true;
+                scan(body, direct, calls);
+                scan(return_clause, direct, calls);
+                for (_, e) in op_clauses {
+                    scan(e, direct, calls);
+                }
+            }
+            Cir::Var(_)
+            | Cir::EnvRef(_)
+            | Cir::Global(_)
+            | Cir::Erased
+            | Cir::IntLit(_)
+            | Cir::NatLit(_)
+            | Cir::StrLit(_) => {}
+            Cir::Flat { .. } | Cir::FlatProj { .. } => {
+                unreachable!("flatten runs after monomorphization")
+            }
         }
-        Cir::Case(s, arms) => top_effectful(s) || arms.iter().any(|a| top_effectful(&a.body)),
-        Cir::Proj(_, e) | Cir::Now(e, _) | Cir::Region(e) => top_effectful(e),
+    }
+    let mut direct: HashSet<String> = HashSet::new();
+    let mut edges: HashMap<String, HashSet<String>> = HashMap::new();
+    for (name, f) in funcs {
+        let mut d = false;
+        let mut calls = HashSet::new();
+        scan(&f.body, &mut d, &mut calls);
+        if d {
+            direct.insert(name.clone());
+        }
+        edges.insert(name.clone(), calls);
+    }
+    // Fixpoint: propagate effectfulness backwards along call edges (f effectful if it calls any
+    // effectful g). Iterate to saturation.
+    let mut eff = direct;
+    loop {
+        let mut changed = false;
+        for (name, callees) in &edges {
+            if eff.contains(name) {
+                continue;
+            }
+            if callees.iter().any(|c| eff.contains(c)) {
+                eff.insert(name.clone());
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    eff
+}
+
+/// Could *evaluating `arg` to a value at this position* perform an observable effect? Used to gate
+/// dropping/duplicating a beta-redex argument. `arg` is effectful if, without first crossing a
+/// suspending binder (`Lam`/`Fix`/`Later` — whose body is not run by evaluating `arg`), it reaches a
+/// `perform`/`handle`/`force`/foreign node, **or** an application whose (possibly curried) head
+/// resolves to a function in the whole-program effectful set `eff`. A `Var`/`EnvRef`-headed
+/// application (a self-recursive or `let`-bound-closure call) is treated as maybe-effectful only when
+/// it actually reaches `eff`; an unresolvable head is conservatively effectful (a missed inline, never
+/// a dropped effect). This is the precise complement of `effectful_funcs`: the set sees through
+/// parameter binders to find a worker's `perform`, and here we resolve the call edge to that worker.
+fn arg_may_effect(c: &Cir, eff: &std::collections::HashSet<String>) -> bool {
+    match c {
+        Cir::Op { .. } | Cir::Handle { .. } | Cir::Force(_) | Cir::Foreign(..) => true,
+        // Suspended: evaluating this node does not run the body.
+        Cir::Lam(_) | Cir::Fix(_) | Cir::Later(_, _) => false,
+        Cir::Var(_)
+        | Cir::Global(_)
+        | Cir::Erased
+        | Cir::EnvRef(_)
+        | Cir::IntLit(_)
+        | Cir::NatLit(_)
+        | Cir::StrLit(_) => false,
+        Cir::App(f, a) | Cir::CallClosure(f, a) => {
+            if arg_may_effect(f, eff) || arg_may_effect(a, eff) {
+                return true;
+            }
+            // Resolve the (possibly curried) head to a function name; the call runs that body.
+            let mut head = &**f;
+            loop {
+                match head {
+                    Cir::App(g, _) | Cir::CallClosure(g, _) => head = g,
+                    Cir::MkClosure(name, _, _) | Cir::Global(name) => {
+                        return eff.contains(name);
+                    }
+                    // Self-recursive / let-bound-closure head we cannot name: conservatively keep.
+                    Cir::Var(_) | Cir::EnvRef(_) => return true,
+                    _ => return false,
+                }
+            }
+        }
+        Cir::IntPrim { lhs, rhs, .. } => arg_may_effect(lhs, eff) || arg_may_effect(rhs, eff),
+        Cir::NatPrim { lhs, rhs, .. } | Cir::FloatPrim { lhs, rhs, .. } => {
+            arg_may_effect(lhs, eff)
+                || rhs
+                    .as_ref()
+                    .map(|r| arg_may_effect(r, eff))
+                    .unwrap_or(false)
+        }
+        Cir::Let(v, b) => arg_may_effect(v, eff) || arg_may_effect(b, eff),
+        Cir::Con(_, args, _) | Cir::Tuple(args, _) | Cir::MkClosure(_, args, _) => {
+            args.iter().any(|a| arg_may_effect(a, eff))
+        }
+        Cir::Case(s, arms) => {
+            arg_may_effect(s, eff) || arms.iter().any(|a| arg_may_effect(&a.body, eff))
+        }
+        Cir::Proj(_, e) | Cir::Now(e, _) | Cir::Region(e) => arg_may_effect(e, eff),
+        Cir::Flat { .. } | Cir::FlatProj { .. } => {
+            unreachable!("flatten runs after monomorphization")
+        }
     }
 }
 
-/// Does a closure body reference its parameter (de Bruijn 0)? After closure conversion the parameter
-/// is `Var(0)` directly in the body (captures are `EnvRef`), so this is `cir_uses(body, 0)`.
-fn body_uses_param(body: &Cir) -> bool {
-    crate::lower::cir_uses(body, 0)
+/// Count how many times a closure body uses its parameter (de Bruijn 0), saturating at 2 (we only
+/// ever distinguish 0 / exactly-1 / many). After closure conversion the parameter is `Var(0)` in the
+/// body (captures are `EnvRef`); we descend tracking the binder depth so a nested `Var(depth)` is the
+/// same parameter. Crucially, *any* use under a suspending binder (`Lam`/`Fix`/`Later` body) counts
+/// as "many": that body may run more than once, so substituting an effectful argument there would
+/// re-perform the effect per invocation. This is what makes effectful-argument inlining sound — it
+/// fires only when the effect would run exactly once.
+fn count_param_uses(body: &Cir) -> usize {
+    fn go(c: &Cir, depth: usize, suspended: bool) -> usize {
+        let cap = |n: usize| n.min(2);
+        match c {
+            Cir::Var(i) => {
+                if *i == depth {
+                    if suspended {
+                        2
+                    } else {
+                        1
+                    }
+                } else {
+                    0
+                }
+            }
+            Cir::Global(_)
+            | Cir::Erased
+            | Cir::EnvRef(_)
+            | Cir::IntLit(_)
+            | Cir::NatLit(_)
+            | Cir::StrLit(_) => 0,
+            Cir::Foreign(_, arg) => arg
+                .as_ref()
+                .map(|a| go(a, depth, suspended))
+                .unwrap_or(0),
+            // Suspending binders: a use inside runs an unknown number of times.
+            Cir::Lam(b) | Cir::Fix(b) => cap(go(b, depth + 1, true)),
+            Cir::Later(e, _) => cap(go(e, depth, true)),
+            Cir::Let(v, b) => cap(go(v, depth, suspended) + go(b, depth + 1, suspended)),
+            Cir::App(f, a) | Cir::CallClosure(f, a) => {
+                cap(go(f, depth, suspended) + go(a, depth, suspended))
+            }
+            Cir::IntPrim { lhs, rhs, .. } => {
+                cap(go(lhs, depth, suspended) + go(rhs, depth, suspended))
+            }
+            Cir::NatPrim { lhs, rhs, .. } | Cir::FloatPrim { lhs, rhs, .. } => {
+                cap(go(lhs, depth, suspended)
+                    + rhs.as_ref().map(|r| go(r, depth, suspended)).unwrap_or(0))
+            }
+            Cir::Con(_, args, _) | Cir::Tuple(args, _) | Cir::MkClosure(_, args, _) => {
+                cap(args.iter().map(|a| go(a, depth, suspended)).sum())
+            }
+            // Each arm binds `arm.binders` fields, so the parameter is at `depth + binders` inside it.
+            // Arms are alternatives (only one runs), but to stay conservative we sum: an effectful arg
+            // used in two arms still must not be duplicated into both.
+            Cir::Case(s, arms) => cap(go(s, depth, suspended)
+                + arms
+                    .iter()
+                    .map(|a| go(&a.body, depth + a.binders, suspended))
+                    .sum::<usize>()),
+            Cir::Proj(_, e) | Cir::Now(e, _) | Cir::Force(e) | Cir::Region(e) => {
+                cap(go(e, depth, suspended))
+            }
+            Cir::Op { arg, .. } => cap(go(arg, depth, suspended)),
+            Cir::Handle {
+                body,
+                return_clause,
+                op_clauses,
+            } => cap(go(body, depth, true)
+                + go(return_clause, depth + 1, true)
+                + op_clauses
+                    .iter()
+                    .map(|(_, e)| go(e, depth + 2, true))
+                    .sum::<usize>()),
+            Cir::Flat { .. } | Cir::FlatProj { .. } => {
+                unreachable!("flatten runs after monomorphization")
+            }
+        }
+    }
+    go(body, 0, false)
 }
 
 /// Substitute the closure's argument for de Bruijn 0 and the environment captures for `EnvRef(k)`
@@ -240,7 +531,15 @@ fn instantiate(body: &Cir, arg: &Cir, env: &[Cir]) -> Cir {
                 // Captures belong to the caller's scope; shift past the binders we crossed.
                 shift(&env[*k], depth)
             }
-            Cir::Global(_) | Cir::Erased | Cir::Foreign(_) | Cir::IntLit(_) => c.clone(),
+            Cir::Global(_)
+            | Cir::Erased
+            | Cir::IntLit(_)
+            | Cir::NatLit(_)
+            | Cir::StrLit(_) => c.clone(),
+            Cir::Foreign(sym, a) => Cir::Foreign(
+                sym.clone(),
+                a.as_ref().map(|x| Box::new(go(x, depth, arg, env))),
+            ),
             Cir::Lam(b) => Cir::Lam(Box::new(go(b, depth + 1, arg, env))),
             Cir::Fix(b) => Cir::Fix(Box::new(go(b, depth + 1, arg, env))),
             Cir::App(f, a) => Cir::App(
@@ -255,6 +554,16 @@ fn instantiate(body: &Cir, arg: &Cir, env: &[Cir]) -> Cir {
                 op: *op,
                 lhs: Box::new(go(lhs, depth, arg, env)),
                 rhs: Box::new(go(rhs, depth, arg, env)),
+            },
+            Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
+                op: *op,
+                lhs: Box::new(go(lhs, depth, arg, env)),
+                rhs: rhs.as_ref().map(|r| Box::new(go(r, depth, arg, env))),
+            },
+            Cir::FloatPrim { op, lhs, rhs } => Cir::FloatPrim {
+                op: *op,
+                lhs: Box::new(go(lhs, depth, arg, env)),
+                rhs: rhs.as_ref().map(|r| Box::new(go(r, depth, arg, env))),
             },
             Cir::Let(v, b) => Cir::Let(
                 Box::new(go(v, depth, arg, env)),
@@ -305,6 +614,9 @@ fn instantiate(body: &Cir, arg: &Cir, env: &[Cir]) -> Cir {
                     .map(|(n, e)| (n.clone(), go(e, depth, arg, env)))
                     .collect(),
             },
+            Cir::Flat { .. } | Cir::FlatProj { .. } => {
+                unreachable!("flatten runs after monomorphization")
+            }
         }
     }
     go(body, 0, arg, env)
@@ -322,8 +634,14 @@ fn shift(c: &Cir, by: usize) -> Cir {
                     Cir::Var(*i)
                 }
             }
-            Cir::Global(_) | Cir::EnvRef(_) | Cir::Erased | Cir::Foreign(_) | Cir::IntLit(_) => {
-                c.clone()
+            Cir::Global(_)
+            | Cir::EnvRef(_)
+            | Cir::Erased
+            | Cir::IntLit(_)
+            | Cir::NatLit(_)
+            | Cir::StrLit(_) => c.clone(),
+            Cir::Foreign(sym, a) => {
+                Cir::Foreign(sym.clone(), a.as_ref().map(|x| Box::new(go(x, by, depth))))
             }
             Cir::Lam(b) => Cir::Lam(Box::new(go(b, by, depth + 1))),
             Cir::Fix(b) => Cir::Fix(Box::new(go(b, by, depth + 1))),
@@ -335,6 +653,16 @@ fn shift(c: &Cir, by: usize) -> Cir {
                 op: *op,
                 lhs: Box::new(go(lhs, by, depth)),
                 rhs: Box::new(go(rhs, by, depth)),
+            },
+            Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
+                op: *op,
+                lhs: Box::new(go(lhs, by, depth)),
+                rhs: rhs.as_ref().map(|r| Box::new(go(r, by, depth))),
+            },
+            Cir::FloatPrim { op, lhs, rhs } => Cir::FloatPrim {
+                op: *op,
+                lhs: Box::new(go(lhs, by, depth)),
+                rhs: rhs.as_ref().map(|r| Box::new(go(r, by, depth))),
             },
             Cir::Let(v, b) => Cir::Let(Box::new(go(v, by, depth)), Box::new(go(b, by, depth + 1))),
             Cir::Con(n, args, al) => Cir::Con(
@@ -382,6 +710,9 @@ fn shift(c: &Cir, by: usize) -> Cir {
                     .map(|(n, e)| (n.clone(), go(e, by, depth)))
                     .collect(),
             },
+            Cir::Flat { .. } | Cir::FlatProj { .. } => {
+                unreachable!("flatten runs after monomorphization")
+            }
         }
     }
     if by == 0 {
@@ -392,69 +723,100 @@ fn shift(c: &Cir, by: usize) -> Cir {
 }
 
 /// Recurse into `c`'s children with `reduce`.
-fn reduce_children(c: &Cir, funcs: &HashMap<String, Func>) -> Cir {
+fn reduce_children(
+    c: &Cir,
+    funcs: &HashMap<String, Func>,
+    eff: &std::collections::HashSet<String>,
+) -> Cir {
     match c {
         Cir::Var(_)
         | Cir::Global(_)
         | Cir::EnvRef(_)
         | Cir::Erased
-        | Cir::Foreign(_)
-        | Cir::IntLit(_) => c.clone(),
-        Cir::Lam(b) => Cir::Lam(Box::new(reduce(b, funcs))),
-        Cir::Fix(b) => Cir::Fix(Box::new(reduce(b, funcs))),
-        Cir::App(f, a) => Cir::App(Box::new(reduce(f, funcs)), Box::new(reduce(a, funcs))),
-        Cir::CallClosure(f, a) => {
-            Cir::CallClosure(Box::new(reduce(f, funcs)), Box::new(reduce(a, funcs)))
-        }
+        | Cir::IntLit(_)
+        | Cir::NatLit(_)
+        | Cir::StrLit(_) => c.clone(),
+        Cir::Foreign(sym, arg) => Cir::Foreign(
+            sym.clone(),
+            arg.as_ref().map(|a| Box::new(reduce(a, funcs, eff))),
+        ),
+        Cir::Lam(b) => Cir::Lam(Box::new(reduce(b, funcs, eff))),
+        Cir::Fix(b) => Cir::Fix(Box::new(reduce(b, funcs, eff))),
+        Cir::App(f, a) => Cir::App(
+            Box::new(reduce(f, funcs, eff)),
+            Box::new(reduce(a, funcs, eff)),
+        ),
+        Cir::CallClosure(f, a) => Cir::CallClosure(
+            Box::new(reduce(f, funcs, eff)),
+            Box::new(reduce(a, funcs, eff)),
+        ),
         Cir::IntPrim { op, lhs, rhs } => Cir::IntPrim {
             op: *op,
-            lhs: Box::new(reduce(lhs, funcs)),
-            rhs: Box::new(reduce(rhs, funcs)),
+            lhs: Box::new(reduce(lhs, funcs, eff)),
+            rhs: Box::new(reduce(rhs, funcs, eff)),
         },
-        Cir::Let(v, b) => Cir::Let(Box::new(reduce(v, funcs)), Box::new(reduce(b, funcs))),
+        Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
+            op: *op,
+            lhs: Box::new(reduce(lhs, funcs, eff)),
+            rhs: rhs.as_ref().map(|r| Box::new(reduce(r, funcs, eff))),
+        },
+        Cir::FloatPrim { op, lhs, rhs } => Cir::FloatPrim {
+            op: *op,
+            lhs: Box::new(reduce(lhs, funcs, eff)),
+            rhs: rhs.as_ref().map(|r| Box::new(reduce(r, funcs, eff))),
+        },
+        Cir::Let(v, b) => Cir::Let(
+            Box::new(reduce(v, funcs, eff)),
+            Box::new(reduce(b, funcs, eff)),
+        ),
         Cir::Con(n, args, al) => Cir::Con(
             n.clone(),
-            args.iter().map(|a| reduce(a, funcs)).collect(),
+            args.iter().map(|a| reduce(a, funcs, eff)).collect(),
             *al,
         ),
-        Cir::Tuple(args, al) => Cir::Tuple(args.iter().map(|a| reduce(a, funcs)).collect(), *al),
+        Cir::Tuple(args, al) => {
+            Cir::Tuple(args.iter().map(|a| reduce(a, funcs, eff)).collect(), *al)
+        }
         Cir::MkClosure(n, caps, al) => Cir::MkClosure(
             n.clone(),
-            caps.iter().map(|a| reduce(a, funcs)).collect(),
+            caps.iter().map(|a| reduce(a, funcs, eff)).collect(),
             *al,
         ),
         Cir::Case(s, arms) => Cir::Case(
-            Box::new(reduce(s, funcs)),
+            Box::new(reduce(s, funcs, eff)),
             arms.iter()
                 .map(|a| Arm {
                     con: a.con.clone(),
                     binders: a.binders,
-                    body: reduce(&a.body, funcs),
+                    body: reduce(&a.body, funcs, eff),
                 })
                 .collect(),
         ),
-        Cir::Proj(i, e) => Cir::Proj(*i, Box::new(reduce(e, funcs))),
-        Cir::Now(e, al) => Cir::Now(Box::new(reduce(e, funcs)), *al),
-        Cir::Later(e, al) => Cir::Later(Box::new(reduce(e, funcs)), *al),
-        Cir::Force(e) => Cir::Force(Box::new(reduce(e, funcs))),
-        Cir::Region(b) => Cir::Region(Box::new(reduce(b, funcs))),
+        Cir::Proj(i, e) => Cir::Proj(*i, Box::new(reduce(e, funcs, eff))),
+        Cir::Now(e, al) => Cir::Now(Box::new(reduce(e, funcs, eff)), *al),
+        Cir::Later(e, al) => Cir::Later(Box::new(reduce(e, funcs, eff)), *al),
+        Cir::Force(e) => Cir::Force(Box::new(reduce(e, funcs, eff))),
+        Cir::Region(b) => Cir::Region(Box::new(reduce(b, funcs, eff))),
         Cir::Op { effect, op, arg } => Cir::Op {
             effect: effect.clone(),
             op: op.clone(),
-            arg: Box::new(reduce(arg, funcs)),
+            arg: Box::new(reduce(arg, funcs, eff)),
         },
         Cir::Handle {
             body,
             return_clause,
             op_clauses,
         } => Cir::Handle {
-            body: Box::new(reduce(body, funcs)),
-            return_clause: Box::new(reduce(return_clause, funcs)),
+            body: Box::new(reduce(body, funcs, eff)),
+            return_clause: Box::new(reduce(return_clause, funcs, eff)),
             op_clauses: op_clauses
                 .iter()
-                .map(|(n, e)| (n.clone(), reduce(e, funcs)))
+                .map(|(n, e)| (n.clone(), reduce(e, funcs, eff)))
                 .collect(),
         },
+        Cir::Flat { .. } | Cir::FlatProj { .. } => {
+            unreachable!("flatten runs after monomorphization")
+        }
     }
 }
 
@@ -549,5 +911,176 @@ mod tests {
             mono.funcs
         );
         assert_eq!(mono.entry, Cir::con(ConName("Zero".into()), vec![]));
+    }
+
+    /// A small effectful `Op` (a `perform` with no continuation argument that matters here).
+    fn perform_op() -> Cir {
+        Cir::Op {
+            effect: "Bytes".into(),
+            op: "new-bytes".into(),
+            arg: Box::new(Cir::con(ConName("Zero".into()), vec![])),
+        }
+    }
+
+    /// Like `perform_op` but for the A3a `Arrays` effect's `new-array` — used by
+    /// `effectful_new_array_used_twice_is_not_inlined` below to pin the same no-duplication property
+    /// by name for the new effect, not just its `Bytes` sibling.
+    fn perform_new_array_op() -> Cir {
+        Cir::Op {
+            effect: "Arrays".into(),
+            op: "new-array".into(),
+            arg: Box::new(Cir::con(ConName("Zero".into()), vec![])),
+        }
+    }
+
+    /// Like `perform_op` but for the Wave 10 / P2 `Graphics` effect's `init-window` — used by
+    /// `effectful_init_window_used_twice_is_not_inlined` below to pin the same no-duplication
+    /// property by name for the graphics FFI go-bar's own effectful op (docs/design-wave4-gobars.md
+    /// §5 item 4's required "double-`init-window` safety" regression).
+    fn perform_init_window_op() -> Cir {
+        Cir::Op {
+            effect: "Graphics".into(),
+            op: "init-window".into(),
+            arg: Box::new(Cir::con(ConName("Zero".into()), vec![])),
+        }
+    }
+
+    /// Build `entry = (λx. body) (perform …)` as a closure call over a non-recursive, non-capturing
+    /// lifted function `f` whose body is `body`. This mirrors how a `let x = perform … in body`
+    /// reaches the monomorphizer after closure conversion.
+    fn call_with_effectful_arg(body: Cir) -> Program {
+        Program {
+            funcs: vec![Func {
+                name: "f".into(),
+                recursive: false,
+                body,
+            }],
+            entry: Cir::CallClosure(
+                Box::new(Cir::MkClosure("f".into(), vec![], crate::ir::Alloc::Gc)),
+                Box::new(perform_op()),
+            ),
+        }
+    }
+
+    /// REGRESSION (C2 byte-buffer miscompile): an effectful argument whose parameter is used *more
+    /// than once* must NOT be inlined — substituting it at every use duplicates the effect (e.g.
+    /// `let h = perform new-bytes … in (… get h …) (… set h …)` would allocate two buffers and the
+    /// `get` would read a different, empty one). The `CallClosure` must survive so the runtime
+    /// performs the single effect once and shares its result.
+    #[test]
+    fn effectful_arg_used_twice_is_not_inlined() {
+        // body = Tuple [Var0, Var0] — the parameter used twice.
+        let body = Cir::tuple(vec![Cir::Var(0), Cir::Var(0)]);
+        let prog = call_with_effectful_arg(body);
+        let mono = monomorphize(&prog);
+        assert!(
+            matches!(mono.entry, Cir::CallClosure(_, _)),
+            "an effectful arg used twice must keep its call (no effect duplication); got {:?}",
+            mono.entry
+        );
+    }
+
+    /// REGRESSION guard (A3a `Arrays`, mirrors the C2 `Bytes` regression above by name): an effectful
+    /// `new-array` handle used *more than once* — e.g. `let h = perform new-array … in (set-elem h …)
+    /// (get-elem h …)` — must NOT be inlined either, for exactly the same reason as `new-bytes`:
+    /// substituting `h` at every use would allocate two arrays and `get-elem` would read a different,
+    /// freshly zeroed one instead of the one `set-elem` wrote to. The monomorphizer's inlining
+    /// decision is driven purely by `Cir::Op`'s effectfulness, not by which effect/op it names, so
+    /// this exercises the identical code path as `effectful_arg_used_twice_is_not_inlined` under the
+    /// concrete op the A3a feature actually introduces.
+    #[test]
+    fn effectful_new_array_used_twice_is_not_inlined() {
+        let body = Cir::tuple(vec![Cir::Var(0), Cir::Var(0)]);
+        let prog = Program {
+            funcs: vec![Func {
+                name: "f".into(),
+                recursive: false,
+                body,
+            }],
+            entry: Cir::CallClosure(
+                Box::new(Cir::MkClosure("f".into(), vec![], crate::ir::Alloc::Gc)),
+                Box::new(perform_new_array_op()),
+            ),
+        };
+        let mono = monomorphize(&prog);
+        assert!(
+            matches!(mono.entry, Cir::CallClosure(_, _)),
+            "an effectful `new-array` used twice must keep its call (no double allocation); got {:?}",
+            mono.entry
+        );
+    }
+
+    /// REGRESSION guard (Wave 10 / P2 `Graphics`, mirrors the A3a `Arrays` guard above by name): an
+    /// effectful `init-window` handle used *more than once* must NOT be inlined either — a second
+    /// window/renderer would be materialized if the `perform` were duplicated at every use site,
+    /// exactly the same hazard `new-bytes`/`new-array` guard against. This is the
+    /// docs/design-wave4-gobars.md §5 go-bar's explicitly required "double-`init-window` safety" test.
+    #[test]
+    fn effectful_init_window_used_twice_is_not_inlined() {
+        let body = Cir::tuple(vec![Cir::Var(0), Cir::Var(0)]);
+        let prog = Program {
+            funcs: vec![Func {
+                name: "f".into(),
+                recursive: false,
+                body,
+            }],
+            entry: Cir::CallClosure(
+                Box::new(Cir::MkClosure("f".into(), vec![], crate::ir::Alloc::Gc)),
+                Box::new(perform_init_window_op()),
+            ),
+        };
+        let mono = monomorphize(&prog);
+        assert!(
+            matches!(mono.entry, Cir::CallClosure(_, _)),
+            "an effectful `init-window` used twice must keep its call (no double window); got {:?}",
+            mono.entry
+        );
+    }
+
+    /// CONTROL: the same shape but the parameter is used *exactly once* inlines freely — the single
+    /// effect still runs exactly once, now in argument position of the substituted expression.
+    #[test]
+    fn effectful_arg_used_once_inlines() {
+        // body = Con "S" [Var0] — the parameter used once.
+        let body = Cir::con(ConName("S".into()), vec![Cir::Var(0)]);
+        let prog = call_with_effectful_arg(body);
+        let mono = monomorphize(&prog);
+        assert_eq!(
+            mono.entry,
+            Cir::con(ConName("S".into()), vec![perform_op()]),
+            "an effectful arg used once inlines into its single use site: {:?}",
+            mono.entry
+        );
+    }
+
+    /// An effectful argument whose parameter is *unused* must NOT be inlined either — substitution
+    /// would drop the effect entirely (a discarded `let _ = perform print …`).
+    #[test]
+    fn effectful_arg_unused_is_not_inlined() {
+        // body = Con "Zero" [] — the parameter unused.
+        let body = Cir::con(ConName("Zero".into()), vec![]);
+        let prog = call_with_effectful_arg(body);
+        let mono = monomorphize(&prog);
+        assert!(
+            matches!(mono.entry, Cir::CallClosure(_, _)),
+            "an effectful arg with an unused param must keep its call (no effect dropped); got {:?}",
+            mono.entry
+        );
+    }
+
+    /// `count_param_uses` saturates at 2, treats uses under a suspending `Lam` as "many", and ignores
+    /// non-parameter variables.
+    #[test]
+    fn count_param_uses_basics() {
+        assert_eq!(count_param_uses(&Cir::con(ConName("Z".into()), vec![])), 0);
+        assert_eq!(count_param_uses(&Cir::Var(0)), 1);
+        assert_eq!(
+            count_param_uses(&Cir::tuple(vec![Cir::Var(0), Cir::Var(0)])),
+            2
+        );
+        // A use under a `Lam` body counts as many (the body may run repeatedly).
+        assert_eq!(count_param_uses(&Cir::Lam(Box::new(Cir::Var(1)))), 2);
+        // A free variable that is not the parameter (index past the binder) does not count.
+        assert_eq!(count_param_uses(&Cir::Lam(Box::new(Cir::Var(2)))), 0);
     }
 }

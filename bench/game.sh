@@ -51,7 +51,7 @@ blight="$repo_root/target/release/blight"
 
 problems=("$@")
 if [ "${#problems[@]}" -eq 0 ]; then
-  problems=(fib sum factorial)
+  problems=(fib sum factorial treesum listfold binrec hofold)
 fi
 
 scratch="$(mktemp -d)"
@@ -88,8 +88,86 @@ assert_golden() {
   echo "  PASS  $label = $got"
 }
 
+# ---------------------------------------------------------------------------------------------------
+# Per-language startup/RSS baselines. Each near-empty program in bench/games/_baseline/ is built once;
+# its peak RSS is the language's runtime/startup floor. We subtract it from each problem's peak RSS to
+# report a startup-adjusted "RSS delta" — the memory actually attributable to the workload, not the
+# process/interpreter floor (which dominates the tiny register-bound problems). Bash 3.2-safe: scalar
+# vars + a case lookup, matching this script's no-associative-array style.
+# ---------------------------------------------------------------------------------------------------
+base_dir="bench/games/_baseline"
+base_c="-"; base_rust="-"; base_ocaml="-"; base_haskell="-"; base_blight="-"; base_python="-"
+echo
+echo "Measuring per-language startup RSS baselines..."
+if [ "$have_c" -eq 1 ] && [ -f "$base_dir/baseline.c" ]; then
+  clang -O2 "$base_dir/baseline.c" -o "$scratch/base_c" && base_c="$(peak_rss_kib "$scratch/base_c")"
+fi
+if [ "$have_rust" -eq 1 ] && [ -f "$base_dir/baseline.rs" ]; then
+  rustc -O "$base_dir/baseline.rs" -o "$scratch/base_rs" 2>/dev/null && base_rust="$(peak_rss_kib "$scratch/base_rs")"
+fi
+if [ "$have_ocaml" -eq 1 ] && [ -f "$base_dir/baseline.ml" ]; then
+  cp "$base_dir/baseline.ml" "$scratch/baseline.ml"
+  ( cd "$scratch" && ocamlopt baseline.ml -o base_ml 2>/dev/null ) && base_ocaml="$(peak_rss_kib "$scratch/base_ml")"
+fi
+if [ "$have_haskell" -eq 1 ] && [ -f "$base_dir/baseline.hs" ]; then
+  cp "$base_dir/baseline.hs" "$scratch/baseline.hs"
+  ( cd "$scratch" && ghc -O2 baseline.hs -o base_hs >/dev/null 2>&1 ) && base_haskell="$(peak_rss_kib "$scratch/base_hs")"
+fi
+if [ -f "$base_dir/baseline_int.bl" ]; then
+  "$blight" build "$base_dir/baseline_int.bl" -o "$scratch/base_bl" >/dev/null 2>&1 && base_blight="$(peak_rss_kib "$scratch/base_bl")"
+fi
+if [ "$have_python" -eq 1 ] && [ -f "$base_dir/baseline.py" ]; then
+  base_python="$(peak_rss_kib python3 "$base_dir/baseline.py")"
+fi
+printf '  baseline RSS (KiB): C=%s Rust=%s OCaml=%s Haskell=%s Blight=%s Python=%s\n' \
+  "$base_c" "$base_rust" "$base_ocaml" "$base_haskell" "$base_blight" "$base_python"
+
+# Map a table language name to its baseline RSS (KiB), or "-".
+baseline_for() {
+  case "$1" in
+    C) echo "$base_c" ;;
+    Rust) echo "$base_rust" ;;
+    OCaml) echo "$base_ocaml" ;;
+    Haskell) echo "$base_haskell" ;;
+    Blight-Int|Blight-Nat) echo "$base_blight" ;;
+    Python) echo "$base_python" ;;
+    *) echo "-" ;;
+  esac
+}
+
+# RSS delta = max(0, peak - baseline), or "-" if either is unknown. Clamped at 0 because measurement
+# noise can make a trivial problem's peak dip just below the standalone baseline.
+rss_delta() {
+  local peak="$1" base="$2"
+  if [ "$peak" = "-" ] || [ "$base" = "-" ]; then echo "-"; return; fi
+  local d=$(( peak - base ))
+  [ "$d" -lt 0 ] && d=0
+  echo "$d"
+}
+
+# GC stats for a Blight binary: echoes
+#   "collections bytes_allocated promoted_bytes peak_old_reserved shrinks compacting"
+# parsed from the BL_GC_STATS stderr line (stdout discarded), or all "-" if unavailable. These are
+# startup-independent and are the true memory-efficiency signal (other runtimes expose no uniform
+# equivalent). `peak_old_reserved` is the P4.1/P4.2 headline: the high-water old-generation footprint,
+# ~1x live under the compacting old generation (BL_GC_OLDGEN=compact) versus ~2x for the semi-space.
+gc_stats_blight() {
+  local bin="$1" line
+  line="$(BL_GC_STATS=1 "$bin" 2>&1 >/dev/null | awk '/^BL_GC_STATS/ { print; exit }')"
+  if [ -z "$line" ]; then echo "- - - - - -"; return; fi
+  local col alloc prom peak shr comp
+  col="$(printf '%s\n' "$line" | sed -n 's/.*collections=\([0-9]*\).*/\1/p')"
+  alloc="$(printf '%s\n' "$line" | sed -n 's/.*bytes_allocated=\([0-9]*\).*/\1/p')"
+  prom="$(printf '%s\n' "$line" | sed -n 's/.*promoted_bytes=\([0-9]*\).*/\1/p')"
+  peak="$(printf '%s\n' "$line" | sed -n 's/.*peak_old_reserved=\([0-9]*\).*/\1/p')"
+  shr="$(printf '%s\n' "$line" | sed -n 's/.*shrinks=\([0-9]*\).*/\1/p')"
+  comp="$(printf '%s\n' "$line" | sed -n 's/.*compacting=\([0-9]*\).*/\1/p')"
+  echo "${col:--} ${alloc:--} ${prom:--} ${peak:--} ${shr:--} ${comp:--}"
+}
+
 # Accumulators for the final markdown table and combined JSON. Parallel arrays keyed by row index.
-declare -a tbl_problem tbl_lang tbl_secs tbl_rss
+declare -a tbl_problem tbl_lang tbl_secs tbl_rss tbl_delta tbl_collect tbl_alloc tbl_promoted
+declare -a tbl_peakold tbl_shrinks tbl_compacting
 combined_json_problems=""
 
 for prob in "${problems[@]}"; do
@@ -189,10 +267,12 @@ for prob in "${problems[@]}"; do
   echo
   echo "-- peak RSS: $prob --"
   for i in "${!names[@]}"; do
-    rss="$(peak_rss_kib "${bins[$i]}")"
-    printf '  %-14s %8s KiB\n' "${names[$i]}" "$rss"
+    lang="${names[$i]}"; bin="${bins[$i]}"
+    rss="$(peak_rss_kib "$bin")"
+    delta="$(rss_delta "$rss" "$(baseline_for "$lang")")"
+    printf '  %-14s peak %8s KiB   delta %8s KiB\n' "$lang" "$rss" "$delta"
     # mean run time (seconds) for this lang from hyperfine's JSON, matched by command name.
-    secs="$(python3 - "$export_json" "${names[$i]}" <<'PYEOF'
+    secs="$(python3 - "$export_json" "$lang" <<'PYEOF'
 import json, sys
 data = json.load(open(sys.argv[1]))
 name = sys.argv[2]
@@ -204,11 +284,23 @@ else:
     print("-")
 PYEOF
 )"
-    tbl_problem+=("$prob"); tbl_lang+=("${names[$i]}"); tbl_secs+=("$secs"); tbl_rss+=("$rss")
+    # GC stats (bytes allocated / collections / promoted / peak old reserved / shrinks / mode) only for
+    # the Blight rows.
+    case "$lang" in
+      Blight-*) read -r gcoll galloc gprom gpeak gshr gcomp <<EOF
+$(gc_stats_blight "$bin")
+EOF
+        ;;
+      *) gcoll="-"; galloc="-"; gprom="-"; gpeak="-"; gshr="-"; gcomp="-" ;;
+    esac
+    tbl_problem+=("$prob"); tbl_lang+=("$lang"); tbl_secs+=("$secs"); tbl_rss+=("$rss")
+    tbl_delta+=("$delta"); tbl_collect+=("$gcoll"); tbl_alloc+=("$galloc"); tbl_promoted+=("$gprom")
+    tbl_peakold+=("$gpeak"); tbl_shrinks+=("$gshr"); tbl_compacting+=("$gcomp")
   done
   if [ -n "$py_cmd" ]; then
     rss="$(peak_rss_kib python3 "$dir/$prob.py")"
-    printf '  %-14s %8s KiB\n' "Python" "$rss"
+    delta="$(rss_delta "$rss" "$base_python")"
+    printf '  %-14s peak %8s KiB   delta %8s KiB\n' "Python" "$rss" "$delta"
     secs="$(python3 - "$export_json" "Python" <<'PYEOF'
 import json, sys
 data = json.load(open(sys.argv[1]))
@@ -222,6 +314,8 @@ else:
 PYEOF
 )"
     tbl_problem+=("$prob"); tbl_lang+=("Python"); tbl_secs+=("$secs"); tbl_rss+=("$rss")
+    tbl_delta+=("$delta"); tbl_collect+=("-"); tbl_alloc+=("-"); tbl_promoted+=("-")
+    tbl_peakold+=("-"); tbl_shrinks+=("-"); tbl_compacting+=("-")
   fi
 
   unset names bins
@@ -233,13 +327,42 @@ done
 echo
 echo "## Benchmark game results"
 echo
-echo "| Problem | Language | Mean run time (ms) | Peak RSS (KiB) |"
-echo "| --- | --- | ---: | ---: |"
+echo "| Problem | Language | Mean run time (ms) | Peak RSS (KiB) | RSS delta (KiB) |"
+echo "| --- | --- | ---: | ---: | ---: |"
 for i in "${!tbl_problem[@]}"; do
   secs="${tbl_secs[$i]}"
   if [ "$secs" = "-" ]; then ms="-"; else ms="$(awk "BEGIN { printf \"%.3f\", $secs * 1000 }")"; fi
-  printf '| %s | %s | %s | %s |\n' "${tbl_problem[$i]}" "${tbl_lang[$i]}" "$ms" "${tbl_rss[$i]}"
+  printf '| %s | %s | %s | %s | %s |\n' "${tbl_problem[$i]}" "${tbl_lang[$i]}" "$ms" \
+    "${tbl_rss[$i]}" "${tbl_delta[$i]}"
 done
+
+# ---------------------------------------------------------------------------------------------------
+# Blight-only memory detail (BL_GC_STATS): the startup-independent allocator/GC signal that the shared
+# RSS columns cannot show (other runtimes expose no uniform equivalent). Only emitted if at least one
+# Blight row reported stats.
+# ---------------------------------------------------------------------------------------------------
+have_gc_rows=0
+for i in "${!tbl_problem[@]}"; do
+  case "${tbl_lang[$i]}" in
+    Blight-*) [ "${tbl_alloc[$i]}" != "-" ] && have_gc_rows=1 ;;
+  esac
+done
+if [ "$have_gc_rows" -eq 1 ]; then
+  echo
+  echo "## Blight memory detail (BL_GC_STATS)"
+  echo
+  echo "| Problem | Variant | Bytes allocated | GC collections | Promoted bytes | Peak old reserved | Shrinks | Compacting |"
+  echo "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |"
+  for i in "${!tbl_problem[@]}"; do
+    case "${tbl_lang[$i]}" in
+      Blight-*)
+        printf '| %s | %s | %s | %s | %s | %s | %s | %s |\n' "${tbl_problem[$i]}" "${tbl_lang[$i]}" \
+          "${tbl_alloc[$i]}" "${tbl_collect[$i]}" "${tbl_promoted[$i]}" "${tbl_peakold[$i]}" \
+          "${tbl_shrinks[$i]}" "${tbl_compacting[$i]}"
+        ;;
+    esac
+  done
+fi
 
 # ---------------------------------------------------------------------------------------------------
 # Combined machine-readable JSON.
@@ -250,9 +373,16 @@ done
   for i in "${!tbl_problem[@]}"; do
     secs="${tbl_secs[$i]}"; [ "$secs" = "-" ] && secs="null"
     rss="${tbl_rss[$i]}"; [ "$rss" = "-" ] && rss="null"
+    delta="${tbl_delta[$i]}"; [ "$delta" = "-" ] && delta="null"
+    alloc="${tbl_alloc[$i]}"; [ "$alloc" = "-" ] && alloc="null"
+    coll="${tbl_collect[$i]}"; [ "$coll" = "-" ] && coll="null"
+    prom="${tbl_promoted[$i]}"; [ "$prom" = "-" ] && prom="null"
+    peakold="${tbl_peakold[$i]}"; [ "$peakold" = "-" ] && peakold="null"
+    shr="${tbl_shrinks[$i]}"; [ "$shr" = "-" ] && shr="null"
+    comp="${tbl_compacting[$i]}"; [ "$comp" = "-" ] && comp="null"
     sep=","; [ "$i" -eq "$((n - 1))" ] && sep=""
-    printf '    { "problem": "%s", "language": "%s", "mean_secs": %s, "peak_rss_kib": %s }%s\n' \
-      "${tbl_problem[$i]}" "${tbl_lang[$i]}" "$secs" "$rss" "$sep"
+    printf '    { "problem": "%s", "language": "%s", "mean_secs": %s, "peak_rss_kib": %s, "rss_delta_kib": %s, "bytes_allocated": %s, "gc_collections": %s, "promoted_bytes": %s, "peak_old_reserved": %s, "shrinks": %s, "compacting": %s }%s\n' \
+      "${tbl_problem[$i]}" "${tbl_lang[$i]}" "$secs" "$rss" "$delta" "$alloc" "$coll" "$prom" "$peakold" "$shr" "$comp" "$sep"
   done
   printf '  ]\n}\n'
 } > bench/game-results.json

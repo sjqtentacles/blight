@@ -48,6 +48,22 @@ pub fn analyze_program(prog: &Program) -> Program {
     }
 }
 
+/// Differentially-gated entry point. With `BL_NO_AUTOREGION` set, the region escape analysis is
+/// skipped entirely and every allocation keeps its default [`Alloc::Gc`] tag (the conservative
+/// "no arena" fallback `lower` already produces) — the slow, always-GC reference. Because routing a
+/// non-escaping allocation into the region arena is *behavior-preserving* (it changes only *where* a
+/// value lives, never the value), the gated-off build must be **bit-identical** to the gated-on one;
+/// this is what puts the region pass (previously always-on and outside the matrix) into the B1
+/// differential bit-identity harness (`DIFF_FLAGS`). A regression would surface as a wrong *number*,
+/// never a false *proof*.
+pub fn analyze_gated(c: &Cir) -> Cir {
+    if std::env::var_os("BL_NO_AUTOREGION").is_some() {
+        c.clone()
+    } else {
+        analyze(c)
+    }
+}
+
 /// Analyze a single expression. Outside any region scope nothing changes; the work happens when we
 /// descend into a [`Cir::Region`], where we switch to the in-region walk with the body in escaping
 /// (result) position.
@@ -169,14 +185,33 @@ fn walk(c: &Cir, escaping: bool) -> Cir {
             lhs: Box::new(walk(lhs, false)),
             rhs: Box::new(walk(rhs, false)),
         },
+        Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
+            op: *op,
+            lhs: Box::new(walk(lhs, false)),
+            rhs: rhs.as_ref().map(|r| Box::new(walk(r, false))),
+        },
+        Cir::FloatPrim { op, lhs, rhs } => Cir::FloatPrim {
+            op: *op,
+            lhs: Box::new(walk(lhs, false)),
+            rhs: rhs.as_ref().map(|r| Box::new(walk(r, false))),
+        },
 
-        // Leaves carry no allocation. A foreign C call's result is GC-allocated by the callee.
+        // A foreign C call's result is GC-allocated by the callee; its argument (if any) escapes
+        // into the (opaque, possibly-retaining) C function — conservative, mirroring `Op`.
+        Cir::Foreign(sym, arg) => {
+            Cir::Foreign(sym.clone(), arg.as_ref().map(|a| Box::new(walk(a, true))))
+        }
+        // Leaves carry no allocation.
         Cir::Var(_)
         | Cir::Global(_)
         | Cir::EnvRef(_)
         | Cir::Erased
-        | Cir::Foreign(_)
-        | Cir::IntLit(_) => c.clone(),
+        | Cir::IntLit(_)
+        | Cir::NatLit(_)
+        | Cir::StrLit(_) => c.clone(),
+        Cir::Flat { .. } | Cir::FlatProj { .. } => {
+            unreachable!("flatten runs after region analysis")
+        }
     }
 }
 
@@ -195,14 +230,24 @@ fn var_reaches_escaping(c: &Cir, v: usize) -> bool {
     fn go(c: &Cir, v: usize, esc: bool) -> bool {
         match c {
             Cir::Var(i) => esc && *i == v,
-            Cir::Global(_) | Cir::EnvRef(_) | Cir::Erased | Cir::Foreign(_) | Cir::IntLit(_) => {
-                false
-            }
+            Cir::Global(_)
+            | Cir::EnvRef(_)
+            | Cir::Erased
+            | Cir::IntLit(_)
+            | Cir::NatLit(_)
+            | Cir::StrLit(_) => false,
+            Cir::Foreign(_, arg) => arg.as_ref().is_some_and(|a| go(a, v, true)),
             // A closure capturing `v` lets it escape; its body is escaping and `v` shifts under the
             // λ's parameter binder.
             Cir::Lam(b) | Cir::Fix(b) => go(b, v + 1, true),
             Cir::App(f, a) | Cir::CallClosure(f, a) => go(f, v, true) || go(a, v, true),
             Cir::IntPrim { lhs, rhs, .. } => go(lhs, v, false) || go(rhs, v, false),
+            Cir::NatPrim { lhs, rhs, .. } => {
+                go(lhs, v, false) || rhs.as_ref().map(|r| go(r, v, false)).unwrap_or(false)
+            }
+            Cir::FloatPrim { lhs, rhs, .. } => {
+                go(lhs, v, false) || rhs.as_ref().map(|r| go(r, v, false)).unwrap_or(false)
+            }
             Cir::Let(val, body) => {
                 // The scratch value position is non-escaping; the body inherits `esc`, under +1.
                 go(val, v, false) || go(body, v + 1, esc)
@@ -228,6 +273,9 @@ fn var_reaches_escaping(c: &Cir, v: usize) -> bool {
                     || go(return_clause, v, esc)
                     || op_clauses.iter().any(|(_, e)| go(e, v, true))
             }
+            Cir::Flat { .. } | Cir::FlatProj { .. } => {
+                unreachable!("flatten runs after region analysis")
+            }
         }
     }
     go(c, v, true)
@@ -241,8 +289,10 @@ fn map_children(c: &Cir, f: fn(&Cir) -> Cir) -> Cir {
         | Cir::Global(_)
         | Cir::EnvRef(_)
         | Cir::Erased
-        | Cir::Foreign(_)
-        | Cir::IntLit(_) => c.clone(),
+        | Cir::IntLit(_)
+        | Cir::NatLit(_)
+        | Cir::StrLit(_) => c.clone(),
+        Cir::Foreign(sym, arg) => Cir::Foreign(sym.clone(), arg.as_ref().map(|a| Box::new(f(a)))),
         Cir::Lam(b) => Cir::Lam(Box::new(f(b))),
         Cir::Fix(b) => Cir::Fix(Box::new(f(b))),
         Cir::App(g, a) => Cir::App(Box::new(f(g)), Box::new(f(a))),
@@ -251,6 +301,16 @@ fn map_children(c: &Cir, f: fn(&Cir) -> Cir) -> Cir {
             op: *op,
             lhs: Box::new(f(lhs)),
             rhs: Box::new(f(rhs)),
+        },
+        Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
+            op: *op,
+            lhs: Box::new(f(lhs)),
+            rhs: rhs.as_ref().map(|r| Box::new(f(r))),
+        },
+        Cir::FloatPrim { op, lhs, rhs } => Cir::FloatPrim {
+            op: *op,
+            lhs: Box::new(f(lhs)),
+            rhs: rhs.as_ref().map(|r| Box::new(f(r))),
         },
         Cir::Let(v, b) => Cir::Let(Box::new(f(v)), Box::new(f(b))),
         Cir::Con(n, args, al) => Cir::Con(n.clone(), args.iter().map(f).collect(), *al),
@@ -285,6 +345,9 @@ fn map_children(c: &Cir, f: fn(&Cir) -> Cir) -> Cir {
             return_clause: Box::new(f(return_clause)),
             op_clauses: op_clauses.iter().map(|(n, e)| (n.clone(), f(e))).collect(),
         },
+        Cir::Flat { .. } | Cir::FlatProj { .. } => {
+            unreachable!("flatten runs after region analysis")
+        }
     }
 }
 
