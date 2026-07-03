@@ -127,18 +127,45 @@ warning-grade diagnostic for duplicate/unreachable arms.
   unchanged.
 - **Exit:** error text in the tutorial troubleshooting section.
 
-### [ ] E4 — Records: named fields over Sigma
+### [ ] E4 — Records: named fields over a single-constructor `defdata`
 
-Sexpr-level sugar (mirroring [mutual.rs](../crates/blight-elab/src/mutual.rs)'s
-lower-before-elaborate precedent): `(defrecord Point ((x Nat) (y Nat)))` → Sigma type +
-constructor + per-field projections (fst/snd chains) + `(Point-with p (y 5))` functional update.
-Field access `(Point-x p)`. No anonymous record types, no row polymorphism in v1.
+**Design re-verified 2026-07-03** (the original "over Sigma" premise was overturned by the
+pre-implementation code check, seven code-cited reasons): `(defrecord Point ((x Nat) (y Nat)))`
+is sexpr-level sugar (per the [defn.rs](../crates/blight-elab/src/defn.rs)/
+[measure.rs](../crates/blight-elab/src/measure.rs) precedent) lowering to a **single-constructor
+`defdata`** — nominal type `Point`, constructor `mk-Point`, projection `deftotal`s
+`Point-x`/`Point-y` (match-based), and `(Point-with p (y 5))` functional update rewriting to
+`(mk-Point (Point-x p) 5)`. Why not Sigma: dependent match refinement decomposes `Con`-valued
+indices but goes stuck on `Pair`-valued ones (check.rs `solvable_index`) — records-as-Sigma
+would fail this milestone's own dependent-position test; global inlining makes a Sigma alias
+structural, not nominal; spore.rs asserts the parser state is an inductive; codegen unbox/SRA
+optimizes one n-field `Con`, not n−1 nested pairs; a grade-1 record is unusable through
+projection chains but consumable once via match; and match/E3-coverage/E5-`defn` over records
+come free. Forfeited and documented: definitional record eta (a neutral `p` is not convertible
+with its repacking — v1 limitation).
 
-- **Red tests:** `defrecord_declares_type_ctor_and_projections`,
-  `field_update_rebuilds_pair_chain`, `unknown_field_in_update_rejected`,
-  `record_in_dependent_position_checks`; a new `examples/records_demo.bl` in the corpus.
-- **Exit:** one stdlib adoption (std/parser parse-state or std/graphics config) proving it
-  composes. Oracle-corpus additions.
+Spec details (from the same check): exact 3-item shape enforced, parameterized records reserved
+for v2 (the field list is binder-list-shaped and would be ambiguous with a parameter telescope);
+dependent field types supported (later fields may mention earlier ones — defdata telescopes
+already elaborate this); projections are real global `deftotal`s so E2's synth reads their
+result types and bare `(Point-x p)` needs no ascription; `-with` is an expression-position
+elaborator rewrite with a dedicated unknown-field diagnostic; hygiene guards reject duplicate
+fields and generated-name collisions (`mk-Name`, `Name-field`, `Name-with`), failing atomically
+via the existing run_form snapshot. No pretty-printer/LSP work (values already print as
+`(mk-Point …)` via constructor resugaring; residual polish is E7's). No anonymous records, no
+row polymorphism in v1.
+
+- **Red tests** (`crates/blight-repl/tests/records.rs`):
+  `defrecord_declares_type_ctor_and_projections`, `field_update_rebuilds_constructor_application`,
+  `unknown_field_in_update_rejected`, `record_in_dependent_position_checks` (the
+  Con-refinement property that drove the design), `defrecord_rejects_malformed_shape`,
+  `generated_name_collision_rejected`, `record_constructor_match_and_coverage` (match + E3 +
+  E5 `defn` over `mk-Point` patterns), `dependent_field_types_check`; a new
+  `examples/records_demo.bl` in the corpus.
+- **Exit:** stdlib adoption in **std/test.bl** (true stdlib, textbook record shapes, outside
+  DIFF_CORPUS and the self-host closure; the spec's former std/graphics "config" target does not
+  exist, and std/parser's PState is a post-E4 stretch item gated on re-blessing the verdict
+  golden and preserving the S1 stdout pin). Oracle-corpus additions per the oracle rule.
 
 ### [x] E5 — Equation-style definitions (`defn`)
 
