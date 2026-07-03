@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **v0.1 roadmap arc E, milestone E3 (match coverage diagnostics):** a coverage pre-pass over a
+  `match`'s first-column patterns now reports a clear up-front diagnostic — every missing
+  constructor listed at once (`non-exhaustive match on Ordering: missing case eq`), plus duplicate
+  and unreachable-after-catch-all arm errors — where the old behavior surfaced a generic
+  "no clause for constructor X" one at a time, deep in column compilation. Nested coverage falls
+  out of running the pass at every match level. Elaborator-only, zero kernel changes.
 - **v0.1 roadmap arc E, milestone E2 (stdlib implicitization):** inferable leading type/index
   arguments of `vec-length`, `pair-fst`/`pair-snd`, `from-maybe`, `length`, `append`, and `filter`
   are now `{…}`-implicit and solved by first-order unification — `(vec-length sample)`, not

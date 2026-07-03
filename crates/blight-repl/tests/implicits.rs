@@ -83,5 +83,8 @@ fn implicit_error_span_narrows_to_named_identifier() {
     let err = ElabError::BadForm("implicit-argument mismatch for `append`: …".to_string());
     let span = scope::narrow_span(&forms[0], &err);
     let text = &src[span.start..span.end];
-    assert_eq!(text, "append", "narrowed span should be the named identifier, got {text:?}");
+    assert_eq!(
+        text, "append",
+        "narrowed span should be the named identifier, got {text:?}"
+    );
 }

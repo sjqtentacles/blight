@@ -113,7 +113,7 @@ milestone, with the full example corpus + `DIFF_CORPUS` as the completeness gate
   has no synthesizable type, so an implicit solved from it needs a `(the T x)` ascription — a
   handful of sites (std/map, std/test, rle, map_scratch, spore_codegen_meta) carry one.
 
-### [ ] E3 — Match coverage diagnostics
+### [x] E3 — Match coverage diagnostics
 
 Exhaustiveness is currently enforced implicitly by `Elim` construction; missing-constructor
 errors surface as elaboration internals. Add an explicit coverage pre-pass over parsed clauses

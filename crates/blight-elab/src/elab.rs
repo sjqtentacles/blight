@@ -2032,6 +2032,9 @@ fn elab(
 
         Surface::Match(scruts, clauses) => {
             use crate::surface::Pattern;
+            // E3 coverage pre-pass: a clear up-front non-exhaustive/duplicate/unreachable diagnostic
+            // before column compilation. Runs at every match level (nested/multi re-enter here).
+            check_match_coverage(env, scruts, clauses)?;
             // The primitive case: a single variable scrutinee whose clauses are already flat
             // (constructor patterns with variable/wildcard sub-patterns). This is the only shape
             // `elab_flat_match` consumes; everything else lowers to a tree of these.
@@ -3227,6 +3230,99 @@ fn elaborate_rec(
             Ok(Term::Lam(Box::new(inner)))
         }
     }
+}
+
+/// Coverage pre-pass over a surface `match`'s first-column patterns (E3, v0.1 roadmap). Runs at
+/// every `Surface::Match` level — including the flat sub-matches [`lower_match`] produces for
+/// nested/multi-scrutinee patterns, since those re-enter `elab` — so a missing *nested* case
+/// (`(just (nothing))` with no `(just (just _))`) is caught when its inner match is elaborated.
+///
+/// Produces a clear, up-front diagnostic where the old behavior surfaced a generic
+/// "no clause for constructor `X`" one constructor at a time, deep in column compilation:
+///   * **non-exhaustive** — lists *every* missing constructor of the scrutinee's data type at once;
+///   * **duplicate arm** — the same constructor matched twice (single-scrutinee only, where a
+///     repeat is unambiguously redundant — a multi-scrutinee `matchx` legitimately repeats a
+///     first-column constructor while refining a later column);
+///   * **unreachable arm** — a clause following a first-column catch-all `_`/var (single-scrutinee).
+///
+/// Conservative by construction: it only *rejects*; it never changes which constructor set is
+/// required (that stays the kernel's `Elim`). When the data type can't be determined (all-wildcard
+/// column, or an unknown/foreign constructor) it returns `Ok`, deferring to the main elaborator.
+fn check_match_coverage(
+    env: &ElabEnv,
+    scruts: &[Surface],
+    clauses: &[Clause],
+) -> Result<(), ElabError> {
+    use crate::surface::Pattern;
+    if clauses.is_empty() {
+        return Ok(()); // an empty match is diagnosed elsewhere
+    }
+    let single = scruts.len() == 1;
+    // The scrutinee's data type, read off the first first-column constructor pattern.
+    let data = clauses.iter().find_map(|c| match c.patterns.first() {
+        Some(Pattern::Con(con, _)) => env.constructors.get(con).map(|i| i.data.clone()),
+        _ => None,
+    });
+    let Some(data) = data else {
+        return Ok(()); // all wildcards/vars, or no patterns — nothing to check here
+    };
+    let Some(all_ctors) = env.datas.get(&data).cloned() else {
+        return Ok(());
+    };
+
+    let mut covered: Vec<String> = Vec::new();
+    let mut catch_all: Option<usize> = None;
+    for (i, c) in clauses.iter().enumerate() {
+        // A clause after a first-column catch-all can never match (single-scrutinee only: with more
+        // columns a "catch-all" in column 0 still refines later columns, so later rows are live).
+        if single {
+            if let Some(prev) = catch_all {
+                return Err(ElabError::BadMatch(format!(
+                    "unreachable `match` arm: clause {} can never match — clause {} already \
+                     catches every remaining `{data}` value",
+                    i + 1,
+                    prev + 1
+                )));
+            }
+        }
+        match c.patterns.first() {
+            Some(Pattern::Con(con, _)) => {
+                // A constructor of a *different* type in the column: not our business — the main
+                // elaborator produces the (type-mismatch) error.
+                if env.constructors.get(con).map(|inf| inf.data.as_str()) != Some(data.as_str()) {
+                    return Ok(());
+                }
+                if single && covered.contains(con) {
+                    return Err(ElabError::BadMatch(format!(
+                        "duplicate `match` arm: constructor `{con}` of `{data}` is matched more \
+                         than once"
+                    )));
+                }
+                if !covered.contains(con) {
+                    covered.push(con.clone());
+                }
+            }
+            Some(Pattern::Var(_)) | Some(Pattern::Wild) => catch_all = Some(i),
+            None => return Ok(()),
+        }
+    }
+    // A first-column catch-all covers every remaining constructor — exhaustive.
+    if catch_all.is_some() {
+        return Ok(());
+    }
+    let missing: Vec<&String> = all_ctors.iter().filter(|c| !covered.contains(c)).collect();
+    if !missing.is_empty() {
+        let names = missing
+            .iter()
+            .map(|c| format!("`{c}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let plural = if missing.len() == 1 { "" } else { "s" };
+        return Err(ElabError::BadMatch(format!(
+            "non-exhaustive `match` on `{data}`: missing case{plural} {names}"
+        )));
+    }
+    Ok(())
 }
 
 /// Lower a (possibly nested/wildcard/multi-scrutinee) `match` to a tree of *flat* single-scrutinee

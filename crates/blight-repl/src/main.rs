@@ -2967,8 +2967,10 @@ mod tests {
             .unwrap()
             .to_path_buf();
         let example = repo.join("examples").join("graphics_scratch.bl");
-        let dir = std::env::temp_dir()
-            .join(format!("blight_example_graphics_scratch_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "blight_example_graphics_scratch_{}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let bin = dir.join("out");
         let build_args = vec![
@@ -2981,13 +2983,18 @@ mod tests {
             .stack_size(64 * 1024 * 1024)
             .spawn(move || {
                 run_build(&build_args).unwrap_or_else(|e| {
-                    panic!("example graphics_scratch.bl builds (seed + independent re-checker): {e}")
+                    panic!(
+                        "example graphics_scratch.bl builds (seed + independent re-checker): {e}"
+                    )
                 });
             })
             .expect("spawn build thread")
             .join()
             .expect("build thread completes");
-        assert!(bin.exists(), "example graphics_scratch.bl produced a binary");
+        assert!(
+            bin.exists(),
+            "example graphics_scratch.bl produced a binary"
+        );
 
         let run = std::process::Command::new(&bin)
             .env("SDL_VIDEODRIVER", "dummy")

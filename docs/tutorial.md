@@ -127,6 +127,12 @@ A non-dependent fold over `Vec` that recovers its length as a plain `Nat`:
     [(vcons m x xs) (Succ (vec-length A m xs))])))
 ```
 
+Every `match` must cover its scrutinee's constructors. Leave one out and the elaborator lists the
+gaps up front — `match` on a three-constructor `Ordering` with only two arms reports
+`non-exhaustive `match` on `Ordering`: missing case `eq``. It also rejects a `duplicate `match`
+arm` (the same constructor twice) and an `unreachable `match` arm` (a clause after a `_`/variable
+catch-all). A trailing `_` arm makes any `match` exhaustive.
+
 ## 5. Paths: equality in the cubical kernel
 
 Blight's kernel is cubical: propositional equality is the **path** type `Path A x y` (a function out
