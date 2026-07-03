@@ -1314,10 +1314,36 @@ fn deep_plus_zero_conv_kernel_and_recheck_agree_in_bounded_time() {
             recheck_result.is_ok(),
             "the re-checker must independently AGREE the deep plus-zero proof checks, got {recheck_result:?}"
         );
+        // Machine-speed-independent regression guard (converted from a 15 s wall-clock bound
+        // after repeated loaded-machine false alarms): scale-pair — the same pipeline at a
+        // quarter of the depth, in the same process. Converting the instrument immediately
+        // taught something the wall clock hid: the pipeline is *quadratic today* (measured
+        // 19.6× for the 4× depth) — the IH here is genuinely used, so N5's skip doesn't apply,
+        // and each level deep-clones an O(level) `Value` (N6's documented Value-sharing target,
+        // second measured justification). Bound: current quadratic law with headroom (< 35×);
+        // the guarded pre-ValueChain recurrence multiplies ANOTHER depth factor (≥ cubic,
+        // ~64×+) and still fails loudly. Tighten toward ~8× when N6 lands.
+        let (small_sig, small_ann) = deep_plus_zero_proof(375);
+        let Term::Ann(small_term, small_ty) = small_ann else {
+            unreachable!()
+        };
+        let small_start = std::time::Instant::now();
+        let small_proof = check_top_with(
+            small_sig.clone(),
+            blight_kernel::unshare(small_term),
+            blight_kernel::unshare(small_ty),
+        )
+        .expect("kernel accepts the quarter-depth plus-zero proof");
+        let _ = blight_recheck::recheck_proof(&small_sig, &small_proof);
+        let small_elapsed = small_start
+            .elapsed()
+            .max(std::time::Duration::from_micros(1));
+        let ratio = elapsed.as_secs_f64() / small_elapsed.as_secs_f64();
         assert!(
-            elapsed < std::time::Duration::from_secs(15),
-            "kernel + re-checker on a 1,500-deep plus-zero proof took {elapsed:?} — the NbE \
-             sharing fix regressed (see ValueChain's doc-comment in each crate's value.rs)"
+            ratio < 35.0,
+            "kernel + re-checker at depth 1,500 cost {ratio:.1}× the depth-375 twin \
+             ({elapsed:?} vs {small_elapsed:?}) — quadratic-with-headroom is today's law; \
+             at ≥ cubic the ValueChain sharing fix has regressed (see each crate's value.rs)"
         );
     });
 }

@@ -2029,11 +2029,34 @@ mod tests {
                 conv(0, &result, &expected),
                 "plus (nat_lit {depth}) zero ≡ nat_lit {depth}"
             );
-            let elapsed = start.elapsed();
+            let wide_elapsed = start.elapsed();
+            // Machine-speed-independent regression guard (arc-N instrument lesson, after this
+            // bound's wall-clock form produced three false alarms in one day of loaded-machine
+            // runs): compare against the SAME eval under a width-1 ambient env in the same
+            // process. Pre-ValueChain, the wide/narrow ratio was ~O(width) (each `Env::extend`
+            // an O(width) copy re-paid per level); post-fix both runs do the same per-level
+            // work, so the ratio stays small. 25× is generous headroom over the measured ~1-3×
+            // while still failing loudly on any O(width) recurrence (~hundreds).
+            let narrow_term = wrap_in_wide_env(
+                1,
+                Term::App(
+                    Rc::new(Term::App(Rc::new(plus_term()), Rc::new(nat_lit(depth)))),
+                    Rc::new(nat_zero()),
+                ),
+            );
+            let narrow_start = Instant::now();
+            let narrow_result = eval(&env, &narrow_term);
             assert!(
-                elapsed < Duration::from_secs(10),
-                "a {depth}-deep Elim under a {width}-wide ambient env took {elapsed:?} — the \
-                 do_elim/Env sharing fix regressed (see ValueChain's doc-comment)"
+                conv(0, &narrow_result, &expected),
+                "narrow-env twin computes the same value"
+            );
+            let narrow_elapsed = narrow_start.elapsed().max(Duration::from_micros(1));
+            let ratio = wide_elapsed.as_secs_f64() / narrow_elapsed.as_secs_f64();
+            assert!(
+                ratio < 25.0,
+                "a {depth}-deep Elim under a {width}-wide ambient env cost {ratio:.1}× its \
+                 width-1 twin ({wide_elapsed:?} vs {narrow_elapsed:?}) — the do_elim/Env \
+                 sharing fix regressed (see ValueChain's doc-comment)"
             );
         });
     }
