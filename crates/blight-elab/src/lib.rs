@@ -28,7 +28,7 @@ pub use diagnostic::{render as render_diagnostic, Diagnostic};
 pub use docs::{extract_docs, render_markdown, DocEntry};
 pub use elab::{elaborate, elaborate_against, parse_decl, parse_surface, ElabEnv, ElabError};
 pub use fmt::{format_source, FormatError};
-pub use infer::infer_type_str;
+pub use infer::{eval_value_str, infer_type_str};
 pub use macros::{MacroDef, MacroEnv};
 pub use pretty::{pretty_concl, pretty_term};
 pub use program::{Outcome, Program};

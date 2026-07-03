@@ -47,3 +47,13 @@ mod tests {
         assert!(infer_type_str(&env, "nope").is_err());
     }
 }
+
+/// Evaluate `expr_src` in `env` and render the resulting *value* re-sugared (decimals post-E1) —
+/// the REPL's bare-expression path (E9). Elaborates, infers (so the expression must be
+/// inferable, which applications of typed globals are), evaluates under the metering budget
+/// (a divergent expression reports an error instead of hanging the REPL), and pretty-prints the
+/// quoted normal form.
+pub fn eval_value_str(env: &ElabEnv, expr_src: &str) -> Result<String, String> {
+    let _ = (env, expr_src);
+    Err("E9: pending".into())
+}
