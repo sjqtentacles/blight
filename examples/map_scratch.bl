@@ -85,6 +85,6 @@
                 (cons t08
                   (cons t09 (cons t10 (cons t11 (cons t12 (cons t13 (cons t14 (cons t15 nil))))))))))))))))
 
-(define map-suite TestSuite (mk-suite "map" all-cases))
+(define map-suite TestSuite (mk-TestSuite "map" all-cases))
 
 (define main Bool (suite-all-passed map-suite))

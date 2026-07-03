@@ -46,6 +46,9 @@ pub struct Program<'a> {
     /// The hygienic macro table; `(define-macro …)` forms register here and every other form is
     /// macro-expanded before parsing/elaboration.
     macros: MacroEnv,
+    /// The record registry (E4): `defrecord` names → field lists, for the `-with` update rewrite.
+    /// Same lifetime and snapshot discipline as the macro table.
+    records: crate::records::RecordEnv,
     /// An optional package manifest. When present, `(import "pkg/mod")` resolves module identifiers
     /// against it (independently of the `(load …)` resolver).
     package: Option<PackageManifest>,
@@ -66,6 +69,7 @@ impl<'a> Program<'a> {
                     .map_err(|e| ElabError::BadForm(format!("cannot load {path:?}: {e}")))
             }),
             macros: MacroEnv::new(),
+            records: crate::records::RecordEnv::default(),
             package: None,
             imported: HashSet::new(),
             importing: Vec::new(),
@@ -82,6 +86,7 @@ impl<'a> Program<'a> {
             env,
             resolver: Box::new(resolver),
             macros: MacroEnv::new(),
+            records: crate::records::RecordEnv::default(),
             package: None,
             imported: HashSet::new(),
             importing: Vec::new(),
@@ -99,6 +104,7 @@ impl<'a> Program<'a> {
             env,
             resolver: Box::new(move |module: &str| resolver_manifest.resolve(module)),
             macros: MacroEnv::new(),
+            records: crate::records::RecordEnv::default(),
             package: Some(manifest),
             imported: HashSet::new(),
             importing: Vec::new(),
@@ -135,6 +141,7 @@ impl<'a> Program<'a> {
                 }),
             }),
             macros: MacroEnv::new(),
+            records: crate::records::RecordEnv::default(),
             package: Some(manifest),
             imported: HashSet::new(),
             importing: Vec::new(),
@@ -202,12 +209,14 @@ impl<'a> Program<'a> {
             let plain = form.strip();
             let env_snapshot = self.env.clone();
             let macros_snapshot = self.macros.clone();
+            let records_snapshot = self.records.clone();
             let imported_snapshot = self.imported.clone();
             let importing_snapshot = self.importing.clone();
             if let Err(e) = self.run_form(&plain) {
                 diagnostics.push(Diagnostic::at(e.to_string(), narrow_span(form, &e)));
                 *self.env = env_snapshot;
                 self.macros = macros_snapshot;
+                self.records = records_snapshot;
                 self.imported = imported_snapshot;
                 self.importing = importing_snapshot;
             }
@@ -218,6 +227,18 @@ impl<'a> Program<'a> {
     /// Process a single top-level form. A `(load …)` expands to the outcomes of the loaded file;
     /// `(define-macro …)` registers a macro; every other form is macro-expanded before processing.
     pub fn run_form(&mut self, form: &Sexpr) -> Result<Vec<Outcome>, ElabError> {
+        // E4: rewrite `(Name-with r (field v) …)` record updates (any expression position) into
+        // rebuilt constructor applications before anything else sees the form — except inside
+        // `define-macro`, whose templates must reach the macro table verbatim.
+        let is_macro_def = matches!(form, Sexpr::List(items)
+            if matches!(items.first(), Some(Sexpr::Atom(kw)) if kw == "define-macro"));
+        let rewritten;
+        let form = if is_macro_def {
+            form
+        } else {
+            rewritten = crate::records::rewrite_updates(form, &self.records)?;
+            &rewritten
+        };
         if let Sexpr::List(items) = form {
             if let Some(Sexpr::Atom(kw)) = items.first() {
                 // `(load "path")` — splice another file's forms in place.
@@ -274,6 +295,56 @@ impl<'a> Program<'a> {
                     for f in &forms {
                         let mut produced = self.run_form(f)?;
                         outcomes.append(&mut produced);
+                    }
+                    return Ok(outcomes);
+                }
+                // `(defrecord Name ((field Ty) …))` — named-field records (E4). Desugar to a
+                // single-constructor `defdata` + projection `deftotal`s and process them in
+                // place, atomically (all-or-nothing on the env/macros/records state). Hygiene:
+                // generated names must not collide with existing definitions — except on an
+                // identical re-declaration, which is idempotent (the `(load …)` re-splice
+                // pattern, mirroring defdata's last-write-wins). Zero kernel growth.
+                if kw == "defrecord" {
+                    let decl = crate::records::parse_defrecord(items)?;
+                    let redeclaration = self
+                        .records
+                        .get(&decl.name)
+                        .is_some_and(|i| i.fields == decl.field_names());
+                    if !redeclaration {
+                        let mut generated = vec![decl.ctor_name(), decl.update_head()];
+                        for (i, (f, _)) in decl.fields.iter().enumerate() {
+                            if decl.projectable(i) {
+                                generated.push(decl.projection_name(f));
+                            }
+                        }
+                        for n in &generated {
+                            if self.env.global_term(n).is_some()
+                                || self.env.data_constructors(n).is_some()
+                                || self.env.constructor_rec_flags(n).is_some()
+                            {
+                                return Err(ElabError::BadForm(format!(
+                                    "defrecord {}: generated name `{n}` collides with an \
+                                     existing definition",
+                                    decl.name
+                                )));
+                            }
+                        }
+                    }
+                    let env_snapshot = self.env.clone();
+                    let macros_snapshot = self.macros.clone();
+                    let records_snapshot = self.records.clone();
+                    self.records.register(&decl);
+                    let mut outcomes = Vec::new();
+                    for f in crate::records::emit_forms(&decl) {
+                        match self.run_form(&f) {
+                            Ok(mut produced) => outcomes.append(&mut produced),
+                            Err(e) => {
+                                *self.env = env_snapshot;
+                                self.macros = macros_snapshot;
+                                self.records = records_snapshot;
+                                return Err(e);
+                            }
+                        }
                     }
                     return Ok(outcomes);
                 }

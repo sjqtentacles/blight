@@ -53,21 +53,25 @@
 (deftotal assert-eq-string (Pi ((x String) (y String)) Bool) (lam (x y) (string-eq x y)))
 
 ; ---- the framework proper ---------------------------------------------------------------------
-(defdata TestCase () (mk-test (name String) (passed Bool)))
-(defdata TestSuite () (mk-suite (name String) (cases (List TestCase))))
+; E4 adoption: TestCase/TestSuite are `defrecord`s — the single-constructor defdata,
+; projections (TestCase-name/TestCase-passed/TestSuite-name/TestSuite-cases), and the
+; `-with` update forms are all generated. Constructors follow the generated mk-<Name>
+; convention (formerly hand-written mk-test/mk-suite).
+(defrecord TestCase ((name String) (passed Bool)))
+(defrecord TestSuite ((name String) (cases (List TestCase))))
 
 ; `deftest name passed` names an already-computed assertion result. Called as e.g.
 ; `(deftest "plus-comm" (assert-eq-nat (plus 2 3) (plus 3 2)))`.
 (deftotal deftest (Pi ((name String) (passed Bool)) TestCase)
-  (lam (name passed) (mk-test name passed)))
+  (lam (name passed) (mk-TestCase name passed)))
 
 ; ---- reporting ----------------------------------------------------------------------------------
-(deftotal case-passed (Pi ((c TestCase)) Bool) (lam (c) (match c [(mk-test name passed) passed])))
+(deftotal case-passed (Pi ((c TestCase)) Bool) (lam (c) (match c [(mk-TestCase name passed) passed])))
 
 ; The number of cases in a suite. `length`'s element type is implicit (E2); the ascription gives it
 ; something to unify against, since a match-bound field variable's type is not otherwise tracked.
 (deftotal suite-total (Pi ((s TestSuite)) Nat)
-  (lam (s) (match s [(mk-suite name cases) (length (the (List TestCase) cases))])))
+  (lam (s) (match s [(mk-TestSuite name cases) (length (the (List TestCase) cases))])))
 
 ; The number of *passing* cases in a suite (structural recursion on the case spine).
 (define-rec count-passed (Pi ((cases (List TestCase))) Nat)
@@ -77,14 +81,14 @@
         (match (case-passed c) [(true) (Succ (count-passed rest))] [(false) (count-passed rest)])])))
 
 (deftotal suite-passed (Pi ((s TestSuite)) Nat)
-  (lam (s) (match s [(mk-suite name cases) (count-passed cases)])))
+  (lam (s) (match s [(mk-TestSuite name cases) (count-passed cases)])))
 
 ; `true` iff every case in the suite passed (an empty suite vacuously passes).
 (define-rec all-passed (Pi ((cases (List TestCase))) Bool)
   (lam (cases) (match cases [(nil) true] [(cons c rest) (and (case-passed c) (all-passed rest))])))
 
 (deftotal suite-all-passed (Pi ((s TestSuite)) Bool)
-  (lam (s) (match s [(mk-suite name cases) (all-passed cases)])))
+  (lam (s) (match s [(mk-TestSuite name cases) (all-passed cases)])))
 
 ; ---- human-readable rendering (for a Console program to print) ----------------------------------
 ; Verdicts render as `" 1"` (pass) / `" 0"` (fail) — a single digit codepoint via `digit-char`
@@ -96,7 +100,7 @@
   (lam (b) (push char-space (push (digit-char (bool-to-nat b)) empty))))
 
 (deftotal render-case (Pi ((c TestCase)) String)
-  (lam (c) (match c [(mk-test name passed) (string-append name (render-verdict passed))])))
+  (lam (c) (match c [(mk-TestCase name passed) (string-append name (render-verdict passed))])))
 
 (define-rec render-cases (Pi ((cases (List TestCase))) String)
   (lam (cases)
@@ -105,4 +109,4 @@
 
 ; `render-suite s` — one line per case (`"<name> PASS"`/`"<name> FAIL"`), newline-terminated.
 (deftotal render-suite (Pi ((s TestSuite)) String)
-  (lam (s) (match s [(mk-suite name cases) (render-cases cases)])))
+  (lam (s) (match s [(mk-TestSuite name cases) (render-cases cases)])))

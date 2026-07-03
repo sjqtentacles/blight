@@ -10,6 +10,7 @@ pub mod elab;
 pub mod fmt;
 pub mod infer;
 pub mod macros;
+pub mod records;
 pub mod measure;
 pub mod meta;
 pub mod mutual;

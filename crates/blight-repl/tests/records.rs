@@ -53,24 +53,10 @@ const NAT: &str = "(defdata Nat () (Zero) (Succ (n Nat)))\n\
 
 const POINT: &str = "(defrecord Point ((x Nat) (y Nat)))\n";
 
-/// Unguarded boundary pin (red convention): the `defrecord` head is unclaimed today — it errors
-/// as an unknown form, proving E4 widens the language rather than colliding with anything. The
-/// green commit flips this test into the positive suite below.
-#[test]
-fn defrecord_head_is_unclaimed_today() {
-    run_with(format!("{NAT}{POINT}"), |r| {
-        assert!(
-            r.is_err(),
-            "pre-E4, defrecord must be an unknown form, got: {r:?}"
-        );
-    });
-}
-
 /// `(defrecord Point ((x Nat) (y Nat)))` registers `Point` as a single-constructor datatype
 /// (constructor `mk-Point`) with projection globals `Point-x`/`Point-y` that compute: the
 /// kernel accepts `refl`-style paths projecting from a literal record.
 #[test]
-#[ignore = "E4: pending"]
 fn defrecord_declares_type_ctor_and_projections() {
     run_with_env(
         format!(
@@ -100,7 +86,6 @@ fn defrecord_declares_type_ctor_and_projections() {
 /// `(Point-with p (y 5))` rewrites to a rebuilt constructor application — projections of the
 /// updated record compute to the new value on the updated field and the old value elsewhere.
 #[test]
-#[ignore = "E4: pending"]
 fn field_update_rebuilds_constructor_application() {
     run_with(
         format!(
@@ -125,7 +110,6 @@ fn field_update_rebuilds_constructor_application() {
 /// `(Point-with p (z 5))` fails with a dedicated diagnostic that names the unknown field —
 /// never a generic no-rule/macro error.
 #[test]
-#[ignore = "E4: pending"]
 fn unknown_field_in_update_rejected() {
     run_with(
         format!(
@@ -150,7 +134,6 @@ fn unknown_field_in_update_rejected() {
 /// record, and as a `defdata` field — with per-arm refinement (the `Con`-refinement property
 /// that drove the defdata lowering; a Sigma encoding goes stuck here).
 #[test]
-#[ignore = "E4: pending"]
 fn record_in_dependent_position_checks() {
     run_with(
         format!(
@@ -178,7 +161,6 @@ fn record_in_dependent_position_checks() {
 /// Malformed shapes each fail with a shape diagnostic (the measure.rs/defn.rs cheap-check
 /// pattern): wrong arity, a non-`(name Ty)` field entry, and duplicate field names.
 #[test]
-#[ignore = "E4: pending"]
 fn defrecord_rejects_malformed_shape() {
     for (label, src) in [
         ("wrong arity (2 items)", "(defrecord Point)"),
@@ -205,7 +187,6 @@ fn defrecord_rejects_malformed_shape() {
 /// A pre-existing global or constructor colliding with a generated name (`mk-Point`,
 /// `Point-x`, `Point-with`) fails cleanly and atomically — no partial environment state.
 #[test]
-#[ignore = "E4: pending"]
 fn generated_name_collision_rejected() {
     run_with_env(
         format!(
@@ -227,7 +208,6 @@ fn generated_name_collision_rejected() {
 /// pattern type-checks, E3 reports the single-constructor match exhaustive, and an E5 `defn`
 /// with a `mk-Point` pattern column compiles.
 #[test]
-#[ignore = "E4: pending"]
 fn record_constructor_match_and_coverage() {
     run_with(
         format!(
@@ -251,7 +231,6 @@ fn record_constructor_match_and_coverage() {
 /// Dependent field types: a later field's type may mention earlier fields (defdata telescopes
 /// already elaborate this — Sigma-telescope parity under the defdata lowering).
 #[test]
-#[ignore = "E4: pending"]
 fn dependent_field_types_check() {
     run_with(
         format!(

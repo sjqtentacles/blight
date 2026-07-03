@@ -69,6 +69,6 @@
                           (cons t13
                             (cons t14 (cons t15 (cons t16 (cons t17 (cons t18 (cons t19 nil))))))))))))))))))))
 
-(define regex-suite TestSuite (mk-suite "regex" all-cases))
+(define regex-suite TestSuite (mk-TestSuite "regex" all-cases))
 
 (define main Bool (suite-all-passed regex-suite))

@@ -218,6 +218,10 @@ fn kernel_normal_form_matches_intended_value() {
             example("either_compute.bl"),
             "4".into(),
         ),
+        // E4: `defrecord` sugar (single-constructor defdata + projections + `-with` update) —
+        // the oracle pins that the whole generated kit preserves meaning: `manhattan (Point-with
+        // (mk-Point 3 4) (y 5)) = 8`.
+        ("records_demo.bl", example("records_demo.bl"), "8".into()),
     ];
     // The corrected structural `fib` benchmark (the program whose nested-match miscompile motivated
     // this oracle): `fib 32 = 2178309`.

@@ -853,11 +853,15 @@ GLOBAL std/string_extra.bl string-reverse Ok
 GLOBAL std/string_extra.bl string-shift Ok
 GLOBAL std/string_extra.bl string-take Ok
 GLOBAL std/string_extra.bl sub Ok
-FILE std/test.bl forms=117 declared=108 checked=9
+FILE std/test.bl forms=121 declared=112 checked=9
 GLOBAL std/test.bl Nat-Ord Ok
 GLOBAL std/test.bl ORD Ok
 GLOBAL std/test.bl Ord Ok
 GLOBAL std/test.bl Show Ok
+GLOBAL std/test.bl TestCase-name Ok
+GLOBAL std/test.bl TestCase-passed Ok
+GLOBAL std/test.bl TestSuite-cases Ok
+GLOBAL std/test.bl TestSuite-name Ok
 GLOBAL std/test.bl all-passed Ok
 GLOBAL std/test.bl and Ok
 GLOBAL std/test.bl append Ok
@@ -2564,11 +2568,15 @@ GLOBAL examples/int_sum.bl reverse Ok
 GLOBAL examples/int_sum.bl reverse-onto Ok
 GLOBAL examples/int_sum.bl sub Ok
 GLOBAL examples/int_sum.bl ten Ok
-FILE examples/json_scratch.bl forms=241 declared=223 checked=18
+FILE examples/json_scratch.bl forms=245 declared=227 checked=18
 GLOBAL examples/json_scratch.bl Nat-Ord Ok
 GLOBAL examples/json_scratch.bl ORD Ok
 GLOBAL examples/json_scratch.bl Ord Ok
 GLOBAL examples/json_scratch.bl Show Ok
+GLOBAL examples/json_scratch.bl TestCase-name Ok
+GLOBAL examples/json_scratch.bl TestCase-passed Ok
+GLOBAL examples/json_scratch.bl TestSuite-cases Ok
+GLOBAL examples/json_scratch.bl TestSuite-name Ok
 GLOBAL examples/json_scratch.bl all-cases Ok
 GLOBAL examples/json_scratch.bl all-passed Ok
 GLOBAL examples/json_scratch.bl and Ok
@@ -2781,11 +2789,15 @@ GLOBAL examples/listfold.bl reverse Ok
 GLOBAL examples/listfold.bl reverse-onto Ok
 GLOBAL examples/listfold.bl sub Ok
 GLOBAL examples/listfold.bl xs Ok
-FILE examples/map_scratch.bl forms=225 declared=210 checked=15
+FILE examples/map_scratch.bl forms=229 declared=214 checked=15
 GLOBAL examples/map_scratch.bl Nat-Ord Ok
 GLOBAL examples/map_scratch.bl ORD Ok
 GLOBAL examples/map_scratch.bl Ord Ok
 GLOBAL examples/map_scratch.bl Show Ok
+GLOBAL examples/map_scratch.bl TestCase-name Ok
+GLOBAL examples/map_scratch.bl TestCase-passed Ok
+GLOBAL examples/map_scratch.bl TestSuite-cases Ok
+GLOBAL examples/map_scratch.bl TestSuite-name Ok
 GLOBAL examples/map_scratch.bl TreeSet Ok
 GLOBAL examples/map_scratch.bl all-cases Ok
 GLOBAL examples/map_scratch.bl all-passed Ok
@@ -3270,6 +3282,29 @@ GLOBAL examples/quicksort.bl reverse Ok
 GLOBAL examples/quicksort.bl reverse-onto Ok
 GLOBAL examples/quicksort.bl show Ok
 GLOBAL examples/quicksort.bl sub Ok
+FILE examples/records_demo.bl forms=26 declared=22 checked=4
+GLOBAL examples/records_demo.bl Point-x Ok
+GLOBAL examples/records_demo.bl Point-y Ok
+GLOBAL examples/records_demo.bl and Ok
+GLOBAL examples/records_demo.bl even Ok
+GLOBAL examples/records_demo.bl four-is-even Ok
+GLOBAL examples/records_demo.bl main Ok
+GLOBAL examples/records_demo.bl manhattan Ok
+GLOBAL examples/records_demo.bl max Ok
+GLOBAL examples/records_demo.bl min Ok
+GLOBAL examples/records_demo.bl mult Ok
+GLOBAL examples/records_demo.bl mult-two-three-is-six Ok
+GLOBAL examples/records_demo.bl not Ok
+GLOBAL examples/records_demo.bl odd Ok
+GLOBAL examples/records_demo.bl or Ok
+GLOBAL examples/records_demo.bl origin Ok
+GLOBAL examples/records_demo.bl p Ok
+GLOBAL examples/records_demo.bl plus Ok
+GLOBAL examples/records_demo.bl plus-two-three-is-five Ok
+GLOBAL examples/records_demo.bl pred Ok
+GLOBAL examples/records_demo.bl px Ok
+GLOBAL examples/records_demo.bl q Ok
+GLOBAL examples/records_demo.bl sub Ok
 FILE examples/redblacktree.bl forms=42 declared=37 checked=5
 GLOBAL examples/redblacktree.bl Nat-Ord Ok
 GLOBAL examples/redblacktree.bl NatTree Ok
@@ -3298,11 +3333,15 @@ GLOBAL examples/redblacktree.bl show Ok
 GLOBAL examples/redblacktree.bl sub Ok
 GLOBAL examples/redblacktree.bl tree-if Ok
 GLOBAL examples/redblacktree.bl tree-insert Ok
-FILE examples/regex_scratch.bl forms=204 declared=189 checked=15
+FILE examples/regex_scratch.bl forms=208 declared=193 checked=15
 GLOBAL examples/regex_scratch.bl Nat-Ord Ok
 GLOBAL examples/regex_scratch.bl ORD Ok
 GLOBAL examples/regex_scratch.bl Ord Ok
 GLOBAL examples/regex_scratch.bl Show Ok
+GLOBAL examples/regex_scratch.bl TestCase-name Ok
+GLOBAL examples/regex_scratch.bl TestCase-passed Ok
+GLOBAL examples/regex_scratch.bl TestSuite-cases Ok
+GLOBAL examples/regex_scratch.bl TestSuite-name Ok
 GLOBAL examples/regex_scratch.bl all-cases Ok
 GLOBAL examples/regex_scratch.bl all-passed Ok
 GLOBAL examples/regex_scratch.bl and Ok

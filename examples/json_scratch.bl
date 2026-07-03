@@ -74,6 +74,6 @@
                       (cons t11
                         (cons t12 (cons t13 (cons t14 (cons t15 (cons t16 (cons t17 nil))))))))))))))))))
 
-(define json-suite TestSuite (mk-suite "json" all-cases))
+(define json-suite TestSuite (mk-TestSuite "json" all-cases))
 
 (define main Bool (suite-all-passed json-suite))

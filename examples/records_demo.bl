@@ -1,29 +1,30 @@
 ; records_demo.bl — E4 (v0.1 roadmap): named-field records via `defrecord`.
 ;
-; E4 RED: the demo body is a commented-out corpus entry (the .bl red convention,
-; docs/roadmap-v0.1.md governance) until the defrecord lowering lands; the green commit
-; uncomments it and adds it to the oracle corpus.
+; One declaration generates the whole record kit: nominal type `Point`, constructor `mk-Point`,
+; projections `Point-x`/`Point-y`, and the functional-update form `Point-with`. Records lower to
+; a single-constructor `defdata`, so they are ordinary inductives everywhere else: match on them,
+; put them in dependent positions, let the kernel compute through them.
 ;
-; (load "std/nat.bl")
-;
-; ; A record declaration: nominal type `Point`, constructor `mk-Point`, projections
-; ; `Point-x`/`Point-y`, and functional update `Point-with` — all generated.
-; (defrecord Point ((x Nat) (y Nat)))
-;
-; (define origin Point (mk-Point 0 0))
-; (define p Point (mk-Point 3 4))
-;
-; ; Projection.
-; (define px Nat (Point-x p))
-;
-; ; Functional update: everything not named keeps its old value.
-; (define q Point (Point-with p (y 5)))
-;
-; ; Records are ordinary single-constructor inductives: match on them.
-; (deftotal manhattan (Pi ((pt Point)) Nat)
-;   (lam (pt) (match pt [(mk-Point a b) (plus a b)])))
-;
-; ; The kernel computes through all of it (checked by refl).
-; (the (Path Nat (manhattan q) 8) (plam (i) 8))
-;
-; (define main Nat (manhattan q))
+;   cargo run -p blight-repl --features llvm -- build examples/records_demo.bl -o rec && ./rec  # => 8
+
+(load "std/nat.bl")
+
+(defrecord Point ((x Nat) (y Nat)))
+
+(define origin Point (mk-Point 0 0))
+(define p Point (mk-Point 3 4))
+
+; Projection.
+(define px Nat (Point-x p))
+
+; Functional update: fields not named keep their old value.
+(define q Point (Point-with p (y 5)))
+
+; Records are ordinary single-constructor inductives: match on them.
+(deftotal manhattan (Pi ((pt Point)) Nat)
+  (lam (pt) (match pt [(mk-Point a b) (plus a b)])))
+
+; The kernel computes through all of it (certified by refl).
+(the (Path Nat (manhattan q) 8) (plam (i) 8))
+
+(define main Nat (manhattan q))

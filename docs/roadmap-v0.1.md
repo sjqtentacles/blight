@@ -127,7 +127,7 @@ warning-grade diagnostic for duplicate/unreachable arms.
   unchanged.
 - **Exit:** error text in the tutorial troubleshooting section.
 
-### [ ] E4 — Records: named fields over a single-constructor `defdata`
+### [x] E4 — Records: named fields over a single-constructor `defdata`
 
 **Design re-verified 2026-07-03** (the original "over Sigma" premise was overturned by the
 pre-implementation code check, seven code-cited reasons): `(defrecord Point ((x Nat) (y Nat)))`
@@ -166,6 +166,25 @@ row polymorphism in v1.
   DIFF_CORPUS and the self-host closure; the spec's former std/graphics "config" target does not
   exist, and std/parser's PState is a post-E4 stretch item gated on re-blessing the verdict
   golden and preserving the S1 stdout pin). Oracle-corpus additions per the oracle rule.
+
+**As-built notes (2026-07-03):**
+- *Landed as specified post-re-verification; 8/9 tests green on the first full run.* New
+  `crates/blight-elab/src/records.rs` (parse + emit + the `RecordEnv` registry + the
+  `rewrite_updates` walk); `Program` gains the registry with the same snapshot discipline as the
+  macro table; the `-with` rewrite runs at the top of `run_form` on every non-`define-macro`
+  form, so updates work in any expression position including inside `defn`/`deftotal` bodies.
+- *Idempotent re-declaration:* an identical `defrecord` re-runs cleanly (the `(load …)`
+  re-splice pattern); hygiene collisions only fire on genuinely new names. Emitted forms process
+  atomically (snapshot/rollback around the whole batch).
+- *std/test.bl adoption:* `TestCase`/`TestSuite` became `defrecord`s; constructors renamed to the
+  generated `mk-TestCase`/`mk-TestSuite` (7 in-module sites + 3 example call sites). The verdict
+  golden re-blessed: the only drift is the four new projections re-verified `Ok` in every closure
+  loading std/test.bl, plus records_demo.bl's globals — zero `Rejected` movement.
+- *Documented v1 limitations, as pre-registered:* no definitional record eta (a neutral record
+  is not convertible with its repacking); a field whose type mentions earlier fields gets no
+  projection (access via `match`; `-with` names the field in its diagnostic if asked to rebuild
+  around it); the update duplicates the record expression once per kept field (pure language —
+  a cost, not a semantics change).
 
 ### [x] E5 — Equation-style definitions (`defn`)
 

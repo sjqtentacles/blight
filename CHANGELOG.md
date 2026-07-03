@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **v0.1 roadmap arc E, milestone E4 (records):** `(defrecord Point ((x Nat) (y Nat)))` generates
+  the whole record kit — nominal type, `mk-Point` constructor, projection `deftotal`s, and the
+  `(Point-with p (y 5))` functional-update rewrite (any expression position, dedicated
+  unknown-field diagnostics, atomic hygiene-checked declaration). Records lower to a
+  single-constructor `defdata` — a design re-verified against the codebase before implementation
+  (dependent-index refinement, nominal typing, codegen unboxing, and free match/E3-coverage/E5
+  integration all require the inductive encoding; the originally-specified Sigma encoding would
+  have failed the milestone's own dependent-position test). std/test.bl's `TestCase`/`TestSuite`
+  adopted; `examples/records_demo.bl` added and oracle-pinned. Zero kernel changes.
+
 ### Fixed
 
 - **Roadmap arc N, milestone N5 (the eliminator cliff):** both evaluators — the trusted kernel's
