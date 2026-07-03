@@ -61,6 +61,9 @@ mod term;
 mod typecheck;
 mod value;
 
+/// Arc N / N5 instrumentation (this engine's IH counter) — see the doc on the definition.
+pub use normalize::take_ih_computed;
+
 pub use term::{RGrade, RRow, RTerm};
 
 use blight_kernel::{Judgement, Proof, Signature};

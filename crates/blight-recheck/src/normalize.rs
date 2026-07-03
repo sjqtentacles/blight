@@ -8,6 +8,19 @@ use crate::value::{Closure, DimClosure, Env, Neutral, RValue};
 use blight_kernel::signature::{Arg, Signature};
 use std::rc::Rc;
 
+std::thread_local! {
+    /// Arc N / N5 instrumentation, mirroring the kernel's counter *independently* (the two-engine
+    /// discipline applies to instrumentation too): how many induction hypotheses this engine's
+    /// `do_elim` has computed on this thread. Read/reset only by the N5 scaling tests.
+    static IH_COMPUTED: std::cell::Cell<u64> = std::cell::Cell::new(0);
+}
+
+/// Read and reset this thread's IH counter (arc N / N5; see the kernel twin
+/// `blight_kernel::normalize::take_ih_computed`).
+pub fn take_ih_computed() -> u64 {
+    IH_COMPUTED.replace(0)
+}
+
 impl Closure {
     pub fn apply(&self, sig: &Signature, arg: RValue) -> RValue {
         eval(sig, &self.env.extend(arg), &self.body)
@@ -325,6 +338,7 @@ pub fn do_elim(
             for (arg, shape) in args.iter().zip(ctor.args.iter()) {
                 result = apply(sig, result, arg.clone());
                 if matches!(shape, Arg::Rec(_)) {
+                    IH_COMPUTED.set(IH_COMPUTED.get() + 1);
                     let ih = do_elim(sig, data, motive.clone(), methods.clone(), arg.clone());
                     result = apply(sig, result, ih);
                 }

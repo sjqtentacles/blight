@@ -35,6 +35,20 @@ std::thread_local! {
     /// `None` = unmetered (the default; every existing call site is unaffected). `Some(0)` means
     /// the budget is exhausted *this step* — checked and decremented at each tick.
     static BUDGET: std::cell::Cell<Option<u64>> = std::cell::Cell::new(None);
+
+    /// Arc N / N5 instrumentation: how many induction hypotheses `do_elim` has computed on this
+    /// thread. Same design as `BUDGET`/`tick()`: an always-on thread-local `Cell` bump (one add
+    /// per *recursive constructor argument*, dwarfed by the `do_elim` call it sits in), read and
+    /// reset only by the N5 scaling tests. Pre-N5 this counts every IH unconditionally; the N5
+    /// fix will split it into computed-because-used vs discarded.
+    static IH_COMPUTED: std::cell::Cell<u64> = std::cell::Cell::new(0);
+}
+
+/// Read and reset this thread's [`IH_COMPUTED`] counter (arc N / N5 instrumentation). The rung-0
+/// scaling test asserts the *growth law* of this counter across input sizes — a deterministic
+/// stand-in for wall-clock slope (counters cannot be flaky).
+pub fn take_ih_computed() -> u64 {
+    IH_COMPUTED.replace(0)
 }
 
 /// The typed panic payload for budget exhaustion (crate-private, never constructed elsewhere) —
@@ -793,6 +807,7 @@ fn do_elim(env: &Env, data: &DataName, motive: Value, methods: Vec<Value>, scrut
             for (arg, arg_shape) in args.iter().zip(ctor.args.iter()) {
                 result = apply(result, arg.clone());
                 if matches!(arg_shape, crate::signature::Arg::Rec(_)) {
+                    IH_COMPUTED.set(IH_COMPUTED.get() + 1);
                     let ih = do_elim(env, data, motive.clone(), methods.clone(), arg.clone());
                     result = apply(result, ih);
                 }
