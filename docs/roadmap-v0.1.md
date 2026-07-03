@@ -378,7 +378,7 @@ kernel/elab/recheck/codegen). Protocol, all gates pre-registered in the red comm
   was real but not dominant; the post-S3 adversarial review identified the actual mechanism —
   `do_elim`'s eager computation of *discarded* induction hypotheses, ~2^min(codepoints) steps
   per `nat-eq`, shared at parity by both engines, with the "kernel is fast on these" appearance
-  being the elaborator's deliberate ground-value gate — see arc N for the code-cited findings
+  being the elaborator's deliberate ground-value gate — see arc N (milestones N5-N7; numbered past the historical Wave-track N1 ValueChain / N2 metering / N4) for the code-cited findings
   and the fix plan. The refl stays commented in spore_reader.bl with the corrected analysis.
 - *`Send` fallout was confined to tests plus one audited assertion.* `Rc` makes `Term` `!Send`;
   production code needed exactly one change — the llvm-gated backend driver hands `&Term` to its
@@ -471,7 +471,7 @@ Method rules (amended by the review):
 - **Independence constraint (hard):** blight-recheck may copy the *idea* of a fix, never kernel
   code.
 
-### [ ] N2 — Eliminate eager discarded induction hypotheses (both engines; TCB-touching)
+### [ ] N5 — Eliminate eager discarded induction hypotheses (both engines; TCB-touching)
 
 The mechanism-fix milestone. **Opens with a half-day design spike** (a lesson bought twice on
 2026-07-03: optimistic labels don't get to sit in documents): the panel's "IH-free case trees
@@ -505,11 +505,11 @@ DIFF_CORPUS; evaluator-only changes are gated by the byte-identical verdict gold
 - **Pre-registered fork:** if the fix family cannot clear the gates, the alternative exit is
   *policy alignment* — gate ground-value judgements in `recheck_before_emit` exactly as the
   elaborator gates the kernel, making RECHECK_SKIP a documented policy rather than a bug — and
-  N4 fires.
+  N7 fires.
 
-### [ ] N3 — Constant-factor hygiene (post-N2, measured-in, each optional)
+### [ ] N6 — Constant-factor hygiene (post-N5, measured-in, each optional)
 
-Only what the post-N2 ladder still needs, in measured order of leverage:
+Only what the post-N5 ladder still needs, in measured order of leverage:
 - **Value-tree sharing** (kernel + recheck): `Rc` children in `Value` / interned `ConName` —
   kills the Θ(k)-per-level deep clones (the polynomial multiplier). S3-shaped protocol.
 - **RTerm Box→Rc** (recheck only): S3-for-recheck; parity bounds the win at ~15% on eliminator
@@ -518,9 +518,9 @@ Only what the post-N2 ladder still needs, in measured order of leverage:
   (PathP eager endpoint eval + PLam boundary + define-by re-check); measured target ~3-10×
   constant on refl-heavy goldens.
 
-### [ ] N4 — Decision checkpoint (fires only on N2 fork)
+### [ ] N7 — Decision checkpoint (fires only on N5 fork)
 
-Trigger (named, P4-style): the N2 fix family fails the S3 gate protocol, or fails to flip the
+Trigger (named, P4-style): the N5 fix family fails the S3 gate protocol, or fails to flip the
 rung-0 slope + RECHECK_SKIP rungs, within two milestone-sessions of effort. Then: adopt the
 policy-alignment exit permanently; record in [implementation.md](implementation.md)'s Stage
 table that Stage-1 certification is the S2 verdict-level bridge (delivered, scaling) and that
@@ -620,10 +620,10 @@ tag `v0.1.0`.
 
 ## Cross-arc ordering (recommended for a single stream)
 
-E1 → E2 → E3 → S1 → E5 → E6 → S2 → S3 → **N2 → N3 → N4** → E4 → E7 → E8 → S4 → P1 → R1 → R2 →
+E1 → E2 → E3 → S1 → E5 → E6 → S2 → S3 → **N5 → N6 → N7** → E4 → E7 → E8 → S4 → P1 → R1 → R2 →
 P2 → S5 → P3 → R3 → P4 → R4
 
-(Arc N inserted post-S3: N2/N3 sit directly in S4/S5's critical path — growing the self-hosted
+(Arc N inserted post-S3: N5/N6 sit directly in S4/S5's critical path — growing the self-hosted
 fragment is pointless while its certification mechanism is over a performance cliff — and the two
 re-checker false-`Rejected` fixes discovered by the S3 harness run as independent parallel work,
 tracked outside this ordering.)
@@ -640,9 +640,9 @@ linear order is the default for a single stream.
 
 | Size | Milestones |
 |---|---|
-| Small (≈1 session) | E1, E3, E8, S1, R1, R3, P4, N4 |
-| Medium (1–3 sessions) | E2, E4, E5, E7, S2, P1, P3, R2, R4, S5, N2 (counters land fast; the fix is the unknown) |
-| Large (3+ sessions) | E6, S3 (the Box→Rc audit), S4 (three sub-milestones), P2, N3 (kernel-side, full gate protocol per fix) |
+| Small (≈1 session) | E1, E3, E8, S1, R1, R3, P4, N7 |
+| Medium (1–3 sessions) | E2, E4, E5, E7, S2, P1, P3, R2, R4, S5, N5 (counters land fast; the fix is the unknown) |
+| Large (3+ sessions) | E6, S3 (the Box→Rc audit), S4 (three sub-milestones), P2, N6 (kernel-side, full gate protocol per fix) |
 
 ## Cross-references
 

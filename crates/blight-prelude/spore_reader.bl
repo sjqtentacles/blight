@@ -242,7 +242,7 @@
 ; clone fix. The actual mechanism: `do_elim` eagerly computes *discarded* induction hypotheses,
 ; making `nat-eq` cost ~2^min(codepoints) steps — this refl dies inside `is-lam-kw`'s first
 ; character comparison, `nat-eq(108,108)` (`'l'` vs `'l'`), ~2^108 steps. Fuel is innocent
-; (bsexp-size fuel here is 11). The fix is arc N's N2 (lazy/IH-free elimination, both engines);
+; (bsexp-size fuel here is 11). The fix is arc N's N5 (dead-IH detection in do_elim, both engines);
 ; until it lands, the refl stays commented and `reader_self_host_loads` remains the
 ; certification story, exactly as before:
 ; (define-by reader-demo-refl

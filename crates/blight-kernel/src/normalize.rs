@@ -1771,7 +1771,7 @@ mod tests {
     // costs ~2^min(codepoints) eliminator steps — measured slope ×~2.0 per +1 codepoint on
     // match-forced `nat-eq k k`, identical (±15%) in blight-recheck. Every known "cliff"
     // reproducer (RECHECK_SKIP, reader-demo-refl) is this one defect at 0% progress on its first
-    // character comparison. Fix tracked as arc N / N2 (lazy IH or IH-free case trees); the
+    // character comparison. Fix tracked as arc N / N5 (dead-IH detection / lazy IH / IH-free case trees); the
     // secondary Θ(k)-per-level `Value` deep-clone multiplier is N3.
 
     use crate::signature::{Arg, Constructor, DataDecl, Signature};

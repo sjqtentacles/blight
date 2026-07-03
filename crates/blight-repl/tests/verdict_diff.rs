@@ -137,7 +137,7 @@ fn cached_verdict(
 /// effectively non-terminating, not slow. Both engines share the defect at parity (±15%): the
 /// "kernel checks these in milliseconds" appearance is the elaborator's *gate* deliberately
 /// skipping ground-value conclusions (`gate_routes_through_kernel`), a policy the ungated
-/// re-check pass lacks. Empty this list (and re-bless) when arc N's N2 fix lands — or, on N2's
+/// re-check pass lacks. Empty this list (and re-bless) when arc N's N5 fix lands — or, on N5's
 /// pre-registered fork, convert it to the same documented gate policy.
 const RECHECK_SKIP: &[&str] = &[
     "examples/json_scratch.bl",
