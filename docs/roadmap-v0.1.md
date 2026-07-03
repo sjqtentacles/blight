@@ -473,20 +473,25 @@ Method rules (amended by the review):
 
 ### [ ] N2 — Eliminate eager discarded induction hypotheses (both engines; TCB-touching)
 
-The mechanism-fix milestone. Candidate fixes, each behind a flag until gated — **IH-free case
-trees are primary** (re-ranked by the 2026-07-03 panel review): the backend's `mono.rs` pure-arg
-beta-drop is a *shipping, differentially-validated existence proof* of exactly this fix (a
-compiled `palindrome.bl` runs fine while both checkers diverge on the identical value), it is
-elaborator-only (zero TCB, no S3 gate protocol needed), and it matches the historically proven
-shape — Agda compiles matches to case trees for precisely this reason:
-1. **IH-free case trees (elaborator-only, zero TCB, primary):** when a match arm never
-   references its IH binder, elaborate to a method that does not bind it (or to a non-recursive
-   eliminator form) — changes emitted terms, so the oracle corpus + DIFF_CORPUS + verdict golden
-   gate it.
-2. **Lazy IH (evaluator-only, fallback/complement):** thunk the IH at the do_elim IH site; force
-   on first use. Same values, deferred work; kernel change under the full S3 gate protocol, then
-   an independent mirror in recheck. Reach for it only if case trees leave residual eager cost
+The mechanism-fix milestone. **Opens with a half-day design spike** (a lesson bought twice on
+2026-07-03: optimistic labels don't get to sit in documents): the panel's "IH-free case trees
+are elaborator-only, zero TCB" claim does not type-check against the kernel grammar — `Elim`'s
+typing rule fixes method arities to include IH binders and no non-recursive `Case` form exists,
+so genuinely IH-free terms mean a new kernel variant or changed arities (TCB-touching either
+way; the `mono.rs` precedent lives in the *untrusted* backend and does not transfer). The spike
+decides among, cheapest-plausible first:
+1. **Dead-IH detection in `do_elim` (kernel-internal, no grammar change):** occurs-check whether
+   the method body references the IH binder (cacheable per method closure); if dead, pass a
+   stuck dummy neutral — O(1), never forced. ~Dozen lines under the full S3 gate protocol, then
+   an independent mirror in recheck.
+2. **Lazy IH (evaluator-only):** thunk the IH at the do_elim site; force on first use. Same
+   values, deferred work; heavier (the `Value` domain grows a thunk form) but covers exotic
+   cases where deadness is not syntactically visible.
+3. **Kernel `Case` variant + elaborator emission (grammar + typing rule change):** the
+   Agda-shaped long-term answer; largest TCB delta, only if (1)/(2) leave measured residue
    (e.g. through higher-order motives).
+Whichever lands, emitted-term changes (if any) are additionally gated by the oracle corpus +
+DIFF_CORPUS; evaluator-only changes are gated by the byte-identical verdict golden.
 
 - **Red:** the `ih_computed`/`ih_discarded` counters + the rung-0 micro-reproducer harness with
   its pre-fix slope pinned as a golden (the regression test is the *slope*, not a timing).
