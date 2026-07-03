@@ -10,7 +10,7 @@
 use blight_codegen::{anf, closure, lower, mono, region};
 use blight_elab::{ElabEnv, Program};
 use blight_kernel::{Signature, Term};
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, BenchmarkId, Criterion};
 
 /// Resolve `(load "std/…")` against the checked-in prelude, mirroring the test harness.
 fn prelude_resolver(name: &str) -> Result<String, blight_elab::ElabError> {
@@ -20,7 +20,9 @@ fn prelude_resolver(name: &str) -> Result<String, blight_elab::ElabError> {
 }
 
 /// Elaborate `src` and return the `(term, type, signature)` triple for its `main` global, the same
-/// inputs `driver::build_binary` hands the backend.
+/// inputs `driver::build_binary` hands the backend. Deep-recursive elaboration (the string-tower
+/// inputs) is why `main` below runs the whole harness on a 64 MiB-stack thread rather than
+/// criterion's default main thread.
 fn elaborate_main(src: &str) -> (Term, Term, Signature) {
     let mut env = ElabEnv::new();
     {
@@ -36,13 +38,12 @@ fn elaborate_main(src: &str) -> (Term, Term, Signature) {
     (term, ty, env.signature().clone())
 }
 
-/// A Nat literal `Succ^(n) Zero` as surface syntax.
+/// A Nat literal as surface syntax. Written as a bare decimal (E1 sugar): it elaborates to exactly
+/// the same `Succ`-chain core term as a hand-nested `(Succ (Succ …))`, but stays flat in the
+/// reader — a nested chain of 256+ would trip the reader's s-expression nesting limit, which is
+/// why the pre-E1 form of this helper capped the whole bench at n < 256.
 fn nat_lit(n: usize) -> String {
-    let mut s = String::from("(Zero)");
-    for _ in 0..n {
-        s = format!("(Succ {s})");
-    }
-    s
+    n.to_string()
 }
 
 /// `main : Nat` = `plus n n` where `n` is a literal of the given size — drives the eliminator-heavy
@@ -61,7 +62,9 @@ fn list_length_program(n: usize) -> String {
     for i in 0..n {
         list = format!("(cons {} {list})", nat_lit(i % 3));
     }
-    format!("(load \"std/list.bl\")\n(define main Nat (length Nat {list}))\n")
+    // The literal cons-chain has no synthesizable type of its own, so `length`'s implicit `A`
+    // needs the ascription (the standard E2 pattern for constructor-literal arguments).
+    format!("(load \"std/list.bl\")\n(define main Nat (length (the (List Nat) {list})))\n")
 }
 
 /// A literal `List Nat` of the given size, smallest codepoints first (values cycle `0,1,2`).
@@ -78,7 +81,7 @@ fn list_lit(n: usize) -> String {
 /// cost of a real list algorithm rather than a single eliminator.
 fn list_reverse_program(n: usize) -> String {
     format!(
-        "(load \"std/list.bl\")\n(define main Nat (length Nat (reverse Nat {})))\n",
+        "(load \"std/list.bl\")\n(define main Nat (length (reverse Nat {})))\n",
         list_lit(n)
     )
 }
@@ -172,8 +175,12 @@ fn bench_pipeline(c: &mut Criterion) {
     }
     group.finish();
 
+    // List/int/string inputs nest *structurally* in the reader (`(cons _ (cons _ …))`), so their
+    // sizes stay under the reader's 256-deep s-expression nesting limit: 240 is the largest clean
+    // size that fits with the wrapping forms. (The `plus` group is exempt — its depth lives in the
+    // decimal literal, which is flat at the reader level.)
     let mut group = c.benchmark_group("pipeline/list_length");
-    for &n in &[8usize, 32, 128, 256, 512] {
+    for &n in &[8usize, 32, 128, 240] {
         let src = list_length_program(n);
         let (term, ty, sig) = elaborate_main(&src);
         group.bench_with_input(BenchmarkId::new("end_to_end", n), &n, |b, _| {
@@ -183,7 +190,7 @@ fn bench_pipeline(c: &mut Criterion) {
     group.finish();
 
     let mut group = c.benchmark_group("pipeline/list_reverse");
-    for &n in &[8usize, 32, 128, 256] {
+    for &n in &[8usize, 32, 128, 240] {
         let src = list_reverse_program(n);
         let (term, ty, sig) = elaborate_main(&src);
         group.bench_with_input(BenchmarkId::new("end_to_end", n), &n, |b, _| {
@@ -205,7 +212,7 @@ fn bench_pipeline(c: &mut Criterion) {
     // Native-`Int` arithmetic: a deepening left-nested `int+` chain. `Int` is a primitive kernel
     // type, so no prelude load is needed — this isolates the backend cost of an arithmetic AST.
     let mut group = c.benchmark_group("pipeline/int_arith");
-    for &n in &[8usize, 32, 128, 256] {
+    for &n in &[8usize, 32, 128, 240] {
         let src = int_arith_program(n);
         let (term, ty, sig) = elaborate_main(&src);
         group.bench_with_input(BenchmarkId::new("end_to_end", n), &n, |b, _| {
@@ -217,7 +224,7 @@ fn bench_pipeline(c: &mut Criterion) {
     // String tower: `string-reverse` over a growing `string-append` chain of codepoint literals,
     // pushing the std/string.bl `push`/`empty` cons-list through lower→region→closure→mono→ANF.
     let mut group = c.benchmark_group("pipeline/string");
-    for &n in &[8usize, 32, 128, 256] {
+    for &n in &[8usize, 32, 128, 240] {
         let src = string_program(n);
         let (term, ty, sig) = elaborate_main(&src);
         group.bench_with_input(BenchmarkId::new("end_to_end", n), &n, |b, _| {
@@ -228,4 +235,20 @@ fn bench_pipeline(c: &mut Criterion) {
 }
 
 criterion_group!(benches, bench_pipeline);
-criterion_main!(benches);
+
+/// Hand-rolled `criterion_main!`: the harness runs on a 64 MiB-stack worker thread because
+/// elaborating the deep bench inputs (notably the string tower) overflows the default main-thread
+/// stack — the same rationale as `driver::bench_support::compile_source_to_anf`, applied to the
+/// whole harness rather than per elaboration so the elaborated terms never cross a thread
+/// boundary (they are not `Send` once `Term`'s recursive fields are `Rc`).
+fn main() {
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| {
+            benches();
+            Criterion::default().configure_from_args().final_summary();
+        })
+        .expect("spawn bench harness thread")
+        .join()
+        .expect("bench harness thread panicked (see message above)");
+}
