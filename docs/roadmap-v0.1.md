@@ -598,6 +598,19 @@ Only what the post-N5 ladder still needs, in measured order of leverage:
   (PathP eager endpoint eval + PLam boundary + define-by re-check); measured target ~3-10×
   constant on refl-heavy goldens.
 
+**Pre-registration (2026-07-03, Value-tree sharing — the item with two measured justifications:
+json/regex re-checks at 26.5/30.8 s and the depth scale-pair at ~19.6× for 4×):** mechanical
+`Box<Value>`/`Box<Neutral>` → `Rc` in kernel `value.rs` (27 fields) + `normalize.rs` sites, and
+independently in recheck `value.rs` (6 fields); one audited `unshare`-style helper per engine if
+moves exist; `ConName` interning explicitly deferred (API-shaped, needs its own justification).
+No new `Send` fallout is possible (`Value` already holds `Rc<Term>` since S3). Gates: full
+suite; verdict golden byte-identical; llvm bit-identity; criterion vs a fresh `pre-n6` baseline
+(±5%, isolated re-measure arbiter); mutants over any new logic. Payoff targets, pre-registered:
+the scale-pair ratio drops from ~19.6× toward the linear ~4–6× band (then tighten its bound from
+35× to 10×), and json/regex re-checks drop meaningfully below ~30 s. Kill criterion: if the
+ratio does not drop below 12×, the sharing hypothesis is wrong — revert and re-profile instead
+of keeping speculative churn.
+
 ### [x] N7 — Decision checkpoint (fires only on N5 fork) — closed without firing
 
 N5 cleared every gate and the full ladder on 2026-07-03, so the fork (policy-alignment fallback)
