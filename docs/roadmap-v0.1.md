@@ -663,7 +663,7 @@ stratified away. No code.
 
 ## Arc R — Release v0.1
 
-### [ ] R1 — wasm-clean checker (`ureq` feature gate)
+### [x] R1 — wasm-clean checker (`ureq` feature gate)
 
 `blight-elab` gains a `net` cargo feature gating registry.rs's HTTP fetch (git deps + publish):
 default ON for the CLI, OFF for a wasm profile. CI adds
@@ -671,6 +671,15 @@ default ON for the CLI, OFF for a wasm profile. CI adds
 wasm32-unknown-unknown`.
 
 - **Red:** the CI job lands first (allowed-to-fail matrix row, required after green).
+
+**As-built notes (2026-07-03):** compiler-adjudicated premises first: blight-kernel and
+blight-recheck were *already* wasm32-clean; blight-elab was blocked by exactly ureq's transitive
+`getrandom` — plus one genuine 32-bit bug the spec never anticipated and nothing else could have
+found: `META_BASE: usize = 1 << 40` is a compile-time overflow on wasm32. Fixed width-portably
+(`1 << (usize::BITS - 1)` — further from real indices on 64-bit than before, 2^31 on wasm32).
+The two registry HTTP branches are cfg-gated with clear no-`net` diagnostics; the CI row is
+required. Suite 858/858 (one perf-guard failure during the sweep was the wall-clock instrument,
+not the change — both N1 guards are now machine-independent ratios, landed separately).
 
 ### [ ] R2 — Browser playground
 

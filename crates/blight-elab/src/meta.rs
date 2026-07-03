@@ -15,8 +15,11 @@
 use blight_kernel::Term;
 use std::rc::Rc;
 
-/// Reserved de Bruijn base for metavariables. Real contexts never reach this depth.
-pub const META_BASE: usize = 1 << 40;
+/// Reserved de Bruijn base for metavariables. Real contexts never reach this depth. Written
+/// width-portably (R1: `1 << 40` is a compile-time overflow on 32-bit wasm): the top half of the
+/// index space on any platform — 2^63 on 64-bit hosts, 2^31 on wasm32 — is unreachable by real
+/// binder depth either way.
+pub const META_BASE: usize = 1 << (usize::BITS - 1);
 
 /// Whether `i` is a metavariable index (vs. a genuine de Bruijn variable).
 pub fn is_meta(i: usize) -> bool {

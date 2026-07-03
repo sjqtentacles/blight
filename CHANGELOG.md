@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **v0.1 roadmap arc R, milestone R1 (wasm-clean checker):** the whole checking stack —
+  blight-kernel, blight-recheck, and blight-elab with `--no-default-features` — now compiles for
+  `wasm32-unknown-unknown`, with a required CI row pinning it. The registry's HTTP transport
+  (git deps + publish) sits behind a default-on `net` cargo feature; HTTP locations in a no-net
+  build error with a clear message. Found and fixed en route: the metavariable base
+  `1 << 40` was a compile-time overflow on 32-bit targets — now `1 << (usize::BITS - 1)`,
+  width-portable. This is the doorstep for the R2 browser playground.
 - **v0.1 roadmap arc E, milestone E9 (first-session bundle):** the four first-ten-minutes fixes.
   `(do step … last)` sequencing sugar with `(<- x e)` binders (right-nested `let` desugaring,
   refl- and oracle-pinned); the REPL evaluates bare expressions and prints re-sugared values

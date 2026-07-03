@@ -15,7 +15,13 @@ toml = "0.8"
 # this pass (an intentionally small dependency addition, same spirit as A1's `lsp-server` choice).
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 tar = "0.4"
-ureq = { version = "3.3.0", default-features = false, features = ["rustls"] }
+ureq = { version = "3.3.0", default-features = false, features = ["rustls"], optional = true }
 
 [dev-dependencies]
 proptest = "1.11.0"
+
+[features]
+# R1: HTTP transport for the registry (git deps + publish). Default ON for the CLI;
+# a wasm/offline profile builds with --no-default-features (HTTP locations error cleanly).
+default = ["net"]
+net = ["dep:ureq"]

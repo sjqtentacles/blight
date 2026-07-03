@@ -17,7 +17,6 @@ jobs:
   wasm-check:
     name: wasm32 checker (no net)
     runs-on: ubuntu-latest
-    continue-on-error: true # red phase: allowed to fail until the `net` gate lands (R1 green)
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

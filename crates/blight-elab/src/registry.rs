@@ -241,6 +241,13 @@ pub fn publish(
 /// `http(s)://` URL (see the module doc's "Transport" note).
 fn fetch_bytes(location: &str) -> Result<Vec<u8>, ElabError> {
     if is_http_url(location) {
+        #[cfg(not(feature = "net"))]
+        return Err(ElabError::BadForm(format!(
+            "registry: {location:?} is an HTTP location, but this build has no `net` feature \
+             (wasm/offline profile) — vendor the dependency or use a file:// location"
+        )));
+        #[cfg(feature = "net")]
+        {
         let mut response = ureq::get(location).call().map_err(|e| {
             ElabError::BadForm(format!("registry: cannot fetch tarball {location:?}: {e}"))
         })?;
@@ -249,6 +256,7 @@ fn fetch_bytes(location: &str) -> Result<Vec<u8>, ElabError> {
                 "registry: cannot read tarball body from {location:?}: {e}"
             ))
         });
+        }
     }
     let path = location.strip_prefix("file://").unwrap_or(location);
     std::fs::read(path)
@@ -331,6 +339,13 @@ pub fn make_tar_gz(files: &[(&str, &str)]) -> Vec<u8> {
 /// the module doc's "Transport" note) and parse it.
 pub fn load_index(location: &str) -> Result<RegistryIndex, ElabError> {
     if is_http_url(location) {
+        #[cfg(not(feature = "net"))]
+        return Err(ElabError::BadForm(format!(
+            "registry index: {location:?} is an HTTP location, but this build has no `net` \
+             feature (wasm/offline profile) — use a file:// index"
+        )));
+        #[cfg(feature = "net")]
+        {
         let mut response = ureq::get(location).call().map_err(|e| {
             ElabError::BadForm(format!("registry index: cannot fetch {location:?}: {e}"))
         })?;
@@ -340,6 +355,7 @@ pub fn load_index(location: &str) -> Result<RegistryIndex, ElabError> {
             ))
         })?;
         return RegistryIndex::parse(&src);
+        }
     }
     let path = location.strip_prefix("file://").unwrap_or(location);
     let src = std::fs::read_to_string(path).map_err(|e| {
