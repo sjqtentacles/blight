@@ -910,6 +910,7 @@ fn every_std_module_loads_in_isolation() {
         "f64.bl",
         "float.bl",
         "function.bl",
+        "graphics.bl",
         "int.bl",
         "io.bl",
         "json.bl",
