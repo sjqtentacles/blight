@@ -275,7 +275,8 @@ fn build_binary_pipeline(
     // The `graphics` cargo feature is required to build a `main : (! Graphics A)` program (it gates
     // linking `runtime/graphics.c` + SDL2, docs/design-wave4-gobars.md §5). Fail early with a clear
     // message rather than a confusing "undefined symbol: bl_run_graphics" at the final link step.
-    if !cfg!(feature = "graphics") && matches!(ty, Term::EffTy(row, _) if row.contains(&blight_kernel::EffName::new("Graphics")))
+    if !cfg!(feature = "graphics")
+        && matches!(ty, Term::EffTy(row, _) if row.contains(&blight_kernel::EffName::new("Graphics")))
     {
         return Err(
             "main : (! Graphics A) requires the `graphics` cargo feature (SDL2); rebuild blight \
@@ -310,12 +311,16 @@ fn sdl2_flags(which: &str, env_var: &str) -> Vec<String> {
     if let Ok(v) = std::env::var(env_var) {
         return v.split_whitespace().map(String::from).collect();
     }
-    let out = Command::new("pkg-config").arg(which).arg("sdl2").output().unwrap_or_else(|e| {
-        panic!(
-            "pkg-config not available to discover SDL2 ({env_var} unset, `graphics` feature \
+    let out = Command::new("pkg-config")
+        .arg(which)
+        .arg("sdl2")
+        .output()
+        .unwrap_or_else(|e| {
+            panic!(
+                "pkg-config not available to discover SDL2 ({env_var} unset, `graphics` feature \
              requires SDL2 dev headers): {e}"
-        )
-    });
+            )
+        });
     if !out.status.success() {
         panic!(
             "`pkg-config sdl2 {which}` failed (install SDL2 dev headers — `libsdl2-dev` on \
@@ -383,7 +388,12 @@ fn build_objects(
         let cflags = sdl2_flags("--cflags", "SDL2_CFLAGS");
         let cflag_refs: Vec<&str> = cflags.iter().map(String::as_str).collect();
         let obj = work.join("graphics.c.o");
-        compile_c_with_defs(&runtime_dir.join("graphics.c"), &obj, runtime_dir, &cflag_refs)?;
+        compile_c_with_defs(
+            &runtime_dir.join("graphics.c"),
+            &obj,
+            runtime_dir,
+            &cflag_refs,
+        )?;
         runtime_objs.push(obj);
     }
 
@@ -476,7 +486,12 @@ fn build_lto(
         let cflags = sdl2_flags("--cflags", "SDL2_CFLAGS");
         let cflag_refs: Vec<&str> = cflags.iter().map(String::as_str).collect();
         let bc = work.join("graphics.c.bc");
-        compile_c_to_bitcode(&runtime_dir.join("graphics.c"), &bc, runtime_dir, &cflag_refs)?;
+        compile_c_to_bitcode(
+            &runtime_dir.join("graphics.c"),
+            &bc,
+            runtime_dir,
+            &cflag_refs,
+        )?;
         bcs.push(bc);
     }
 
@@ -2346,7 +2361,8 @@ int main(void) {
         std::thread::Builder::new()
             .stack_size(64 * 1024 * 1024)
             .spawn(|| {
-                let dir = std::env::temp_dir().join(format!("blight_binrec_sf_{}", std::process::id()));
+                let dir =
+                    std::env::temp_dir().join(format!("blight_binrec_sf_{}", std::process::id()));
                 let src = binrec_source();
                 let fused = compile_source_to_anf_spinefuse(src, true);
                 let unfused = compile_source_to_anf_spinefuse(src, false);

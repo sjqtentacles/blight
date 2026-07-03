@@ -824,10 +824,9 @@ fn do_elim(env: &Env, data: &DataName, motive: Value, methods: Vec<Value>, scrut
                 panic!("do_elim: {pname:?} is not a path constructor of {pdata:?}")
             });
             let method_idx = decl.constructors.len() + pidx;
-            let mut result = methods
-                .get(method_idx)
-                .cloned()
-                .unwrap_or_else(|| panic!("do_elim: missing method for path constructor index {pidx}"));
+            let mut result = methods.get(method_idx).cloned().unwrap_or_else(|| {
+                panic!("do_elim: missing method for path constructor index {pidx}")
+            });
             for arg in pargs.into_iter() {
                 result = apply(result, arg);
             }

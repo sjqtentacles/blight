@@ -383,9 +383,10 @@ fn shift_cir(c: &Cir, by: usize) -> Cir {
                 }
             }
             Cir::Global(_) | Cir::Erased => c.clone(),
-            Cir::Foreign(sym, arg) => {
-                Cir::Foreign(sym.clone(), arg.as_ref().map(|a| Box::new(go(a, by, depth))))
-            }
+            Cir::Foreign(sym, arg) => Cir::Foreign(
+                sym.clone(),
+                arg.as_ref().map(|a| Box::new(go(a, by, depth))),
+            ),
             Cir::Lam(b) => Cir::Lam(Box::new(go(b, by, depth + 1))),
             Cir::Fix(b) => Cir::Fix(Box::new(go(b, by, depth + 1))),
             Cir::App(f, a) => Cir::App(Box::new(go(f, by, depth)), Box::new(go(a, by, depth))),
@@ -495,11 +496,16 @@ fn shift_cir(c: &Cir, by: usize) -> Cir {
 /// unused (a curried grade-0 argument).
 pub fn dead_bindings(c: &Cir) -> Cir {
     match c {
-        Cir::Var(_) | Cir::Global(_) | Cir::Erased | Cir::IntLit(_) | Cir::NatLit(_)
+        Cir::Var(_)
+        | Cir::Global(_)
+        | Cir::Erased
+        | Cir::IntLit(_)
+        | Cir::NatLit(_)
         | Cir::StrLit(_) => c.clone(),
-        Cir::Foreign(sym, arg) => {
-            Cir::Foreign(sym.clone(), arg.as_ref().map(|a| Box::new(dead_bindings(a))))
-        }
+        Cir::Foreign(sym, arg) => Cir::Foreign(
+            sym.clone(),
+            arg.as_ref().map(|a| Box::new(dead_bindings(a))),
+        ),
         Cir::Lam(b) => Cir::Lam(Box::new(dead_bindings(b))),
         Cir::Fix(b) => Cir::Fix(Box::new(dead_bindings(b))),
         Cir::App(f, a) => {

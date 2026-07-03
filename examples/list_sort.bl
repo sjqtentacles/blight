@@ -1,6 +1,13 @@
 ; list_sort.bl — insertion sort over a `List Nat`, then read back the smallest element (the head of
 ; the sorted list). Sorting [3, 1, 2] gives [1, 2, 3], whose head is 1.
 ;
+; The recursive functions are written in **equation style** with `defn` (E5, v0.1 roadmap): each
+; `[(patterns) body]` clause is one equation, and the sugar picks the argument column that is
+; pattern-matched (`xs` for `insert`/`head-or`, the sole argument for `isort`), desugars to a
+; single-scrutinee `match` on it, and recurses through the kernel `Elim` exactly as the hand-written
+; `deftotal` + `match` did. `list-nat-if` stays a plain `deftotal` (its `match` on a `Bool` keeps
+; `insert`'s recursive call outside the `match`, in the re-checker's supported fragment).
+;
 ;   cargo run -p blight-repl --features llvm -- build examples/list_sort.bl -o sort && ./sort  # => 1
 
 (load "std/list.bl")
@@ -11,27 +18,24 @@
   (lam (t e b) (match b [(true) t] [(false) e])))
 
 ; Insert `x` into an already-sorted list, keeping it sorted (structural recursion on the spine).
-(deftotal insert (Pi ((x Nat) (xs (List Nat))) (List Nat))
-  (lam (x xs)
-    (match xs [(nil) (cons x nil)]
-      [(cons y rest)
-        (list-nat-if
-          (cons x (cons y rest))  ; x <= y: x goes in front
-          (cons y (insert x rest))  ; x > y: keep y, recurse
-          (nat-le x y))])))
+(defn insert (Pi ((x Nat) (xs (List Nat))) (List Nat))
+  [(x (nil)) (cons x nil)]
+  [(x (cons y rest))
+    (list-nat-if
+      (cons x (cons y rest))    ; x <= y: x goes in front
+      (cons y (insert x rest))  ; x > y: keep y, recurse
+      (nat-le x y))])
 
 ; Insertion sort: fold `insert` over the list.
-(deftotal isort (Pi ((xs (List Nat))) (List Nat))
-  (lam (xs) (match xs [(nil) nil] [(cons x rest) (insert x (isort rest))])))
+(defn isort (Pi ((xs (List Nat))) (List Nat))
+  [((nil)) nil]
+  [((cons x rest)) (insert x (isort rest))])
 
-; `head-or 0` of a list.
-(deftotal head-or (Pi ((d Nat) (xs (List Nat))) Nat)
-  (lam (d xs) (match xs [(nil) d] [(cons x rest) x])))
+; `head-or d` of a list: the head, or `d` when empty.
+(defn head-or (Pi ((d Nat) (xs (List Nat))) Nat)
+  [(d (nil)) d]
+  [(d (cons x rest)) x])
 
-(define one Nat (Succ Zero))
-(define two Nat (Succ (Succ Zero)))
-(define three Nat (Succ (Succ (Succ Zero))))
-
-(define input (List Nat) (cons three (cons one (cons two nil))))
+(define input (List Nat) (cons 3 (cons 1 (cons 2 nil))))
 
 (define main Nat (head-or Zero (isort input)))

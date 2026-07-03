@@ -1,0 +1,28 @@
+; equations.bl — equation-style definitions with `defn` (E5, v0.1 roadmap arc E).
+;
+; `defn` writes a recursive function as a list of pattern equations `[(patterns) body]`, one per
+; clause, instead of a `deftotal`/`define-rec` wrapping an explicit `lam` + `match`. The sugar reads
+; the argument count from the `Pi` telescope, finds the single column that is pattern-matched, and
+; desugars to a single-scrutinee `match` on that argument — recursing through the kernel `Elim`
+; exactly as the hand-written form would. Exhaustiveness (the E3 coverage check) and nested patterns
+; both come along for free.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/equations.bl -o equations && ./equations  # => 10
+
+(load "std/nat.bl")
+(load "std/list.bl")
+
+; Structural addition, matching on the first argument (`a`); `b` rides along unchanged.
+(defn add (Pi ((a Nat) (b Nat)) Nat)
+  [((Zero) b) b]
+  [((Succ n) b) (Succ (add n b))])
+
+; Sum a list, matching on the (second) list argument; the recursion is on its tail.
+(defn sum (Pi ((xs (List Nat))) Nat)
+  [((nil)) Zero]
+  [((cons x rest)) (add x (sum rest))])
+
+; [1, 2, 3, 4] sums to 10.
+(define input (List Nat) (cons 1 (cons 2 (cons 3 (cons 4 nil)))))
+
+(define main Nat (sum input))

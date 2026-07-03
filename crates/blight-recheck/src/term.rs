@@ -394,7 +394,10 @@ pub fn from_kernel(t: &Term) -> Result<RTerm, RecheckError> {
         } => RTerm::Op {
             effect: effect.clone(),
             op: op.clone(),
-            type_args: type_args.iter().map(from_kernel).collect::<Result<_, _>>()?,
+            type_args: type_args
+                .iter()
+                .map(from_kernel)
+                .collect::<Result<_, _>>()?,
             arg: Box::new(from_kernel(arg)?),
         },
         Term::Handle {

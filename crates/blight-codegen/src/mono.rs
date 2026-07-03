@@ -460,10 +460,7 @@ fn count_param_uses(body: &Cir) -> usize {
             | Cir::IntLit(_)
             | Cir::NatLit(_)
             | Cir::StrLit(_) => 0,
-            Cir::Foreign(_, arg) => arg
-                .as_ref()
-                .map(|a| go(a, depth, suspended))
-                .unwrap_or(0),
+            Cir::Foreign(_, arg) => arg.as_ref().map(|a| go(a, depth, suspended)).unwrap_or(0),
             // Suspending binders: a use inside runs an unknown number of times.
             Cir::Lam(b) | Cir::Fix(b) => cap(go(b, depth + 1, true)),
             Cir::Later(e, _) => cap(go(e, depth, true)),
@@ -531,11 +528,9 @@ fn instantiate(body: &Cir, arg: &Cir, env: &[Cir]) -> Cir {
                 // Captures belong to the caller's scope; shift past the binders we crossed.
                 shift(&env[*k], depth)
             }
-            Cir::Global(_)
-            | Cir::Erased
-            | Cir::IntLit(_)
-            | Cir::NatLit(_)
-            | Cir::StrLit(_) => c.clone(),
+            Cir::Global(_) | Cir::Erased | Cir::IntLit(_) | Cir::NatLit(_) | Cir::StrLit(_) => {
+                c.clone()
+            }
             Cir::Foreign(sym, a) => Cir::Foreign(
                 sym.clone(),
                 a.as_ref().map(|x| Box::new(go(x, depth, arg, env))),

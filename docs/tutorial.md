@@ -133,6 +133,22 @@ gaps up front — `match` on a three-constructor `Ordering` with only two arms r
 arm` (the same constructor twice) and an `unreachable `match` arm` (a clause after a `_`/variable
 catch-all). A trailing `_` arm makes any `match` exhaustive.
 
+For a recursive function that matches on one argument, `defn` writes it as pattern **equations** —
+one `[(patterns) body]` clause per case — instead of a `lam` + `match`:
+
+```
+(defn add (Pi ((a Nat) (b Nat)) Nat)
+  [((Zero) b) b]
+  [((Succ n) b) (Succ (add n b))])
+```
+
+`defn` reads the argument count from the `Pi` type, finds the single column that is pattern-matched
+(here `a`; the other arguments must be plain variables), and desugars to a single-scrutinee `match`
+on it — recursing through the same kernel `Elim` the hand-written form uses. The matched argument
+need not be the first: `(defn len (Pi ((A (Type 0)) (xs (List A))) Nat) [(A (nil)) Zero] [(A (cons x
+rest)) (Succ (len A rest))])` matches on `xs`. Nested patterns and the coverage check above both
+apply.
+
 ## 5. Paths: equality in the cubical kernel
 
 Blight's kernel is cubical: propositional equality is the **path** type `Path A x y` (a function out

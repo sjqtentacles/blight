@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **v0.1 roadmap arc E, milestone E5 (equation-style definitions):** `(defn name T [(patterns)
+  body] …)` writes a recursive function as pattern equations instead of a `lam` + `match`. Desugars
+  (sexpr→sexpr, `crates/blight-elab/src/defn.rs`) to a `define-rec` with a single-scrutinee `match`
+  on the one pattern-matched argument column (which may be any argument, not just the first);
+  exhaustiveness, nested patterns, and recursion recognition all come from the existing match path.
+  Also fixes a latent E3 false positive that `defn` surfaced: the duplicate-arm check now only flags
+  a *saturating* repeat (all-variable subpatterns), so nested refinements like `(just (nothing))`
+  and `(just (just x))` pass. `list_sort.bl` rewritten in equation style; new `examples/equations.bl`.
+  Zero kernel changes.
 - **v0.1 roadmap arc S, milestone S1 (end-to-end self-host demo):** `examples/selfhost_check.bl` —
   the first program that runs Blight's own `.bl`-written front end (reader → transcoder →
   proof-carrying elaborator → ANF compiler) over source it reads back from disk. `main : (! (Console

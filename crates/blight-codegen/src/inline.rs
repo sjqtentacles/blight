@@ -373,9 +373,11 @@ fn size_within(c: &Cir, budget: usize) -> bool {
 /// allocations, FFI, and stray env references)? See the module comment.
 fn body_is_safe(c: &Cir) -> bool {
     match c {
-        Cir::Op { .. } | Cir::Handle { .. } | Cir::Region(_) | Cir::Foreign(..) | Cir::EnvRef(_) => {
-            false
-        }
+        Cir::Op { .. }
+        | Cir::Handle { .. }
+        | Cir::Region(_)
+        | Cir::Foreign(..)
+        | Cir::EnvRef(_) => false,
         Cir::Con(_, _, Alloc::Arena)
         | Cir::Tuple(_, Alloc::Arena)
         | Cir::MkClosure(_, _, Alloc::Arena)

@@ -187,9 +187,7 @@ fn classify(target: usize, t: &Tail) -> Verdict {
             let there = classify(target + 1, rest);
             seq_combine(here, there)
         }
-        Tail::TailCall(f, a) => {
-            seq_combine(atom_retaining(target, f), atom_retaining(target, a))
-        }
+        Tail::TailCall(f, a) => seq_combine(atom_retaining(target, f), atom_retaining(target, a)),
         // A jump re-enters the current function as its own new argument: we do not track
         // usage across loop iterations, so any flow into the new argument is conservatively
         // retaining.
@@ -312,7 +310,11 @@ pub fn analyze_gated(prog: AnfProgram) -> AnfProgram {
         names.sort();
         for name in names {
             let s = &stats[&name];
-            let label = if name.is_empty() { "<entry>" } else { name.as_str() };
+            let label = if name.is_empty() {
+                "<entry>"
+            } else {
+                name.as_str()
+            };
             eprintln!(
                 "BL_LINEARITY_STATS func={label} linear={} shared={} dead={}",
                 s.linear, s.shared, s.dead
@@ -339,7 +341,7 @@ mod tests {
     #[test]
     fn single_use_value_proven_linear() {
         let rest = Tail::Let(
-            Comp::Proj(0, Atom::Var(0)), // proj 0 p  (p is target Var(0) here)
+            Comp::Proj(0, Atom::Var(0)),       // proj 0 p  (p is target Var(0) here)
             Box::new(Tail::Ret(Atom::Var(0))), // returns `field`, shifted to Var(0); NOT `p`
         );
         assert!(
@@ -460,7 +462,10 @@ mod tests {
                     TailArm {
                         con: ConName("C0".into()),
                         binders: 0,
-                        body: Tail::Let(Comp::Proj(0, Atom::Var(1)), Box::new(Tail::Ret(Atom::Global("x".into())))),
+                        body: Tail::Let(
+                            Comp::Proj(0, Atom::Var(1)),
+                            Box::new(Tail::Ret(Atom::Global("x".into()))),
+                        ),
                     },
                     TailArm {
                         con: ConName("C1".into()),
@@ -529,10 +534,7 @@ mod tests {
             ),
             (
                 "Call argument",
-                Tail::Let(
-                    Comp::Call(Atom::Global("f".into()), Atom::Var(0)),
-                    done(),
-                ),
+                Tail::Let(Comp::Call(Atom::Global("f".into()), Atom::Var(0)), done()),
             ),
             (
                 "CallGlobal argument",
@@ -545,7 +547,10 @@ mod tests {
                     done(),
                 ),
             ),
-            ("TailCall argument", Tail::TailCall(Atom::Global("f".into()), Atom::Var(0))),
+            (
+                "TailCall argument",
+                Tail::TailCall(Atom::Global("f".into()), Atom::Var(0)),
+            ),
             ("Jump argument", Tail::Jump(Atom::Var(0))),
             (
                 "TailCallGlobal argument",
@@ -556,7 +561,10 @@ mod tests {
                 Tail::TailCallKnown("f".into(), Atom::Var(0), Atom::Global("a".into())),
             ),
             ("Now", Tail::Let(Comp::Now(Atom::Var(0), Alloc::Gc), done())),
-            ("Later", Tail::Let(Comp::Later(Atom::Var(0), Alloc::Gc), done())),
+            (
+                "Later",
+                Tail::Let(Comp::Later(Atom::Var(0), Alloc::Gc), done()),
+            ),
             (
                 "Op arg",
                 Tail::Let(
@@ -576,10 +584,7 @@ mod tests {
                 "re-binding (Comp::Atom)",
                 Tail::Let(Comp::Atom(Atom::Var(0)), done()),
             ),
-            (
-                "Trampoline",
-                Tail::Trampoline(Atom::Var(0)),
-            ),
+            ("Trampoline", Tail::Trampoline(Atom::Var(0))),
             (
                 "Handle body",
                 Tail::Handle {
@@ -601,7 +606,10 @@ mod tests {
     /// inside a region scope is still `Linear`.
     #[test]
     fn region_does_not_shift_indices() {
-        let inner = Tail::Let(Comp::Proj(0, Atom::Var(0)), Box::new(Tail::Ret(Atom::Global("done".into()))));
+        let inner = Tail::Let(
+            Comp::Proj(0, Atom::Var(0)),
+            Box::new(Tail::Ret(Atom::Global("done".into()))),
+        );
         let rest = Tail::Region(Box::new(inner));
         assert!(is_transiently_consumed(&rest));
     }
@@ -626,8 +634,14 @@ mod tests {
         };
         let stats = analyze(&prog);
         let entry_stats = stats.get("").expect("entry stats recorded");
-        assert_eq!(entry_stats.linear, 1, "the Pair binding is Linear (proj'd once, no other use)");
-        assert_eq!(entry_stats.shared, 1, "the projected field binding escapes via Ret: Shared");
+        assert_eq!(
+            entry_stats.linear, 1,
+            "the Pair binding is Linear (proj'd once, no other use)"
+        );
+        assert_eq!(
+            entry_stats.shared, 1,
+            "the projected field binding escapes via Ret: Shared"
+        );
         assert_eq!(entry_stats.dead, 0);
     }
 
@@ -642,7 +656,10 @@ mod tests {
             con_tags: Default::default(),
         };
         let with_analysis = analyze_gated(prog.clone());
-        assert_eq!(with_analysis, prog, "analyze_gated must not alter the program");
+        assert_eq!(
+            with_analysis, prog,
+            "analyze_gated must not alter the program"
+        );
 
         // SAFETY (test-only): scoped to this process's test thread; no other test in this crate
         // reads/writes BL_NO_LINEARITY concurrently within the same test binary run serially by
@@ -656,6 +673,9 @@ mod tests {
             Some(v) => unsafe { std::env::set_var("BL_NO_LINEARITY", v) },
             None => unsafe { std::env::remove_var("BL_NO_LINEARITY") },
         }
-        assert_eq!(gated_off, prog, "BL_NO_LINEARITY must also leave the program untouched (it's a no-op path)");
+        assert_eq!(
+            gated_off, prog,
+            "BL_NO_LINEARITY must also leave the program untouched (it's a no-op path)"
+        );
     }
 }

@@ -573,9 +573,18 @@ mod tests {
         let (ok_semispace, out_semispace, err_semispace) = run(&[("BL_GC_OLDGEN", "semispace")]);
         let (ok_compact, out_compact, err_compact) = run(&[("BL_GC_OLDGEN", "compact")]);
 
-        assert!(ok_default, "gc_diff (default) exited non-zero\nstderr: {err_default}");
-        assert!(ok_semispace, "gc_diff (semispace) exited non-zero\nstderr: {err_semispace}");
-        assert!(ok_compact, "gc_diff (compact) exited non-zero\nstderr: {err_compact}");
+        assert!(
+            ok_default,
+            "gc_diff (default) exited non-zero\nstderr: {err_default}"
+        );
+        assert!(
+            ok_semispace,
+            "gc_diff (semispace) exited non-zero\nstderr: {err_semispace}"
+        );
+        assert!(
+            ok_compact,
+            "gc_diff (compact) exited non-zero\nstderr: {err_compact}"
+        );
         for (label, out) in [
             ("default", &out_default),
             ("semispace", &out_semispace),
@@ -599,7 +608,11 @@ mod tests {
             "default vs compact: observable checksum diverged"
         );
 
-        for (label, out) in [("default", &out_default), ("semispace", &out_semispace), ("compact", &out_compact)] {
+        for (label, out) in [
+            ("default", &out_default),
+            ("semispace", &out_semispace),
+            ("compact", &out_compact),
+        ] {
             let majors: u64 = field(out, "GC_DIFF_MAJORS=")
                 .parse()
                 .unwrap_or_else(|e| panic!("gc_diff ({label}) GC_DIFF_MAJORS not a number: {e}"));
@@ -650,7 +663,10 @@ mod tests {
             out.status.success(),
             "rc_diff harness exited non-zero (expected once P6 lands)\nstdout: {stdout}\nstderr: {stderr}"
         );
-        assert!(stdout.contains("RC_DIFF_OK"), "stdout: {stdout}\nstderr: {stderr}");
+        assert!(
+            stdout.contains("RC_DIFF_OK"),
+            "stdout: {stdout}\nstderr: {stderr}"
+        );
     }
 
     /// Like [`build_and_run_harness`], but also links `prelude_rt.c` compiled with `-DBL_NO_MAIN`
@@ -777,7 +793,8 @@ mod tests {
     /// root-scanning or write-barrier paths this go-bar added).
     #[test]
     fn boxed_array_survives_gc_and_write_barrier_under_asan() {
-        let dir = std::env::temp_dir().join(format!("blight_boxedarray_asan_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("blight_boxedarray_asan_{}", std::process::id()));
         let out = build_and_run_harness_cfg(&dir, "tests/gc_test.c", true, &[]);
         let stdout = String::from_utf8_lossy(&out.stdout);
         let stderr = String::from_utf8_lossy(&out.stderr);

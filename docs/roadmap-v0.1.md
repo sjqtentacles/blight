@@ -140,7 +140,7 @@ Field access `(Point-x p)`. No anonymous record types, no row polymorphism in v1
 - **Exit:** one stdlib adoption (std/parser parse-state or std/graphics config) proving it
   composes. Oracle-corpus additions.
 
-### [ ] E5 — Equation-style definitions (`defn`)
+### [x] E5 — Equation-style definitions (`defn`)
 
 `(defn name T [(pat1 … patn) body] …)` — top-level pattern-equation sugar. Arity from the Pi
 telescope; desugars (sexpr→sexpr) to
@@ -155,6 +155,22 @@ clauses before the first equation route the output through the E6 lowering.
   (lands ignored until E6); parse_negative.rs additions.
 - **Exit:** 2–3 examples rewritten in equation style (e.g. list_sum, minmax); tutorial section;
   oracle-corpus additions.
+
+**As-built notes (deviations from the plan):**
+- *Single-scrutinee `match`, not `matchx`.* The plan targeted multi-scrutinee `matchx`, but a
+  hand-written `matchx`-based recursion is *not* recognized by the structural-recursion recognizer
+  (it fails to infer, falling to the partial lane). So `defn` finds the single column that carries
+  constructor patterns and desugars to a single-scrutinee `match` on *that* argument (which may be
+  any argument — `len` matches on its `xs`, not `A`). v1 supports exactly one matched column; the
+  others must be plain variables named consistently across clauses (the body references them as the
+  lambda's own parameters — a `let` alias would break recursion recognition, since a self-call's
+  leading argument must be the *literal* parameter). Multi-column matching stays an explicit
+  `define-rec` + `match`.
+- *E3 duplicate-check fix.* Nested-pattern `defn`s (e.g. `(just (nothing))` and `(just (just x))`)
+  produce a single `match` with two `just`-headed arms, which the E3 duplicate check wrongly
+  flagged. Fixed E3 to only flag a *saturating* repeat — a constructor arm whose sub-patterns are
+  all variables/wildcards, which genuinely subsumes a later same-constructor arm — so legitimate
+  nested refinements pass. (A latent E3 false positive that only `defn` surfaced.)
 
 ### [ ] E6 — Measure-based totality (auto-fuel)
 

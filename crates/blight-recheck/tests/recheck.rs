@@ -1245,7 +1245,11 @@ fn deep_plus_zero_proof(depth: u32) -> (Signature, Term) {
     let plus_ty = Term::Pi(
         Grade::Omega,
         Box::new(nat_ty()),
-        Box::new(Term::Pi(Grade::Omega, Box::new(nat_ty()), Box::new(nat_ty()))),
+        Box::new(Term::Pi(
+            Grade::Omega,
+            Box::new(nat_ty()),
+            Box::new(nat_ty()),
+        )),
     );
     let plus = Term::Ann(
         Box::new(Term::Lam(Box::new(Term::Lam(Box::new(Term::Elim {

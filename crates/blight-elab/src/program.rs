@@ -264,6 +264,18 @@ impl<'a> Program<'a> {
                     }
                     return Ok(outcomes);
                 }
+                // `(defn name T [pats body] …)` — equation-style definition sugar (E5). Desugar to a
+                // `(define-rec name T (lam … (matchx …)))` and process it in place. Zero kernel
+                // growth; first-match/exhaustiveness come from the existing `matchx` path.
+                if kw == "defn" {
+                    let forms = crate::defn::desugar_defn(items)?;
+                    let mut outcomes = Vec::new();
+                    for f in &forms {
+                        let mut produced = self.run_form(f)?;
+                        outcomes.append(&mut produced);
+                    }
+                    return Ok(outcomes);
+                }
             }
         }
         // Macro-expand before parsing: a macro call rewrites to ordinary surface syntax.

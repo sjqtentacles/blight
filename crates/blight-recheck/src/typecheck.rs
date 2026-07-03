@@ -503,12 +503,7 @@ impl<'a> Recheck<'a> {
     /// agree in declared grade, or the checked base's usage discipline would be laundered across
     /// the line with no re-verification. See `kan_line_grade_skeleton_eq`'s doc comment and the
     /// kernel's identical `check.rs` restriction for the full soundness argument.
-    fn reject_heterogeneous_grade_line(
-        &self,
-        ctx: &Ctx,
-        a0: &RValue,
-        a1: &RValue,
-    ) -> RResult<()> {
+    fn reject_heterogeneous_grade_line(&self, ctx: &Ctx, a0: &RValue, a1: &RValue) -> RResult<()> {
         if !conv(self.sig, ctx.lvl, ctx.dlvl, a0, a1)
             && !kan_line_grade_skeleton_eq(self.sig, ctx.lvl, a0, a1)
         {
@@ -1934,7 +1929,10 @@ fn shift_free_cut(t: &RTerm, d: usize, cut: usize) -> RTerm {
         } => RTerm::Op {
             effect: effect.clone(),
             op: op.clone(),
-            type_args: type_args.iter().map(|t| shift_free_cut(t, d, cut)).collect(),
+            type_args: type_args
+                .iter()
+                .map(|t| shift_free_cut(t, d, cut))
+                .collect(),
             arg: Box::new(shift_free_cut(arg, d, cut)),
         },
         RTerm::Handle {
@@ -2116,10 +2114,7 @@ mod tests {
             return_clause: Box::new(RTerm::Var(0)),
             op_clauses: vec![(
                 "get".into(),
-                Box::new(RTerm::App(
-                    Box::new(RTerm::Var(0)),
-                    Box::new(RTerm::Var(1)),
-                )),
+                Box::new(RTerm::App(Box::new(RTerm::Var(0)), Box::new(RTerm::Var(1)))),
             )],
         };
         assert!(

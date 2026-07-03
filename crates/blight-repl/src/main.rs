@@ -2335,6 +2335,7 @@ mod tests {
         ("elim_accum.bl", None),
         ("elim_linear.bl", None),
         ("list_sort.bl", None),
+        ("equations.bl", None),
         ("hofold.bl", None),
         ("mergesort.bl", None),
         ("quicksort.bl", None),
@@ -2629,6 +2630,14 @@ mod tests {
     #[test]
     fn example_region_scratch_builds_and_runs() {
         build_and_run_example("region_scratch.bl", "2");
+    }
+
+    /// `equations.bl` (E5): equation-style `defn` definitions — `add` and `sum` written as pattern
+    /// equations desugar to single-scrutinee `match` recursions and sum `[1,2,3,4]` to `10`.
+    #[cfg(feature = "llvm")]
+    #[test]
+    fn example_equations_builds_and_runs() {
+        build_and_run_example("equations.bl", "10");
     }
 
     /// `tree_sum.bl`: sum of the `Nat`s in a binary search tree built by `tree-insert` = `6`.

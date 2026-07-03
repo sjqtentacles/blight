@@ -177,7 +177,10 @@ mod tests {
         let body = Cir::App(
             Box::new(Cir::App(
                 Box::new(Cir::App(
-                    Box::new(Cir::App(Box::new(Cir::App(Box::new(method_head), Box::new(l))), Box::new(ih_l))),
+                    Box::new(Cir::App(
+                        Box::new(Cir::App(Box::new(method_head), Box::new(l))),
+                        Box::new(ih_l),
+                    )),
                     Box::new(x),
                 )),
                 Box::new(r),
@@ -199,7 +202,11 @@ mod tests {
     fn recognizes_tree_shaped_fanout_two() {
         let c = tree_sum_fix();
         let found = analyze_gated(&c, true);
-        assert_eq!(found.len(), 1, "expected exactly one fanout>=2 candidate, got {found:?}");
+        assert_eq!(
+            found.len(),
+            1,
+            "expected exactly one fanout>=2 candidate, got {found:?}"
+        );
         assert_eq!(found[0].ctor, ConName("node".to_string()));
         assert_eq!(found[0].fanout, 2);
         assert!(found[0].pure, "the stand-in combiner has no Op/Handle node");
@@ -231,7 +238,10 @@ mod tests {
         let xs = Cir::Var(0);
         let ih_xs = Cir::App(Box::new(Cir::Var(3)), Box::new(xs.clone()));
         let body = Cir::App(
-            Box::new(Cir::App(Box::new(Cir::App(Box::new(method_head), Box::new(x))), Box::new(xs))),
+            Box::new(Cir::App(
+                Box::new(Cir::App(Box::new(method_head), Box::new(x))),
+                Box::new(xs),
+            )),
             Box::new(ih_xs),
         );
         let cons_arm = Arm {
@@ -290,7 +300,10 @@ mod tests {
         let body = Cir::App(
             Box::new(Cir::App(
                 Box::new(Cir::App(
-                    Box::new(Cir::App(Box::new(Cir::App(Box::new(method), Box::new(l))), Box::new(ih_l))),
+                    Box::new(Cir::App(
+                        Box::new(Cir::App(Box::new(method), Box::new(l))),
+                        Box::new(ih_l),
+                    )),
                     Box::new(x),
                 )),
                 Box::new(r),

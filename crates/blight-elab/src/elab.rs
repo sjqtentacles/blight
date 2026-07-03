@@ -3270,7 +3270,17 @@ fn check_match_coverage(
         return Ok(());
     };
 
+    // A first-column constructor pattern is *saturating* when all its sub-patterns are variables or
+    // wildcards — it then matches every value of that constructor, so a later arm with the same
+    // constructor is unreachable. A *nested* arm (`(just (nothing))`) is not saturating: a sibling
+    // arm with the same constructor but a different refinement (`(just (just x))`) is legitimate, so
+    // only saturating repeats are flagged as duplicates.
+    fn is_saturating(subs: &[Pattern]) -> bool {
+        subs.iter()
+            .all(|s| matches!(s, Pattern::Var(_) | Pattern::Wild))
+    }
     let mut covered: Vec<String> = Vec::new();
+    let mut saturated: Vec<String> = Vec::new();
     let mut catch_all: Option<usize> = None;
     for (i, c) in clauses.iter().enumerate() {
         // A clause after a first-column catch-all can never match (single-scrutinee only: with more
@@ -3286,17 +3296,22 @@ fn check_match_coverage(
             }
         }
         match c.patterns.first() {
-            Some(Pattern::Con(con, _)) => {
+            Some(Pattern::Con(con, subs)) => {
                 // A constructor of a *different* type in the column: not our business — the main
                 // elaborator produces the (type-mismatch) error.
                 if env.constructors.get(con).map(|inf| inf.data.as_str()) != Some(data.as_str()) {
                     return Ok(());
                 }
-                if single && covered.contains(con) {
+                // A previous saturating arm for this constructor already matches all its values, so
+                // this arm — saturating or nested — is unreachable (single-scrutinee only).
+                if single && saturated.contains(con) {
                     return Err(ElabError::BadMatch(format!(
                         "duplicate `match` arm: constructor `{con}` of `{data}` is matched more \
-                         than once"
+                         than once (an earlier arm already matches every `{con}` value)"
                     )));
+                }
+                if is_saturating(subs) && !saturated.contains(con) {
+                    saturated.push(con.clone());
                 }
                 if !covered.contains(con) {
                     covered.push(con.clone());

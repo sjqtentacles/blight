@@ -210,6 +210,9 @@ fn kernel_normal_form_matches_intended_value() {
         ("fib.bl", example("fib.bl"), "13".into()),
         ("minmax.bl", example("minmax.bl"), "7".into()),
         ("vec_head.bl", example("vec_head.bl"), "3".into()),
+        // E5: `defn` equation-style definitions desugar to the same `Elim` the hand-written match
+        // would — the oracle pins that the sugar preserves meaning, not just that it type-checks.
+        ("equations.bl", example("equations.bl"), "10".into()),
         (
             "either_compute.bl",
             example("either_compute.bl"),

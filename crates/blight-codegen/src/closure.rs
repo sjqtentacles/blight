@@ -319,9 +319,10 @@ fn rebind(c: &Cir, fvs: &[usize]) -> Cir {
             | Cir::IntLit(_)
             | Cir::NatLit(_)
             | Cir::StrLit(_) => c.clone(),
-            Cir::Foreign(sym, arg) => {
-                Cir::Foreign(sym.clone(), arg.as_ref().map(|a| Box::new(go(a, fvs, depth))))
-            }
+            Cir::Foreign(sym, arg) => Cir::Foreign(
+                sym.clone(),
+                arg.as_ref().map(|a| Box::new(go(a, fvs, depth))),
+            ),
             Cir::Lam(b) => Cir::Lam(Box::new(go(b, fvs, depth + 1))),
             Cir::Fix(b) => Cir::Fix(Box::new(go(b, fvs, depth + 1))),
             Cir::App(f, a) => Cir::App(Box::new(go(f, fvs, depth)), Box::new(go(a, fvs, depth))),

@@ -3,6 +3,7 @@
 //! Reader, surface AST, and bidirectional elaborator (spec §5, §6.1). None of this is trusted:
 //! its only job is to produce core terms for the spore ([`blight_kernel`]) to re-check.
 
+pub mod defn;
 pub mod diagnostic;
 pub mod docs;
 pub mod elab;

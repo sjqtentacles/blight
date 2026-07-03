@@ -488,10 +488,7 @@ fn quote_neutral(sig: &Signature, lvl: usize, dlvl: usize, n: &Neutral) -> RTerm
         } => RTerm::Op {
             effect: effect.clone(),
             op: op.clone(),
-            type_args: type_args
-                .iter()
-                .map(|t| quote(sig, lvl, dlvl, t))
-                .collect(),
+            type_args: type_args.iter().map(|t| quote(sig, lvl, dlvl, t)).collect(),
             arg: Box::new(quote(sig, lvl, dlvl, arg)),
         },
         Neutral::Handle {

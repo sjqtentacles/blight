@@ -825,11 +825,7 @@ impl Checker {
                             .into(),
                     ));
                 }
-                Ok((
-                    a1,
-                    row_base.union(&row_tube),
-                    usage_base.add(&usage_tube),
-                ))
+                Ok((a1, row_base.union(&row_tube), usage_base.add(&usage_tube)))
             }
 
             // Glue formation (spec §2.6): type formation; equiv is inferred in the 0-fragment.
@@ -2090,12 +2086,15 @@ impl Checker {
             // nullary path constructor (`args` empty) of a non-parameterized, non-indexed `D` is
             // implemented; `dim` is a pretype interval term needing no further checking here
             // (mirrors `PApp`'s `r`).
-            (Term::PCon {
-                data,
-                name,
-                args,
-                dim: _,
-            }, Value::Data(d_name, params, indices)) => {
+            (
+                Term::PCon {
+                    data,
+                    name,
+                    args,
+                    dim: _,
+                },
+                Value::Data(d_name, params, indices),
+            ) => {
                 if data != d_name {
                     return Err(TypeError::Mismatch {
                         expected: format!("a path constructor of {d_name:?}"),
@@ -5192,11 +5191,11 @@ mod tests {
         }
         let src_pi = pi_g(Grade::Omega); // i = 0 face (the `ty` field of the Glue)
         let tgt_pi = pi_g(Grade::One); // i = 1 face (the `base` field of the Glue)
-        // `i. Glue (Pi 1 A A) (i=0) (Pi ω A A) e` — `equiv` need only be *inferable*; `Term::Glue`'s
-        // formation rule (`check.rs`, `Term::Glue` arm) does not check it has any particular
-        // `Equiv`-shape, and type-*checking* the `Transp` below never forces `equiv`'s value (no
-        // `kan::transp_glue` reduction happens during `check_g`, only during `eval`/reduction of
-        // the whole expression, which this probe never triggers).
+                                       // `i. Glue (Pi 1 A A) (i=0) (Pi ω A A) e` — `equiv` need only be *inferable*; `Term::Glue`'s
+                                       // formation rule (`check.rs`, `Term::Glue` arm) does not check it has any particular
+                                       // `Equiv`-shape, and type-*checking* the `Transp` below never forces `equiv`'s value (no
+                                       // `kan::transp_glue` reduction happens during `check_g`, only during `eval`/reduction of
+                                       // the whole expression, which this probe never triggers).
         let family = Term::Glue {
             base: Box::new(tgt_pi.clone()),
             cofib: Cofib::Eq0(crate::term::Interval::Dim(0)),
