@@ -334,7 +334,7 @@ Rust side, no reuse of the existing door); evaluating the pipeline in the Rust N
   fully delivers. The `bridge_printer_output_checks_for_demo_id` refl-at-scale test is deferred to
   S3 (the in-kernel `refl` over the printed pipeline needs the Box→Rc perf fix).
 
-### [~] S3 — Term representation: Box→Rc (refl-at-scale; TCB-adjacent)
+### [x] S3 — Term representation: Box→Rc (refl-at-scale; TCB-adjacent)
 
 Sequenced **after** S2 — the bridge doesn't need it (the proposer runs natively compiled; the
 kernel checks only the small emitted judgement). Payoff: the deferred `reader-demo-refl`
@@ -358,6 +358,44 @@ kernel/elab/recheck/codegen). Protocol, all gates pre-registered in the red comm
 - **Red:** `reader-demo-refl` added to spore_reader.bl (commented/guarded) + the
   verdict-differential harness landing green on main first.
 
+**As-built notes:**
+- *All gates passed; the payoff prediction did not.* The conversion itself was clean: (a) the
+  kernel diff is Box↔Rc plus imports plus one audited helper (`term::unshare`, the
+  `Rc::try_unwrap`-with-shallow-clone-fallback the protocol prescribed — the compiler surfaced
+  **zero** move-out sites inside the kernel itself; all 18 were in elab/tests); (b) 835/835 tests;
+  (c) the corpus verdict report byte-identical; (d) the full `BL_NO_*` matrix bit-identical;
+  (e) all 50 criterion points within ±5% (worst confirmed regression +2.5%, two >5%
+  *improvements*); (f) cargo-mutants scoped to `term.rs` — the one kernel file with new logic —
+  found exactly one mutant (`unshare` → `Default::default()`), and it is *unviable* (`Term` has
+  no `Default`), so the mutation gate is vacuous for this diff, stated honestly: `unshare`'s
+  behavioral coverage comes from its 18 call sites under the full suite plus gates (c)/(d), not
+  from mutation testing. (A kernel-wide sweep incidentally run during this milestone surfaced
+  ~38 pre-existing uncaught mutants in `check.rs` — main-branch test-coverage gaps unrelated to
+  this diff, being triaged in their own session.)
+  But the go-bar itself did **not** open: `reader-demo-refl`, re-enabled and re-measured post-Rc,
+  was killed at ~15 CPU-min in release (pre-S3: killed at ~7 — both censored kills of the same
+  effectively non-terminating computation). The O(n²) closure-clone cost the N1 comment blamed
+  was real but not dominant; the post-S3 adversarial review identified the actual mechanism —
+  `do_elim`'s eager computation of *discarded* induction hypotheses, ~2^min(codepoints) steps
+  per `nat-eq`, shared at parity by both engines, with the "kernel is fast on these" appearance
+  being the elaborator's deliberate ground-value gate — see arc N for the code-cited findings
+  and the fix plan. The refl stays commented in spore_reader.bl with the corrected analysis.
+- *`Send` fallout was confined to tests plus one audited assertion.* `Rc` makes `Term` `!Send`;
+  production code needed exactly one change — the llvm-gated backend driver hands `&Term` to its
+  big-stack worker thread under an `AssertSend` wrapper with a documented safety argument (the
+  parent blocks on `join` inside the same scope, so access is strictly serialized — the only
+  `unsafe` in the milestone). Five test files that returned `ElabEnv`/`Outcome` values across
+  `join()` were restructured to run assertions on the worker thread (closure-passing helpers);
+  the pipeline bench got a hand-rolled `main` running the whole criterion harness on one
+  64 MiB-stack thread so elaborated terms never cross a thread boundary.
+- *The red-phase harness paid for itself before the change landed.* Capturing the golden on main
+  surfaced: four examples whose re-check is over the perf cliff (RECHECK_SKIP, with a
+  `BL_VERDICT_DISCOVER` watchdog mode for finding such units); **two pre-existing false
+  `Rejected` verdicts** (flat_esc.bl `main` — nested `Pair`-match inference; spore_codegen_meta's
+  `aeval-k-correct` — trans-chain rhs boundary), both re-checker bugs filed separately and
+  deliberately pinned as-is in the golden; a stdlib coverage-guard gap (std/graphics.bl); and an
+  unrunnable pipeline bench (reader nesting limit + missed E2 arity sweep), fixed on main first.
+
 ### [ ] S4 — Grow the self-hosted fragment
 
 Toy STLC (Base/Arr) → a real Blight fragment, one sub-milestone per feature, each re-running the
@@ -378,6 +416,111 @@ keeps everything re-checker-`Ok`.
 inside the S4 fragment) with 100% kernel agreement via the S2 bridge;
 [implementation.md](implementation.md)'s Stage table updated. This is the go/no-go gate for a
 future Stage-2 (the self-hosted checker as the primary front end).
+
+---
+
+## Arc N — The eliminator cliff (post-S3; mechanism identified)
+
+Context — what S3's follow-up review actually established (all claims code-cited and measured;
+the adversarial review of 2026-07-03 falsified the first draft of this arc):
+
+1. **Root cause, both engines, CONFIRMED: `do_elim` eagerly computes discarded induction
+   hypotheses.** Every surface `match` compiles to the full dependent eliminator whose methods
+   always bind an IH per recursive argument, and both evaluators compute that IH
+   *unconditionally* (kernel [normalize.rs:793-798](../crates/blight-kernel/src/normalize.rs),
+   recheck [normalize.rs:325-331](../crates/blight-recheck/src/normalize.rs)) even when the
+   method body never references it. `nat-eq` therefore costs ~2^min(codepoints) eliminator
+   steps: comparing two `'l'`s (codepoint 108) is ~2^108 steps. Measured slope ×~2.0 per +1
+   codepoint on match-forced `nat-eq k k`, k=8..22, in **both** engines (parity ±10-15% at every
+   k). The RECHECK_SKIP cliffs and the reader-demo-refl kill are all this one defect at 0%
+   progress — palindrome dies comparing its *first* character; the refl dies inside `is-lam-kw`'s
+   first `nat-eq(108,108)`. Fuel is innocent (the reader's fuel is 11).
+2. **The "kernel fast / re-checker slow" asymmetry was a workload-selection artifact.** The
+   elaborator *deliberately gates* ground-value conclusions away from the kernel
+   ([elab.rs:3158-3175](../crates/blight-elab/src/elab.rs), doc at :164-175 naming "the
+   palindrome/mergesort/quicksort blowup"), while `--recheck` feeds every typed global to
+   `recheck_judgement` ungated ([main.rs:588-604](../crates/blight-repl/src/main.rs)). Fed the
+   identical judgement via `check_top_with`, the kernel diverges identically. There is no fast
+   twin to copy from; there is one defect in two deliberately mirrored implementations.
+3. **Secondary, real, bounded:** (a) `Value` trees have no structural sharing — `do_elim`
+   deep-clones constructor arguments twice per iota level and `Var` lookup deep-clones values,
+   a Θ(k)-per-level polynomial multiplier on the exponential; (b) blight-recheck's `RTerm` never
+   got S3's Box→Rc treatment (its closures deep-copy binder bodies) — bounded to ~15% by the
+   measured parity, so hygiene, not the cliff; (c) refl/Path checking evaluates the goal ~3×
+   (both endpoints + PLam boundary + define-by re-check).
+4. **Dead hypotheses (do not re-litigate):** a global-value cache (globals are inlined at
+   elaboration — [elab.rs:1789-1796](../crates/blight-elab/src/elab.rs); no Global variant
+   exists in either term type); conv-strategy divergence (both engines quote neutrals; conv ≈ 0
+   samples in stuck profiles); literal fast-path asymmetry (both consume identical Con trees);
+   deep-chain env lookup (impossible under global inlining — eval-time depth is lexical);
+   "S3 regressed the kernel 7→15 min" (both numbers are manual kills of a 2^100+-step
+   computation — censored data, no throughput signal).
+
+Method rules (amended by the review):
+- **Instrumented evidence before fixes** — counters *and* profilers (the sampled `do_elim`
+  towers cracked this case at zero commit cost). Feature-gated counters land first:
+  `ih_computed`/`ih_discarded` at the two do_elim IH sites, hung off the kernel's existing
+  `tick()` infrastructure, plus an allocation counter (counting `#[global_allocator]`).
+- **Slopes, not timeouts.** The unit of measurement is a fitted scaling exponent on a
+  size-parameterized micro-reproducer, never pass/fail under a kill budget (a censored
+  observation distinguishes nothing). Rung 0 of the ladder: match-forced `nat-eq k k`, k=8..24
+  (pre-fix slope ×~2.0/unit; post-fix target: polynomial, slope-fit flat).
+- **One variable at a time**, kernel fixes flag-gated (`BL_NO_*`) into the differential matrix;
+  full S3 gate protocol (verdict golden, bit-identity, benches, mutants) per kernel-touching fix
+  — the S3 infrastructure is the reusable asset here.
+- **Independence constraint (hard):** blight-recheck may copy the *idea* of a fix, never kernel
+  code.
+
+### [ ] N2 — Eliminate eager discarded induction hypotheses (both engines; TCB-touching)
+
+The mechanism-fix milestone. Candidate fixes, each behind a flag until gated — **IH-free case
+trees are primary** (re-ranked by the 2026-07-03 panel review): the backend's `mono.rs` pure-arg
+beta-drop is a *shipping, differentially-validated existence proof* of exactly this fix (a
+compiled `palindrome.bl` runs fine while both checkers diverge on the identical value), it is
+elaborator-only (zero TCB, no S3 gate protocol needed), and it matches the historically proven
+shape — Agda compiles matches to case trees for precisely this reason:
+1. **IH-free case trees (elaborator-only, zero TCB, primary):** when a match arm never
+   references its IH binder, elaborate to a method that does not bind it (or to a non-recursive
+   eliminator form) — changes emitted terms, so the oracle corpus + DIFF_CORPUS + verdict golden
+   gate it.
+2. **Lazy IH (evaluator-only, fallback/complement):** thunk the IH at the do_elim IH site; force
+   on first use. Same values, deferred work; kernel change under the full S3 gate protocol, then
+   an independent mirror in recheck. Reach for it only if case trees leave residual eager cost
+   (e.g. through higher-order motives).
+
+- **Red:** the `ih_computed`/`ih_discarded` counters + the rung-0 micro-reproducer harness with
+  its pre-fix slope pinned as a golden (the regression test is the *slope*, not a timing).
+- **Exit (re-annotated ladder, in order):** rung-0 slope flat → 1-char palindrome variant
+  (codepoint-parameterized — codepoint *value* is the exponent, string length is irrelevant) →
+  RECHECK_SKIP emptied + verdict golden re-blessed (the four units flip `Skipped → Ok`/
+  `Declined`, reviewed line-by-line, nothing else drifts) → json_scratch (>68 min baseline) →
+  `reader-demo-refl` uncommented and green in suite time (the original go-bar; the spore_reader
+  blocker NOTE deleted, not amended) → the S2-deferred
+  `bridge_printer_output_checks_for_demo_id` re-attempted.
+- **Pre-registered fork:** if the fix family cannot clear the gates, the alternative exit is
+  *policy alignment* — gate ground-value judgements in `recheck_before_emit` exactly as the
+  elaborator gates the kernel, making RECHECK_SKIP a documented policy rather than a bug — and
+  N4 fires.
+
+### [ ] N3 — Constant-factor hygiene (post-N2, measured-in, each optional)
+
+Only what the post-N2 ladder still needs, in measured order of leverage:
+- **Value-tree sharing** (kernel + recheck): `Rc` children in `Value` / interned `ConName` —
+  kills the Θ(k)-per-level deep clones (the polynomial multiplier). S3-shaped protocol.
+- **RTerm Box→Rc** (recheck only): S3-for-recheck; parity bounds the win at ~15% on eliminator
+  workloads, more on closure-heavy ones. Verdict golden byte-identical.
+- **Refl endpoint sharing** (kernel): stop re-evaluating the witness/endpoints ~3×
+  (PathP eager endpoint eval + PLam boundary + define-by re-check); measured target ~3-10×
+  constant on refl-heavy goldens.
+
+### [ ] N4 — Decision checkpoint (fires only on N2 fork)
+
+Trigger (named, P4-style): the N2 fix family fails the S3 gate protocol, or fails to flip the
+rung-0 slope + RECHECK_SKIP rungs, within two milestone-sessions of effort. Then: adopt the
+policy-alignment exit permanently; record in [implementation.md](implementation.md)'s Stage
+table that Stage-1 certification is the S2 verdict-level bridge (delivered, scaling) and that
+whole-pipeline in-kernel refl is out of scope for v0.1; keep the rung-0 slope harness as the
+standing measurement so the question stays falsifiable for v0.2. No code.
 
 ---
 
@@ -472,8 +615,13 @@ tag `v0.1.0`.
 
 ## Cross-arc ordering (recommended for a single stream)
 
-E1 → E2 → E3 → S1 → E5 → E6 → S2 → S3 → E4 → E7 → E8 → S4 → P1 → R1 → R2 → P2 → S5 → P3 → R3 →
-P4 → R4
+E1 → E2 → E3 → S1 → E5 → E6 → S2 → S3 → **N2 → N3 → N4** → E4 → E7 → E8 → S4 → P1 → R1 → R2 →
+P2 → S5 → P3 → R3 → P4 → R4
+
+(Arc N inserted post-S3: N2/N3 sit directly in S4/S5's critical path — growing the self-hosted
+fragment is pointless while its certification mechanism is over a performance cliff — and the two
+re-checker false-`Rejected` fixes discovered by the S3 harness run as independent parallel work,
+tracked outside this ordering.)
 
 Rationale: E1–E3 are small and every later arc's code and docs benefit; S1 is tiny and proves
 the substrate early; E6 lands before S2 because spore_print is the measure clause's natural
@@ -487,9 +635,9 @@ linear order is the default for a single stream.
 
 | Size | Milestones |
 |---|---|
-| Small (≈1 session) | E1, E3, E8, S1, R1, R3, P4 |
-| Medium (1–3 sessions) | E2, E4, E5, E7, S2, P1, P3, R2, R4, S5 |
-| Large (3+ sessions) | E6, S3 (the Box→Rc audit), S4 (three sub-milestones), P2 |
+| Small (≈1 session) | E1, E3, E8, S1, R1, R3, P4, N4 |
+| Medium (1–3 sessions) | E2, E4, E5, E7, S2, P1, P3, R2, R4, S5, N2 (counters land fast; the fix is the unknown) |
+| Large (3+ sessions) | E6, S3 (the Box→Rc audit), S4 (three sub-milestones), P2, N3 (kernel-side, full gate protocol per fix) |
 
 ## Cross-references
 

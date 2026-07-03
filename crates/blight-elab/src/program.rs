@@ -21,6 +21,7 @@ use crate::scope::narrow_span;
 use crate::sexpr::{read_all, read_all_spanned, Sexpr};
 use crate::spores::PackageManifest;
 use crate::surface::Decl;
+use blight_kernel::unshare;
 use blight_kernel::{check_top_with, Proof, Term};
 use std::collections::HashSet;
 
@@ -379,7 +380,7 @@ impl<'a> Program<'a> {
         let core = elaborate(self.env, &surface)?;
         match core {
             Term::Ann(e, t) => {
-                let proof = check_top_with(self.env.signature().clone(), *e, *t)
+                let proof = check_top_with(self.env.signature().clone(), unshare(e), unshare(t))
                     .map_err(|err| ElabError::BadForm(err.to_string()))?;
                 Ok(Outcome::Checked(proof))
             }

@@ -235,9 +235,16 @@
     (s-cons (s-cons (s-atom (cons ?x nil)) (s-cons (s-atom kw-base) s-nil))
       (s-cons (s-atom (cons ?x nil)) s-nil))))
 
-; S3: pending — the go-bar refl itself (docs/roadmap-v0.1.md §S3). Commented until `Term: Box → Rc`
-; lands and the re-measure shows it runs in test-suite time; the green commit uncomments it and
-; deletes the blocker NOTE above.
+; S3 re-measure (2026-07-03, post `Term: Box → Rc`): STILL over the cliff — and the review that
+; followed identified why (docs/roadmap-v0.1.md arc N). The refl was re-enabled and killed after
+; ~15 CPU-min in `--release`; both kill timings (pre-S3 ~7 min, post-S3 ~15) are censored
+; observations of a ~2^100+-step computation at 0% progress, so neither says anything about the
+; clone fix. The actual mechanism: `do_elim` eagerly computes *discarded* induction hypotheses,
+; making `nat-eq` cost ~2^min(codepoints) steps — this refl dies inside `is-lam-kw`'s first
+; character comparison, `nat-eq(108,108)` (`'l'` vs `'l'`), ~2^108 steps. Fuel is innocent
+; (bsexp-size fuel here is 11). The fix is arc N's N2 (lazy/IH-free elimination, both engines);
+; until it lands, the refl stays commented and `reader_self_host_loads` remains the
+; certification story, exactly as before:
 ; (define-by reader-demo-refl
 ;   (Path (Maybe BSurf) (bsexp->bsurf reader-demo-sexp) (just demo-id))
 ;   refl)

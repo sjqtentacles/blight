@@ -124,17 +124,21 @@ fn cached_verdict(
     verdict
 }
 
-/// Units whose *own* globals cannot be re-checked before S3 lands: re-checking them forces the
-/// re-checker's NbE to normalize string computations, which is over the pre-S3 `Term::clone`
-/// cliff (measured: `examples/json_scratch.bl` ran >68 min in release without completing — the
-/// first time anything ever re-checked it; the ordinary suite only re-checks the spore closures.
-/// The other three were found by the `BL_VERDICT_DISCOVER` watchdog at a 60 s/unit budget; even
-/// 5-char `palindrome.bl` exceeds it, so the cliff is steeper in the re-checker than in the
-/// kernel, which checks all four in milliseconds during elaboration). For these units the harness
-/// reports the cached verdict where a closure global was already re-checked via another unit, and
-/// `Skipped` for the unit's unique globals. Emptying this list (re-blessing the golden) is part of
-/// S3's payoff measurement; any entry that *still* times out post-S3 is a re-checker performance
-/// bug to file separately.
+/// Units whose *own* globals cannot be re-checked in feasible time (measured:
+/// `examples/json_scratch.bl` ran >68 min in release without completing; the other three were
+/// found by the `BL_VERDICT_DISCOVER` watchdog at a 60 s/unit budget — even 5-char
+/// `palindrome.bl` exceeds it, and still exceeds 120 s post-S3). For these units the harness
+/// reports the cached verdict where a closure global was already re-checked via another unit,
+/// and `Skipped` for the unit's unique globals.
+///
+/// Mechanism (identified by the post-S3 review; docs/roadmap-v0.1.md arc N): `do_elim` eagerly
+/// computes *discarded* induction hypotheses, so `nat-eq` costs ~2^min(codepoints) eliminator
+/// steps — these runs sit at 0% progress on their first character comparison; they are
+/// effectively non-terminating, not slow. Both engines share the defect at parity (±15%): the
+/// "kernel checks these in milliseconds" appearance is the elaborator's *gate* deliberately
+/// skipping ground-value conclusions (`gate_routes_through_kernel`), a policy the ungated
+/// re-check pass lacks. Empty this list (and re-bless) when arc N's N2 fix lands — or, on N2's
+/// pre-registered fork, convert it to the same documented gate policy.
 const RECHECK_SKIP: &[&str] = &[
     "examples/json_scratch.bl",
     "examples/map_scratch.bl",
@@ -171,7 +175,10 @@ fn verdict_block(label: &str, source: &str, cache: &VerdictCache) -> String {
         }
     }
     let sig = env.signature();
-    let skip = RECHECK_SKIP.contains(&label);
+    // `BL_VERDICT_NOSKIP=1` re-checks even the skip-listed units — for re-measuring the cliff
+    // (with `BL_VERDICT_ONLY`/`BL_VERDICT_DISCOVER`), never for the golden.
+    let skip =
+        RECHECK_SKIP.contains(&label) && std::env::var("BL_VERDICT_NOSKIP").is_err();
     for (name, term, ty) in env.typed_globals() {
         // The cache key deliberately omits the signature: a structurally identical (name, term,
         // ty) triple in this corpus always originates from the same module loaded the same way,

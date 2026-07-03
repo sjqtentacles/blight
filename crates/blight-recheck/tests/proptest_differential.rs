@@ -17,6 +17,7 @@ use blight_kernel::{
 use blight_kernel::{Judgement, Level};
 use blight_recheck::{recheck_judgement, RecheckError};
 use proptest::prelude::*;
+use std::rc::Rc;
 
 // ---------------------------------------------------------------------------------------------
 // The fixed signature: Nat, Bool, and an indexed Vec — the dependent + inductive + indexed fragment
@@ -142,18 +143,18 @@ struct Typed {
 
 fn app_id(ty: Term, arg: Term) -> Term {
     let id = Term::Ann(
-        Box::new(Term::Lam(Box::new(Term::Var(0)))),
-        Box::new(Term::Pi(Grade::Omega, Box::new(ty.clone()), Box::new(ty))),
+        Rc::new(Term::Lam(Rc::new(Term::Var(0)))),
+        Rc::new(Term::Pi(Grade::Omega, Rc::new(ty.clone()), Rc::new(ty))),
     );
-    Term::App(Box::new(id), Box::new(arg))
+    Term::App(Rc::new(id), Rc::new(arg))
 }
 
 fn elim_bool(res: Term, scrut: Term, a: Term, b: Term) -> Term {
     Term::Elim {
         data: DataName("Bool".into()),
-        motive: Box::new(Term::Lam(Box::new(res))),
+        motive: Rc::new(Term::Lam(Rc::new(res))),
         methods: vec![a, b],
-        scrutinee: Box::new(scrut),
+        scrutinee: Rc::new(scrut),
     }
 }
 
@@ -214,8 +215,8 @@ fn arb_typed(fuel: u32) -> BoxedStrategy<Typed> {
             Typed {
                 term: Term::IntPrim {
                     op,
-                    lhs: Box::new(coerce(l, Ty::Int)),
-                    rhs: Box::new(coerce(r, Ty::Int)),
+                    lhs: Rc::new(coerce(l, Ty::Int)),
+                    rhs: Rc::new(coerce(r, Ty::Int)),
                 },
                 ty: Ty::Int,
             }
@@ -272,8 +273,8 @@ proptest! {
     fn indexed_vec_length_eliminator_agrees(k in 0usize..6) {
         let sig = gen_signature();
         let mut acc = Term::Ann(
-            Box::new(Term::Con(ConName("vnil".into()), vec![])),
-            Box::new(vec_of(nat(), zero())),
+            Rc::new(Term::Con(ConName("vnil".into()), vec![])),
+            Rc::new(vec_of(nat(), zero())),
         );
         for i in 0..k {
             let mut len_here = zero();
@@ -281,23 +282,23 @@ proptest! {
                 len_here = succ(len_here);
             }
             acc = Term::Ann(
-                Box::new(Term::Con(
+                Rc::new(Term::Con(
                     ConName("vcons".into()),
                     vec![len_here.clone(), zero(), acc],
                 )),
-                Box::new(vec_of(nat(), succ(len_here))),
+                Rc::new(vec_of(nat(), succ(len_here))),
             );
         }
-        let motive = Term::Lam(Box::new(Term::Lam(Box::new(nat()))));
+        let motive = Term::Lam(Rc::new(Term::Lam(Rc::new(nat()))));
         let m_vnil = zero();
-        let m_vcons = Term::Lam(Box::new(Term::Lam(Box::new(Term::Lam(Box::new(
-            Term::Lam(Box::new(succ(Term::Var(0)))),
+        let m_vcons = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(
+            Term::Lam(Rc::new(succ(Term::Var(0)))),
         ))))));
         let elim = Term::Elim {
             data: DataName("Vec".into()),
-            motive: Box::new(motive),
+            motive: Rc::new(motive),
             methods: vec![m_vnil, m_vcons],
-            scrutinee: Box::new(acc),
+            scrutinee: Rc::new(acc),
         };
         assert_no_disagreement(&sig, &elim, &nat())?;
     }

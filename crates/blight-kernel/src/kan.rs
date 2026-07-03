@@ -10,6 +10,7 @@
 use crate::normalize::{conv, quote_value_at};
 use crate::term::{Cofib, Interval};
 use crate::value::{Closure, Env, Value};
+use std::rc::Rc;
 
 /// Decide whether a cofibration is the total face `⊤` (defined everywhere) after constant folding.
 pub fn is_total(cofib: &Cofib) -> bool {
@@ -230,9 +231,9 @@ fn transp_fill_line(family: &Closure, _cofib: &Cofib, base: &Value) -> Closure {
     };
     let base_body = quote_value_at(0, 1, base);
     let transp_term = crate::term::Term::Transp {
-        family: Box::new(inner_line_body),
+        family: Rc::new(inner_line_body),
         cofib: Cofib::Bot,
-        base: Box::new(base_body),
+        base: Rc::new(base_body),
     };
     Closure {
         env: Env::empty(),
@@ -363,10 +364,10 @@ fn transp_path(family: &Closure, path: &Value) -> Value {
     // the cases the conformance goldens exercise (constant endpoints); the structural `Comp` keeps
     // the rule total and the re-checker still independently re-derives boundaries.
     let comp_term = crate::term::Term::Comp {
-        family: Box::new(inner_family_body),
+        family: Rc::new(inner_family_body),
         cofib: Cofib::Bot,
-        tube: Box::new(base_body.clone()),
-        base: Box::new(base_body),
+        tube: Rc::new(base_body.clone()),
+        base: Rc::new(base_body),
     };
     Value::PLam(Closure {
         env: Env::empty(),
@@ -441,10 +442,10 @@ pub fn hcomp(ty: &Value, cofib: &Cofib, tube: &Closure, base: &Value) -> Value {
             let tube_q = quote_value_at(0, 2, &papp_tube.apply_dim(Interval::Dim(0)));
             let _ = (lhs, rhs);
             let body_val = crate::term::Term::HComp {
-                ty: Box::new(inner_ty_q),
+                ty: Rc::new(inner_ty_q),
                 cofib: cofib.clone(),
-                tube: Box::new(tube_q),
-                base: Box::new(quote_value_at(0, 1, &base_papp)),
+                tube: Rc::new(tube_q),
+                base: Rc::new(quote_value_at(0, 1, &base_papp)),
             };
             Value::PLam(Closure {
                 env: Env::empty(),
@@ -631,8 +632,8 @@ mod tests {
         // line: i. Π (_ : Nat) Nat
         let pi = Term::Pi(
             crate::semiring::Grade::Omega,
-            Box::new(nat_ty_term()),
-            Box::new(nat_ty_term()),
+            Rc::new(nat_ty_term()),
+            Rc::new(nat_ty_term()),
         );
         let line = const_type_line(pi);
         // base: λ x. x  (a closed identity-on-Nat function value)
@@ -646,7 +647,7 @@ mod tests {
     /// `transp` along a constant `Sigma` line is the identity on a pair value.
     #[test]
     fn transp_const_sigma_is_identity() {
-        let sigma = Term::Sigma(Box::new(nat_ty_term()), Box::new(nat_ty_term()));
+        let sigma = Term::Sigma(Rc::new(nat_ty_term()), Rc::new(nat_ty_term()));
         let line = const_type_line(sigma);
         let z = Value::Con(crate::term::ConName("zero".into()), vec![]);
         let pair = Value::Pair(Box::new(z.clone()), Box::new(z.clone()));
@@ -659,9 +660,9 @@ mod tests {
         // line: i. PathP (j. Nat) zero zero  (a constant line of constant paths)
         let z = || Term::Con(crate::term::ConName("zero".into()), vec![]);
         let path = Term::PathP {
-            family: Box::new(nat_ty_term()),
-            lhs: Box::new(z()),
-            rhs: Box::new(z()),
+            family: Rc::new(nat_ty_term()),
+            lhs: Rc::new(z()),
+            rhs: Rc::new(z()),
         };
         let line = const_type_line(path);
         // base: λ j. zero
@@ -718,7 +719,7 @@ mod tests {
     fn opaque_path_term() -> Term {
         Term::Foreign {
             symbol: "kan_test_opaque".into(),
-            ty: Box::new(nat_ty_term()),
+            ty: Rc::new(nat_ty_term()),
         }
     }
 
@@ -732,8 +733,8 @@ mod tests {
         Closure {
             env: Env::empty(),
             body: Term::Pair(
-                Box::new(Term::PApp(Box::new(opaque_path_term()), Interval::Dim(0))),
-                Box::new(Term::PApp(Box::new(opaque_path_term()), Interval::Dim(0))),
+                Rc::new(Term::PApp(Rc::new(opaque_path_term()), Interval::Dim(0))),
+                Rc::new(Term::PApp(Rc::new(opaque_path_term()), Interval::Dim(0))),
             ),
         }
     }
@@ -824,8 +825,8 @@ mod tests {
         // predecessor) does not actually vary and so cannot drive this branch at all.
         let tube = Closure {
             env: Env::empty(),
-            body: Term::Lam(Box::new(Term::PApp(
-                Box::new(opaque_path_term()),
+            body: Term::Lam(Rc::new(Term::PApp(
+                Rc::new(opaque_path_term()),
                 Interval::Dim(0),
             ))),
         };
@@ -849,14 +850,14 @@ mod tests {
         let z = || Term::Con(crate::term::ConName("zero".into()), vec![]);
         let dim_dep = || {
             Term::PApp(
-                Box::new(Term::PLam(Box::new(z()))),
+                Rc::new(Term::PLam(Rc::new(z()))),
                 Interval::Dim(0), // the transport dimension `i`
             )
         };
         let path = Term::PathP {
-            family: Box::new(nat_ty_term()),
-            lhs: Box::new(dim_dep()),
-            rhs: Box::new(dim_dep()),
+            family: Rc::new(nat_ty_term()),
+            lhs: Rc::new(dim_dep()),
+            rhs: Rc::new(dim_dep()),
         };
         let line = Closure {
             env: Env::empty(),
@@ -904,10 +905,10 @@ mod tests {
         );
         // The line `i. Glue Bool (i=0) Nat e`.
         let glue_body = Term::Glue {
-            base: Box::new(bool_ty_term()),
+            base: Rc::new(bool_ty_term()),
             cofib: Cofib::Eq0(Interval::Dim(0)),
-            ty: Box::new(nat_ty_term()),
-            equiv: Box::new(quote_value_at(0, 1, &e)),
+            ty: Rc::new(nat_ty_term()),
+            equiv: Rc::new(quote_value_at(0, 1, &e)),
         };
         let line = Closure {
             env: Env::empty(),
@@ -959,10 +960,10 @@ mod tests {
         let line = Closure {
             env: Env::empty(),
             body: Term::Glue {
-                base: Box::new(bool_ty_term()),
+                base: Rc::new(bool_ty_term()),
                 cofib: Cofib::Eq1(Interval::Dim(0)),
-                ty: Box::new(nat_ty_term()),
-                equiv: Box::new(quote_value_at(0, 1, &e)),
+                ty: Rc::new(nat_ty_term()),
+                equiv: Rc::new(quote_value_at(0, 1, &e)),
             },
         };
         assert!(
@@ -1009,10 +1010,10 @@ mod tests {
         let line = Closure {
             env: Env::empty(),
             body: Term::Glue {
-                base: Box::new(bool_ty_term()),
+                base: Rc::new(bool_ty_term()),
                 cofib: Cofib::Eq0(Interval::Neg(Box::new(Interval::Dim(0)))),
-                ty: Box::new(nat_ty_term()),
-                equiv: Box::new(quote_value_at(0, 1, &e)),
+                ty: Rc::new(nat_ty_term()),
+                equiv: Rc::new(quote_value_at(0, 1, &e)),
             },
         };
         assert!(
@@ -1048,13 +1049,13 @@ mod tests {
         let line = Closure {
             env: Env::empty(),
             body: Term::Glue {
-                base: Box::new(bool_ty_term()),
+                base: Rc::new(bool_ty_term()),
                 cofib: Cofib::Eq0(Interval::Min(
                     Box::new(Interval::Dim(0)),
                     Box::new(Interval::Dim(1)),
                 )),
-                ty: Box::new(nat_ty_term()),
-                equiv: Box::new(quote_value_at(0, 1, &e)),
+                ty: Rc::new(nat_ty_term()),
+                equiv: Rc::new(quote_value_at(0, 1, &e)),
             },
         };
         let _ = transp(&line, &Cofib::Bot, &zero());
@@ -1085,15 +1086,15 @@ mod tests {
             body: Term::Glue {
                 // base varies: Nat on i=0 collapses, Bool elsewhere — realized by an inner single
                 // face Glue used as the base so base@i0 ≠ base@i1.
-                base: Box::new(Term::Glue {
-                    base: Box::new(bool_ty_term()),
+                base: Rc::new(Term::Glue {
+                    base: Rc::new(bool_ty_term()),
                     cofib: Cofib::Eq0(Interval::Dim(0)),
-                    ty: Box::new(nat_ty_term()),
-                    equiv: Box::new(quote_value_at(0, 1, &e)),
+                    ty: Rc::new(nat_ty_term()),
+                    equiv: Rc::new(quote_value_at(0, 1, &e)),
                 }),
                 cofib: Cofib::Eq0(Interval::Dim(0)),
-                ty: Box::new(nat_ty_term()),
-                equiv: Box::new(quote_value_at(0, 1, &e)),
+                ty: Rc::new(nat_ty_term()),
+                equiv: Rc::new(quote_value_at(0, 1, &e)),
             },
         };
         let _ = transp(&line, &Cofib::Bot, &zero());

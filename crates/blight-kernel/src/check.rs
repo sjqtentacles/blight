@@ -14,6 +14,7 @@ use crate::signature::{Arg, Constructor, DataDecl, Signature};
 use crate::term::{Cofib, DataName, Level, Term};
 use crate::usage::Usage;
 use crate::value::{Closure, Env, Neutral, Value};
+use std::rc::Rc;
 
 /// A kernel type error. Carries enough to report *why* a term failed to check; it never
 /// indicates unsoundness, only "this did not grow a proof" (spec §1.2).
@@ -454,10 +455,10 @@ impl Checker {
                     let k_dom = result_ty_term; // valid in ctx_x (mentions x at index 0)
                     let k_ty = Term::Pi(
                         Grade::Omega,
-                        Box::new(k_dom),
+                        Rc::new(k_dom),
                         // Inside this Pi's codomain, one extra binder (`_`) is in scope on top of `x`,
                         // so `C` (closed at ctx.len()) is shifted by 2.
-                        Box::new(shift(&c_term, 2)),
+                        Rc::new(shift(&c_term, 2)),
                     );
                     let ctx_xk = ctx_x.extend(k_ty, cont_grade);
 
@@ -1360,27 +1361,27 @@ impl Checker {
                     Term::IntTy | Term::IntLit(_) => t.clone(),
                     Term::Pi(g, a, b) => Term::Pi(
                         *g,
-                        Box::new(go(a, depth_in, m, repls)),
-                        Box::new(go(b, depth_in + 1, m, repls)),
+                        Rc::new(go(a, depth_in, m, repls)),
+                        Rc::new(go(b, depth_in + 1, m, repls)),
                     ),
                     Term::Sigma(a, b) => Term::Sigma(
-                        Box::new(go(a, depth_in, m, repls)),
-                        Box::new(go(b, depth_in + 1, m, repls)),
+                        Rc::new(go(a, depth_in, m, repls)),
+                        Rc::new(go(b, depth_in + 1, m, repls)),
                     ),
-                    Term::Lam(b) => Term::Lam(Box::new(go(b, depth_in + 1, m, repls))),
+                    Term::Lam(b) => Term::Lam(Rc::new(go(b, depth_in + 1, m, repls))),
                     Term::App(f, a) => Term::App(
-                        Box::new(go(f, depth_in, m, repls)),
-                        Box::new(go(a, depth_in, m, repls)),
+                        Rc::new(go(f, depth_in, m, repls)),
+                        Rc::new(go(a, depth_in, m, repls)),
                     ),
                     Term::Pair(a, b) => Term::Pair(
-                        Box::new(go(a, depth_in, m, repls)),
-                        Box::new(go(b, depth_in, m, repls)),
+                        Rc::new(go(a, depth_in, m, repls)),
+                        Rc::new(go(b, depth_in, m, repls)),
                     ),
-                    Term::Fst(p) => Term::Fst(Box::new(go(p, depth_in, m, repls))),
-                    Term::Snd(p) => Term::Snd(Box::new(go(p, depth_in, m, repls))),
+                    Term::Fst(p) => Term::Fst(Rc::new(go(p, depth_in, m, repls))),
+                    Term::Snd(p) => Term::Snd(Rc::new(go(p, depth_in, m, repls))),
                     Term::Ann(e, ty) => Term::Ann(
-                        Box::new(go(e, depth_in, m, repls)),
-                        Box::new(go(ty, depth_in, m, repls)),
+                        Rc::new(go(e, depth_in, m, repls)),
+                        Rc::new(go(ty, depth_in, m, repls)),
                     ),
                     Term::Data(d, ps, ix) => Term::Data(
                         d.clone(),
@@ -1415,11 +1416,11 @@ impl Checker {
             let mut acc = shift(&motive_term, total);
             for rix in ctor.result_indices.iter() {
                 let rix = translate(rix, ctor.args.len(), total);
-                acc = Term::App(Box::new(acc), Box::new(rix));
+                acc = Term::App(Rc::new(acc), Rc::new(rix));
             }
-            Term::App(Box::new(acc), Box::new(con_term))
+            Term::App(Rc::new(acc), Rc::new(con_term))
         } else {
-            Term::App(Box::new(shift(&motive_term, total)), Box::new(con_term))
+            Term::App(Rc::new(shift(&motive_term, total)), Rc::new(con_term))
         };
 
         // Fold binders innermost-to-outermost into a Pi-telescope. The Pi for binder at `pos` has a
@@ -1472,17 +1473,17 @@ impl Checker {
                         let mut acc = p_motive;
                         for rix in rec_indices.iter() {
                             let ix = translate(rix, args_before - 1, depth);
-                            acc = Term::App(Box::new(acc), Box::new(ix));
+                            acc = Term::App(Rc::new(acc), Rc::new(ix));
                         }
                         let xs_var = Term::Var(depth - 1 - rec_pos);
-                        Term::App(Box::new(acc), Box::new(xs_var))
+                        Term::App(Rc::new(acc), Rc::new(xs_var))
                     } else {
                         let xs_var = Term::Var(depth - 1 - rec_pos);
-                        Term::App(Box::new(p_motive), Box::new(xs_var))
+                        Term::App(Rc::new(p_motive), Rc::new(xs_var))
                     }
                 }
             };
-            body = Term::Pi(Grade::Omega, Box::new(dom), Box::new(body));
+            body = Term::Pi(Grade::Omega, Rc::new(dom), Rc::new(body));
         }
 
         Ok(eval(&self.env_for(ctx), &body))
@@ -1520,16 +1521,16 @@ impl Checker {
         };
         let family = Closure {
             env: self.env_for(ctx),
-            body: Term::App(Box::new(motive.clone()), Box::new(pcon_term)),
+            body: Term::App(Rc::new(motive.clone()), Rc::new(pcon_term)),
         };
         let elim_at = |scrut: &Term| -> Value {
             eval(
                 &self.env_for(ctx),
                 &Term::Elim {
                     data: decl.name.clone(),
-                    motive: Box::new(motive.clone()),
+                    motive: Rc::new(motive.clone()),
                     methods: methods.to_vec(),
-                    scrutinee: Box::new(scrut.clone()),
+                    scrutinee: Rc::new(scrut.clone()),
                 },
             )
         };
@@ -2216,8 +2217,8 @@ impl Checker {
                     // bound at the operation's continuation multiplicity.
                     let k_ty = Term::Pi(
                         Grade::Omega,
-                        Box::new(result_ty_term),
-                        Box::new(shift(&c_term, 2)),
+                        Rc::new(result_ty_term),
+                        Rc::new(shift(&c_term, 2)),
                     );
                     let ctx_xk = ctx_x.extend(k_ty, cont_grade);
                     let c_val_xk = eval(&self.env_for(&ctx_xk), &shift(&c_term, 2));
@@ -2346,18 +2347,18 @@ fn shift(term: &Term, n: usize) -> Term {
             Term::Univ(_) => term.clone(),
             Term::Pi(g, a, b) => Term::Pi(
                 *g,
-                Box::new(go(a, n, cutoff)),
-                Box::new(go(b, n, cutoff + 1)),
+                Rc::new(go(a, n, cutoff)),
+                Rc::new(go(b, n, cutoff + 1)),
             ),
-            Term::Lam(b) => Term::Lam(Box::new(go(b, n, cutoff + 1))),
-            Term::App(f, a) => Term::App(Box::new(go(f, n, cutoff)), Box::new(go(a, n, cutoff))),
+            Term::Lam(b) => Term::Lam(Rc::new(go(b, n, cutoff + 1))),
+            Term::App(f, a) => Term::App(Rc::new(go(f, n, cutoff)), Rc::new(go(a, n, cutoff))),
             Term::Sigma(a, b) => {
-                Term::Sigma(Box::new(go(a, n, cutoff)), Box::new(go(b, n, cutoff + 1)))
+                Term::Sigma(Rc::new(go(a, n, cutoff)), Rc::new(go(b, n, cutoff + 1)))
             }
-            Term::Pair(a, b) => Term::Pair(Box::new(go(a, n, cutoff)), Box::new(go(b, n, cutoff))),
-            Term::Fst(p) => Term::Fst(Box::new(go(p, n, cutoff))),
-            Term::Snd(p) => Term::Snd(Box::new(go(p, n, cutoff))),
-            Term::Ann(t, ty) => Term::Ann(Box::new(go(t, n, cutoff)), Box::new(go(ty, n, cutoff))),
+            Term::Pair(a, b) => Term::Pair(Rc::new(go(a, n, cutoff)), Rc::new(go(b, n, cutoff))),
+            Term::Fst(p) => Term::Fst(Rc::new(go(p, n, cutoff))),
+            Term::Snd(p) => Term::Snd(Rc::new(go(p, n, cutoff))),
+            Term::Ann(t, ty) => Term::Ann(Rc::new(go(t, n, cutoff)), Rc::new(go(ty, n, cutoff))),
             Term::Data(d, ps, is) => Term::Data(
                 d.clone(),
                 ps.iter().map(|t| go(t, n, cutoff)).collect(),
@@ -2373,9 +2374,9 @@ fn shift(term: &Term, n: usize) -> Term {
                 scrutinee,
             } => Term::Elim {
                 data: data.clone(),
-                motive: Box::new(go(motive, n, cutoff)),
+                motive: Rc::new(go(motive, n, cutoff)),
                 methods: methods.iter().map(|t| go(t, n, cutoff)).collect(),
-                scrutinee: Box::new(go(scrutinee, n, cutoff)),
+                scrutinee: Rc::new(go(scrutinee, n, cutoff)),
             },
             // `dim` is a dimension term (separate de Bruijn space); only `args` can mention term
             // variables.
@@ -2393,21 +2394,21 @@ fn shift(term: &Term, n: usize) -> Term {
             // Cubical formers. None of these bind a *term* variable (only dimensions, which live in
             // a separate de Bruijn space), so the term cutoff is unchanged when descending.
             Term::PathP { family, lhs, rhs } => Term::PathP {
-                family: Box::new(go(family, n, cutoff)),
-                lhs: Box::new(go(lhs, n, cutoff)),
-                rhs: Box::new(go(rhs, n, cutoff)),
+                family: Rc::new(go(family, n, cutoff)),
+                lhs: Rc::new(go(lhs, n, cutoff)),
+                rhs: Rc::new(go(rhs, n, cutoff)),
             },
-            Term::PLam(b) => Term::PLam(Box::new(go(b, n, cutoff))),
-            Term::PApp(p, r) => Term::PApp(Box::new(go(p, n, cutoff)), r.clone()),
-            Term::Partial(c, a) => Term::Partial(c.clone(), Box::new(go(a, n, cutoff))),
+            Term::PLam(b) => Term::PLam(Rc::new(go(b, n, cutoff))),
+            Term::PApp(p, r) => Term::PApp(Rc::new(go(p, n, cutoff)), r.clone()),
+            Term::Partial(c, a) => Term::Partial(c.clone(), Rc::new(go(a, n, cutoff))),
             Term::Transp {
                 family,
                 cofib,
                 base,
             } => Term::Transp {
-                family: Box::new(go(family, n, cutoff)),
+                family: Rc::new(go(family, n, cutoff)),
                 cofib: cofib.clone(),
-                base: Box::new(go(base, n, cutoff)),
+                base: Rc::new(go(base, n, cutoff)),
             },
             Term::HComp {
                 ty,
@@ -2415,10 +2416,10 @@ fn shift(term: &Term, n: usize) -> Term {
                 tube,
                 base,
             } => Term::HComp {
-                ty: Box::new(go(ty, n, cutoff)),
+                ty: Rc::new(go(ty, n, cutoff)),
                 cofib: cofib.clone(),
-                tube: Box::new(go(tube, n, cutoff)),
-                base: Box::new(go(base, n, cutoff)),
+                tube: Rc::new(go(tube, n, cutoff)),
+                base: Rc::new(go(base, n, cutoff)),
             },
             Term::Comp {
                 family,
@@ -2426,10 +2427,10 @@ fn shift(term: &Term, n: usize) -> Term {
                 tube,
                 base,
             } => Term::Comp {
-                family: Box::new(go(family, n, cutoff)),
+                family: Rc::new(go(family, n, cutoff)),
                 cofib: cofib.clone(),
-                tube: Box::new(go(tube, n, cutoff)),
-                base: Box::new(go(base, n, cutoff)),
+                tube: Rc::new(go(tube, n, cutoff)),
+                base: Rc::new(go(base, n, cutoff)),
             },
             Term::Glue {
                 base,
@@ -2437,10 +2438,10 @@ fn shift(term: &Term, n: usize) -> Term {
                 ty,
                 equiv,
             } => Term::Glue {
-                base: Box::new(go(base, n, cutoff)),
+                base: Rc::new(go(base, n, cutoff)),
                 cofib: cofib.clone(),
-                ty: Box::new(go(ty, n, cutoff)),
-                equiv: Box::new(go(equiv, n, cutoff)),
+                ty: Rc::new(go(ty, n, cutoff)),
+                equiv: Rc::new(go(equiv, n, cutoff)),
             },
             Term::GlueTerm {
                 cofib,
@@ -2448,10 +2449,10 @@ fn shift(term: &Term, n: usize) -> Term {
                 base,
             } => Term::GlueTerm {
                 cofib: cofib.clone(),
-                partial: Box::new(go(partial, n, cutoff)),
-                base: Box::new(go(base, n, cutoff)),
+                partial: Rc::new(go(partial, n, cutoff)),
+                base: Rc::new(go(base, n, cutoff)),
             },
-            Term::Unglue(p) => Term::Unglue(Box::new(go(p, n, cutoff))),
+            Term::Unglue(p) => Term::Unglue(Rc::new(go(p, n, cutoff))),
             // Effects: `Op` arg binds nothing; `Handle`'s return clause binds 1 (the result), each
             // op clause binds 2 (op-arg then continuation `k`); `EffTy`'s row is closed.
             Term::Op {
@@ -2463,25 +2464,25 @@ fn shift(term: &Term, n: usize) -> Term {
                 effect: effect.clone(),
                 op: op.clone(),
                 type_args: type_args.iter().map(|t| go(t, n, cutoff)).collect(),
-                arg: Box::new(go(arg, n, cutoff)),
+                arg: Rc::new(go(arg, n, cutoff)),
             },
             Term::Handle {
                 body,
                 return_clause,
                 op_clauses,
             } => Term::Handle {
-                body: Box::new(go(body, n, cutoff)),
-                return_clause: Box::new(go(return_clause, n, cutoff + 1)),
+                body: Rc::new(go(body, n, cutoff)),
+                return_clause: Rc::new(go(return_clause, n, cutoff + 1)),
                 op_clauses: op_clauses
                     .iter()
-                    .map(|(name, e)| (name.clone(), Box::new(go(e, n, cutoff + 2))))
+                    .map(|(name, e)| (name.clone(), Rc::new(go(e, n, cutoff + 2))))
                     .collect(),
             },
-            Term::EffTy(row, a) => Term::EffTy(row.clone(), Box::new(go(a, n, cutoff))),
-            Term::Delay(a) => Term::Delay(Box::new(go(a, n, cutoff))),
-            Term::Now(a) => Term::Now(Box::new(go(a, n, cutoff))),
-            Term::Later(a) => Term::Later(Box::new(go(a, n, cutoff))),
-            Term::Force(a) => Term::Force(Box::new(go(a, n, cutoff))),
+            Term::EffTy(row, a) => Term::EffTy(row.clone(), Rc::new(go(a, n, cutoff))),
+            Term::Delay(a) => Term::Delay(Rc::new(go(a, n, cutoff))),
+            Term::Now(a) => Term::Now(Rc::new(go(a, n, cutoff))),
+            Term::Later(a) => Term::Later(Rc::new(go(a, n, cutoff))),
+            Term::Force(a) => Term::Force(Rc::new(go(a, n, cutoff))),
             // `System` carries cofibration-guarded branches; not produced by the paths funext needs.
             Term::System(_) => term.clone(),
             // A literal interval term has no term-variable content.
@@ -2491,14 +2492,14 @@ fn shift(term: &Term, n: usize) -> Term {
             // A foreign postulate's symbol is opaque; only its ascribed type can mention variables.
             Term::Foreign { symbol, ty } => Term::Foreign {
                 symbol: symbol.clone(),
-                ty: Box::new(go(ty, n, cutoff)),
+                ty: Rc::new(go(ty, n, cutoff)),
             },
             // Int type/literal have no subterms; an IntPrim shifts both operands.
             Term::IntTy | Term::IntLit(_) => term.clone(),
             Term::IntPrim { op, lhs, rhs } => Term::IntPrim {
                 op: *op,
-                lhs: Box::new(go(lhs, n, cutoff)),
-                rhs: Box::new(go(rhs, n, cutoff)),
+                lhs: Rc::new(go(lhs, n, cutoff)),
+                rhs: Rc::new(go(rhs, n, cutoff)),
             },
         }
     }
@@ -2525,24 +2526,24 @@ fn subst_var(term: &Term, j: usize, replacement: &Term) -> Term {
             Term::IntTy | Term::IntLit(_) => term.clone(),
             Term::IntPrim { op, lhs, rhs } => Term::IntPrim {
                 op: *op,
-                lhs: Box::new(go(lhs, j, repl)),
-                rhs: Box::new(go(rhs, j, repl)),
+                lhs: Rc::new(go(lhs, j, repl)),
+                rhs: Rc::new(go(rhs, j, repl)),
             },
             Term::Pi(g, a, b) => Term::Pi(
                 *g,
-                Box::new(go(a, j, repl)),
-                Box::new(go(b, j + 1, &shift(repl, 1))),
+                Rc::new(go(a, j, repl)),
+                Rc::new(go(b, j + 1, &shift(repl, 1))),
             ),
             Term::Sigma(a, b) => Term::Sigma(
-                Box::new(go(a, j, repl)),
-                Box::new(go(b, j + 1, &shift(repl, 1))),
+                Rc::new(go(a, j, repl)),
+                Rc::new(go(b, j + 1, &shift(repl, 1))),
             ),
-            Term::Lam(b) => Term::Lam(Box::new(go(b, j + 1, &shift(repl, 1)))),
-            Term::App(f, a) => Term::App(Box::new(go(f, j, repl)), Box::new(go(a, j, repl))),
-            Term::Pair(a, b) => Term::Pair(Box::new(go(a, j, repl)), Box::new(go(b, j, repl))),
-            Term::Fst(p) => Term::Fst(Box::new(go(p, j, repl))),
-            Term::Snd(p) => Term::Snd(Box::new(go(p, j, repl))),
-            Term::Ann(t, ty) => Term::Ann(Box::new(go(t, j, repl)), Box::new(go(ty, j, repl))),
+            Term::Lam(b) => Term::Lam(Rc::new(go(b, j + 1, &shift(repl, 1)))),
+            Term::App(f, a) => Term::App(Rc::new(go(f, j, repl)), Rc::new(go(a, j, repl))),
+            Term::Pair(a, b) => Term::Pair(Rc::new(go(a, j, repl)), Rc::new(go(b, j, repl))),
+            Term::Fst(p) => Term::Fst(Rc::new(go(p, j, repl))),
+            Term::Snd(p) => Term::Snd(Rc::new(go(p, j, repl))),
+            Term::Ann(t, ty) => Term::Ann(Rc::new(go(t, j, repl)), Rc::new(go(ty, j, repl))),
             Term::Data(d, ps, is) => Term::Data(
                 d.clone(),
                 ps.iter().map(|t| go(t, j, repl)).collect(),
@@ -2558,9 +2559,9 @@ fn subst_var(term: &Term, j: usize, replacement: &Term) -> Term {
                 scrutinee,
             } => Term::Elim {
                 data: data.clone(),
-                motive: Box::new(go(motive, j, repl)),
+                motive: Rc::new(go(motive, j, repl)),
                 methods: methods.iter().map(|t| go(t, j, repl)).collect(),
-                scrutinee: Box::new(go(scrutinee, j, repl)),
+                scrutinee: Rc::new(go(scrutinee, j, repl)),
             },
             Term::PCon {
                 data,
@@ -2574,17 +2575,17 @@ fn subst_var(term: &Term, j: usize, replacement: &Term) -> Term {
                 dim: dim.clone(),
             },
             Term::PathP { family, lhs, rhs } => Term::PathP {
-                family: Box::new(go(family, j, repl)),
-                lhs: Box::new(go(lhs, j, repl)),
-                rhs: Box::new(go(rhs, j, repl)),
+                family: Rc::new(go(family, j, repl)),
+                lhs: Rc::new(go(lhs, j, repl)),
+                rhs: Rc::new(go(rhs, j, repl)),
             },
-            Term::PLam(b) => Term::PLam(Box::new(go(b, j, repl))),
-            Term::PApp(p, r) => Term::PApp(Box::new(go(p, j, repl)), r.clone()),
-            Term::Delay(a) => Term::Delay(Box::new(go(a, j, repl))),
-            Term::Now(a) => Term::Now(Box::new(go(a, j, repl))),
-            Term::Later(a) => Term::Later(Box::new(go(a, j, repl))),
-            Term::Force(a) => Term::Force(Box::new(go(a, j, repl))),
-            Term::EffTy(row, a) => Term::EffTy(row.clone(), Box::new(go(a, j, repl))),
+            Term::PLam(b) => Term::PLam(Rc::new(go(b, j, repl))),
+            Term::PApp(p, r) => Term::PApp(Rc::new(go(p, j, repl)), r.clone()),
+            Term::Delay(a) => Term::Delay(Rc::new(go(a, j, repl))),
+            Term::Now(a) => Term::Now(Rc::new(go(a, j, repl))),
+            Term::Later(a) => Term::Later(Rc::new(go(a, j, repl))),
+            Term::Force(a) => Term::Force(Rc::new(go(a, j, repl))),
+            Term::EffTy(row, a) => Term::EffTy(row.clone(), Rc::new(go(a, j, repl))),
             Term::Op {
                 effect,
                 op,
@@ -2594,24 +2595,24 @@ fn subst_var(term: &Term, j: usize, replacement: &Term) -> Term {
                 effect: effect.clone(),
                 op: op.clone(),
                 type_args: type_args.iter().map(|t| go(t, j, repl)).collect(),
-                arg: Box::new(go(arg, j, repl)),
+                arg: Rc::new(go(arg, j, repl)),
             },
             // Remaining cubical/effect formers are not produced by parameterized-data method
             // types; substitute conservatively where there is no extra binder.
-            Term::Partial(c, a) => Term::Partial(c.clone(), Box::new(go(a, j, repl))),
-            Term::Unglue(p) => Term::Unglue(Box::new(go(p, j, repl))),
+            Term::Partial(c, a) => Term::Partial(c.clone(), Rc::new(go(a, j, repl))),
+            Term::Unglue(p) => Term::Unglue(Rc::new(go(p, j, repl))),
             Term::Foreign { symbol, ty } => Term::Foreign {
                 symbol: symbol.clone(),
-                ty: Box::new(go(ty, j, repl)),
+                ty: Rc::new(go(ty, j, repl)),
             },
             Term::Transp {
                 family,
                 cofib,
                 base,
             } => Term::Transp {
-                family: Box::new(go(family, j, repl)),
+                family: Rc::new(go(family, j, repl)),
                 cofib: cofib.clone(),
-                base: Box::new(go(base, j, repl)),
+                base: Rc::new(go(base, j, repl)),
             },
             Term::HComp {
                 ty,
@@ -2619,10 +2620,10 @@ fn subst_var(term: &Term, j: usize, replacement: &Term) -> Term {
                 tube,
                 base,
             } => Term::HComp {
-                ty: Box::new(go(ty, j, repl)),
+                ty: Rc::new(go(ty, j, repl)),
                 cofib: cofib.clone(),
-                tube: Box::new(go(tube, j, repl)),
-                base: Box::new(go(base, j, repl)),
+                tube: Rc::new(go(tube, j, repl)),
+                base: Rc::new(go(base, j, repl)),
             },
             Term::Comp {
                 family,
@@ -2630,10 +2631,10 @@ fn subst_var(term: &Term, j: usize, replacement: &Term) -> Term {
                 tube,
                 base,
             } => Term::Comp {
-                family: Box::new(go(family, j, repl)),
+                family: Rc::new(go(family, j, repl)),
                 cofib: cofib.clone(),
-                tube: Box::new(go(tube, j, repl)),
-                base: Box::new(go(base, j, repl)),
+                tube: Rc::new(go(tube, j, repl)),
+                base: Rc::new(go(base, j, repl)),
             },
             Term::Glue {
                 base,
@@ -2641,10 +2642,10 @@ fn subst_var(term: &Term, j: usize, replacement: &Term) -> Term {
                 ty,
                 equiv,
             } => Term::Glue {
-                base: Box::new(go(base, j, repl)),
+                base: Rc::new(go(base, j, repl)),
                 cofib: cofib.clone(),
-                ty: Box::new(go(ty, j, repl)),
-                equiv: Box::new(go(equiv, j, repl)),
+                ty: Rc::new(go(ty, j, repl)),
+                equiv: Rc::new(go(equiv, j, repl)),
             },
             Term::GlueTerm {
                 cofib,
@@ -2652,19 +2653,19 @@ fn subst_var(term: &Term, j: usize, replacement: &Term) -> Term {
                 base,
             } => Term::GlueTerm {
                 cofib: cofib.clone(),
-                partial: Box::new(go(partial, j, repl)),
-                base: Box::new(go(base, j, repl)),
+                partial: Rc::new(go(partial, j, repl)),
+                base: Rc::new(go(base, j, repl)),
             },
             Term::Handle {
                 body,
                 return_clause,
                 op_clauses,
             } => Term::Handle {
-                body: Box::new(go(body, j, repl)),
-                return_clause: Box::new(go(return_clause, j + 1, &shift(repl, 1))),
+                body: Rc::new(go(body, j, repl)),
+                return_clause: Rc::new(go(return_clause, j + 1, &shift(repl, 1))),
                 op_clauses: op_clauses
                     .iter()
-                    .map(|(name, e)| (name.clone(), Box::new(go(e, j + 2, &shift(repl, 2)))))
+                    .map(|(name, e)| (name.clone(), Rc::new(go(e, j + 2, &shift(repl, 2)))))
                     .collect(),
             },
         }
@@ -2766,7 +2767,7 @@ mod tests {
     fn foreign_checks_at_its_type() {
         let f = Term::Foreign {
             symbol: "bl_foreign_answer".into(),
-            ty: Box::new(u(0)),
+            ty: Rc::new(u(0)),
         };
         assert!(
             check_top(f, u(0)).is_ok(),
@@ -2780,12 +2781,12 @@ mod tests {
     fn foreign_wrong_type_rejected() {
         let f = Term::Foreign {
             symbol: "bl_foreign_answer".into(),
-            ty: Box::new(u(0)),
+            ty: Rc::new(u(0)),
         };
         // claim it has type `Univ 1` (it self-reports `Univ 0`, which lives in `Univ 1` — but the
         // ascription type is `Univ 1`, and a value of type `Univ 0` does have type `Univ 1` by
         // cumulativity; so instead test a genuinely wrong shape: a Pi).
-        let pi = Term::Pi(Grade::Omega, Box::new(u(0)), Box::new(u(0)));
+        let pi = Term::Pi(Grade::Omega, Rc::new(u(0)), Rc::new(u(0)));
         assert!(
             check_top(f, pi).is_err(),
             "foreign of type Univ 0 must not check against a Pi type"
@@ -2820,8 +2821,8 @@ mod tests {
     fn int_arith_checks_at_int() {
         let t = Term::IntPrim {
             op: IntPrimOp::Add,
-            lhs: Box::new(Term::IntLit(2)),
-            rhs: Box::new(Term::IntLit(3)),
+            lhs: Rc::new(Term::IntLit(2)),
+            rhs: Rc::new(Term::IntLit(3)),
         };
         assert!(check_top(t, Term::IntTy).is_ok(), "2 + 3 : Int");
     }
@@ -2831,8 +2832,8 @@ mod tests {
     fn int_add_reduces() {
         let t = Term::IntPrim {
             op: IntPrimOp::Add,
-            lhs: Box::new(Term::IntLit(2)),
-            rhs: Box::new(Term::IntLit(3)),
+            lhs: Rc::new(Term::IntLit(2)),
+            rhs: Rc::new(Term::IntLit(3)),
         };
         let v = eval(&Env::empty(), &t);
         assert_eq!(quote(0, &v), Term::IntLit(5), "2 + 3 ≡ 5");
@@ -2848,14 +2849,14 @@ mod tests {
     fn int_mul_reduces_and_converts() {
         let t = Term::IntPrim {
             op: IntPrimOp::Mul,
-            lhs: Box::new(Term::IntLit(6)),
-            rhs: Box::new(Term::IntLit(7)),
+            lhs: Rc::new(Term::IntLit(6)),
+            rhs: Rc::new(Term::IntLit(7)),
         };
         let v = eval(&Env::empty(), &t);
         assert_eq!(quote(0, &v), Term::IntLit(42));
         // `(the Int (6*7))` is definitionally `42`, so ascribing it against the annotation `42`
         // via `Ann` round-trips through conv.
-        let ann = Term::Ann(Box::new(t), Box::new(Term::IntTy));
+        let ann = Term::Ann(Rc::new(t), Rc::new(Term::IntTy));
         let v2 = eval(&Env::empty(), &ann);
         assert!(conv(0, &v2, &Value::IntLit(42)));
     }
@@ -2865,20 +2866,20 @@ mod tests {
     fn int_compare_reduces() {
         let lt = Term::IntPrim {
             op: IntPrimOp::Lt,
-            lhs: Box::new(Term::IntLit(2)),
-            rhs: Box::new(Term::IntLit(3)),
+            lhs: Rc::new(Term::IntLit(2)),
+            rhs: Rc::new(Term::IntLit(3)),
         };
         assert_eq!(quote(0, &eval(&Env::empty(), &lt)), Term::IntLit(1));
         let eq = Term::IntPrim {
             op: IntPrimOp::Eq,
-            lhs: Box::new(Term::IntLit(3)),
-            rhs: Box::new(Term::IntLit(3)),
+            lhs: Rc::new(Term::IntLit(3)),
+            rhs: Rc::new(Term::IntLit(3)),
         };
         assert_eq!(quote(0, &eval(&Env::empty(), &eq)), Term::IntLit(1));
         let lt_false = Term::IntPrim {
             op: IntPrimOp::Lt,
-            lhs: Box::new(Term::IntLit(5)),
-            rhs: Box::new(Term::IntLit(1)),
+            lhs: Rc::new(Term::IntLit(5)),
+            rhs: Rc::new(Term::IntLit(1)),
         };
         assert_eq!(quote(0, &eval(&Env::empty(), &lt_false)), Term::IntLit(0));
     }
@@ -2891,8 +2892,8 @@ mod tests {
         let env = Env::empty().extend(Value::Neutral(Neutral::Var(0)));
         let t = Term::IntPrim {
             op: IntPrimOp::Add,
-            lhs: Box::new(Term::Var(0)),
-            rhs: Box::new(Term::IntLit(1)),
+            lhs: Rc::new(Term::Var(0)),
+            rhs: Rc::new(Term::IntLit(1)),
         };
         let v = eval(&env, &t);
         // quote at depth 1 (one var in scope) reconstructs `x + 1` (Var(0) + IntLit 1).
@@ -2901,8 +2902,8 @@ mod tests {
             q,
             Term::IntPrim {
                 op: IntPrimOp::Add,
-                lhs: Box::new(Term::Var(0)),
-                rhs: Box::new(Term::IntLit(1)),
+                lhs: Rc::new(Term::Var(0)),
+                rhs: Rc::new(Term::IntLit(1)),
             },
             "x + 1 stays stuck and quotes back"
         );
@@ -2913,8 +2914,8 @@ mod tests {
     fn int_div_by_zero_stuck() {
         let t = Term::IntPrim {
             op: IntPrimOp::Div,
-            lhs: Box::new(Term::IntLit(7)),
-            rhs: Box::new(Term::IntLit(0)),
+            lhs: Rc::new(Term::IntLit(7)),
+            rhs: Rc::new(Term::IntLit(0)),
         };
         let v = eval(&Env::empty(), &t);
         assert_eq!(
@@ -2930,21 +2931,21 @@ mod tests {
         // type: Pi (A :^ω Univ 0). Pi (x :^ω A). A    (A is Var 0 inside the inner Pi)
         let ty = Term::Pi(
             Grade::Omega,
-            Box::new(u(0)),
-            Box::new(Term::Pi(
+            Rc::new(u(0)),
+            Rc::new(Term::Pi(
                 Grade::Omega,
-                Box::new(Term::Var(0)),
-                Box::new(Term::Var(1)),
+                Rc::new(Term::Var(0)),
+                Rc::new(Term::Var(1)),
             )),
         );
-        let term = Term::Lam(Box::new(Term::Lam(Box::new(Term::Var(0)))));
+        let term = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Var(0)))));
         assert!(check_top(term, ty).is_ok(), "polymorphic id checks");
     }
 
     /// A Π type is itself a type: `(x :^ω Univ 0) → Univ 0 : Univ 1`.
     #[test]
     fn pi_formation() {
-        let pi = Term::Pi(Grade::Omega, Box::new(u(0)), Box::new(u(0)));
+        let pi = Term::Pi(Grade::Omega, Rc::new(u(0)), Rc::new(u(0)));
         assert!(check_top(pi, u(1)).is_ok());
     }
 
@@ -2962,7 +2963,7 @@ mod tests {
     fn partial_and_system_have_no_inference_rule() {
         let checker = Checker::new(std::rc::Rc::new(Signature::empty()));
         let ctx = Context::empty();
-        let partial = Term::Partial(crate::term::Cofib::Top, Box::new(u(0)));
+        let partial = Term::Partial(crate::term::Cofib::Top, Rc::new(u(0)));
         assert!(
             matches!(
                 checker.infer_g(&ctx, &partial, Grade::One),
@@ -2992,14 +2993,14 @@ mod tests {
         // The polymorphic identity checks pure.
         let id_ty = Term::Pi(
             Grade::Omega,
-            Box::new(u(0)),
-            Box::new(Term::Pi(
+            Rc::new(u(0)),
+            Rc::new(Term::Pi(
                 Grade::Omega,
-                Box::new(Term::Var(0)),
-                Box::new(Term::Var(1)),
+                Rc::new(Term::Var(0)),
+                Rc::new(Term::Var(1)),
             )),
         );
-        let id = Term::Lam(Box::new(Term::Lam(Box::new(Term::Var(0)))));
+        let id = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Var(0)))));
         let id_ty_val = eval(&checker.env_for(&ctx), &id_ty);
         let (row2, _u2) = checker
             .check_g(&ctx, &id, &id_ty_val, Grade::One)
@@ -3036,7 +3037,7 @@ mod tests {
             effect: crate::row::EffName::new("E"),
             op: "op".into(),
             type_args: vec![],
-            arg: Box::new(arg),
+            arg: Rc::new(arg),
         }
     }
 
@@ -3082,7 +3083,7 @@ mod tests {
             effect: crate::row::EffName::new("E"),
             op: "nope".into(),
             type_args: vec![],
-            arg: Box::new(u(0)),
+            arg: Rc::new(u(0)),
         };
         assert!(matches!(
             checker.infer_g(&ctx, &bad, Grade::One),
@@ -3167,7 +3168,7 @@ mod tests {
             effect: crate::row::EffName::new("Ref"),
             op: "get".into(),
             type_args: vec![flag_ty()],
-            arg: Box::new(tt()),
+            arg: Rc::new(tt()),
         };
         let (ty, row, _u) = checker
             .infer_g(&ctx, &get_flag, Grade::One)
@@ -3183,7 +3184,7 @@ mod tests {
             effect: crate::row::EffName::new("Ref"),
             op: "put".into(),
             type_args: vec![flag_ty()],
-            arg: Box::new(mk_flag()),
+            arg: Rc::new(mk_flag()),
         };
         let (ty2, _row2, _u2) = checker
             .infer_g(&ctx, &put_flag, Grade::One)
@@ -3204,7 +3205,7 @@ mod tests {
             effect: crate::row::EffName::new("Ref"),
             op: "get".into(),
             type_args: vec![],
-            arg: Box::new(tt()),
+            arg: Rc::new(tt()),
         };
         assert!(
             matches!(
@@ -3219,7 +3220,7 @@ mod tests {
             effect: crate::row::EffName::new("Ref"),
             op: "get".into(),
             type_args: vec![flag_ty(), flag_ty()],
-            arg: Box::new(tt()),
+            arg: Rc::new(tt()),
         };
         assert!(
             matches!(
@@ -3234,7 +3235,7 @@ mod tests {
             effect: crate::row::EffName::new("Ref"),
             op: "get".into(),
             type_args: vec![tt()],
-            arg: Box::new(tt()),
+            arg: Rc::new(tt()),
         };
         assert!(
             checker.infer_g(&ctx, &bad_kind, Grade::One).is_err(),
@@ -3253,14 +3254,14 @@ mod tests {
             effect: crate::row::EffName::new("Ref"),
             op: "get".into(),
             type_args: vec![flag_ty()],
-            arg: Box::new(tt()),
+            arg: Rc::new(tt()),
         };
         let term = Term::Handle {
-            body: Box::new(body),
-            return_clause: Box::new(Term::Var(0)),
+            body: Rc::new(body),
+            return_clause: Rc::new(Term::Var(0)),
             op_clauses: vec![(
                 "get".into(),
-                Box::new(Term::App(Box::new(Term::Var(0)), Box::new(Term::Var(1)))),
+                Rc::new(Term::App(Rc::new(Term::Var(0)), Rc::new(Term::Var(1)))),
             )],
         };
         assert!(
@@ -3362,7 +3363,7 @@ mod tests {
             effect: crate::row::EffName::new("E"),
             op: "op".into(),
             type_args: vec![],
-            arg: Box::new(arg),
+            arg: Rc::new(arg),
         }
     }
 
@@ -3370,12 +3371,12 @@ mod tests {
     /// `x : Unit`, `k : Unit → Unit`, `C = Unit`. Resumes `k` with the operation argument.
     fn handle_resume(body: Term) -> Term {
         Term::Handle {
-            body: Box::new(body),
-            return_clause: Box::new(Term::Var(0)), // return x. x
+            body: Rc::new(body),
+            return_clause: Rc::new(Term::Var(0)), // return x. x
             op_clauses: vec![(
                 "op".into(),
                 // op x k. (k x): k is de Bruijn 0, x is de Bruijn 1.
-                Box::new(Term::App(Box::new(Term::Var(0)), Box::new(Term::Var(1)))),
+                Rc::new(Term::App(Rc::new(Term::Var(0)), Rc::new(Term::Var(1)))),
             )],
         }
     }
@@ -3421,11 +3422,11 @@ mod tests {
         let checker = Checker::new(std::rc::Rc::new(unit_eff_sig()));
         let ctx = Context::empty();
         let term = Term::Handle {
-            body: Box::new(perform_e(tt())),
-            return_clause: Box::new(Term::Var(0)),
+            body: Rc::new(perform_e(tt())),
+            return_clause: Rc::new(Term::Var(0)),
             op_clauses: vec![(
                 "op".into(),
-                Box::new(Term::App(Box::new(Term::Var(0)), Box::new(Term::Var(0)))), // k k — ill-typed
+                Rc::new(Term::App(Rc::new(Term::Var(0)), Rc::new(Term::Var(0)))), // k k — ill-typed
             )],
         };
         assert!(
@@ -3470,9 +3471,9 @@ mod tests {
     /// clause's scope, `k` is de Bruijn 0 and `x` (the op argument) is de Bruijn 1.
     fn handle_with_clause(clause: Term) -> Term {
         Term::Handle {
-            body: Box::new(perform_e(tt())),
-            return_clause: Box::new(Term::Var(0)),
-            op_clauses: vec![("op".into(), Box::new(clause))],
+            body: Rc::new(perform_e(tt())),
+            return_clause: Rc::new(Term::Var(0)),
+            op_clauses: vec![("op".into(), Rc::new(clause))],
         }
     }
 
@@ -3484,8 +3485,8 @@ mod tests {
         let ctx = Context::empty();
         // k (k x): both inner and outer application use k (de Bruijn 0); x is de Bruijn 1.
         let double = Term::App(
-            Box::new(Term::Var(0)),
-            Box::new(Term::App(Box::new(Term::Var(0)), Box::new(Term::Var(1)))),
+            Rc::new(Term::Var(0)),
+            Rc::new(Term::App(Rc::new(Term::Var(0)), Rc::new(Term::Var(1)))),
         );
         let term = handle_with_clause(double);
         match checker.infer_g(&ctx, &term, Grade::One) {
@@ -3503,7 +3504,7 @@ mod tests {
         let checker = Checker::new(std::rc::Rc::new(eff_sig_with_cont_grade(Grade::Zero)));
         let ctx = Context::empty();
         // k x
-        let resume_once = Term::App(Box::new(Term::Var(0)), Box::new(Term::Var(1)));
+        let resume_once = Term::App(Rc::new(Term::Var(0)), Rc::new(Term::Var(1)));
         let term = handle_with_clause(resume_once);
         match checker.infer_g(&ctx, &term, Grade::One) {
             Err(TypeError::GradeViolation(_)) => {}
@@ -3518,8 +3519,8 @@ mod tests {
         let checker = Checker::new(std::rc::Rc::new(eff_sig_with_cont_grade(Grade::Omega)));
         let ctx = Context::empty();
         let double = Term::App(
-            Box::new(Term::Var(0)),
-            Box::new(Term::App(Box::new(Term::Var(0)), Box::new(Term::Var(1)))),
+            Rc::new(Term::Var(0)),
+            Rc::new(Term::App(Rc::new(Term::Var(0)), Rc::new(Term::Var(1)))),
         );
         let term = handle_with_clause(double);
         let (ty, row, _u) = checker
@@ -3547,8 +3548,8 @@ mod tests {
         let ctx = Context::empty();
         // send x k. k (k x): the scheduler resumes the sender twice — illegal at grade 1.
         let double = Term::App(
-            Box::new(Term::Var(0)),
-            Box::new(Term::App(Box::new(Term::Var(0)), Box::new(Term::Var(1)))),
+            Rc::new(Term::Var(0)),
+            Rc::new(Term::App(Rc::new(Term::Var(0)), Rc::new(Term::Var(1)))),
         );
         let term = handle_with_clause(double);
         match checker.infer_g(&ctx, &term, Grade::One) {
@@ -3568,8 +3569,8 @@ mod tests {
         let checker = Checker::new(std::rc::Rc::new(eff_sig_with_cont_grade(Grade::Omega)));
         let ctx = Context::empty();
         let double = Term::App(
-            Box::new(Term::Var(0)),
-            Box::new(Term::App(Box::new(Term::Var(0)), Box::new(Term::Var(1)))),
+            Rc::new(Term::Var(0)),
+            Rc::new(Term::App(Rc::new(Term::Var(0)), Rc::new(Term::Var(1)))),
         );
         let term = handle_with_clause(double);
         let (ty, row, _u) = checker
@@ -3619,7 +3620,7 @@ mod tests {
             effect: crate::row::EffName::new("F"),
             op: "fop".into(),
             type_args: vec![],
-            arg: Box::new(tt()),
+            arg: Rc::new(tt()),
         };
         // Handler only handles `op` (of E), not `fop` (of F).
         let term = handle_resume(fop);
@@ -3656,7 +3657,7 @@ mod tests {
             effect: crate::row::EffName::new("F"),
             op: "fop".into(),
             type_args: vec![],
-            arg: Box::new(tt()),
+            arg: Rc::new(tt()),
         };
         let term = handle_resume(fop);
         let v = eval(&checker.env_for(&ctx), &term);
@@ -3671,9 +3672,9 @@ mod tests {
     #[test]
     fn application_respects_domain() {
         // id at Univ 1 : (x :^ω Univ 1) → Univ 1, applied to Univ 0 (since Univ 0 : Univ 1).
-        let id_ty = Term::Pi(Grade::Omega, Box::new(u(1)), Box::new(u(1)));
-        let id = Term::Lam(Box::new(Term::Var(0)));
-        let ascribed = Term::App(Box::new(annotate(id, id_ty)), Box::new(u(0)));
+        let id_ty = Term::Pi(Grade::Omega, Rc::new(u(1)), Rc::new(u(1)));
+        let id = Term::Lam(Rc::new(Term::Var(0)));
+        let ascribed = Term::App(Rc::new(annotate(id, id_ty)), Rc::new(u(0)));
         // result type is Univ 1; check it.
         assert!(check_top(ascribed, u(1)).is_ok());
     }
@@ -3681,7 +3682,7 @@ mod tests {
     /// Type mismatch is rejected: `Univ 0` does not check against `(x:^ω Univ0)→Univ0`.
     #[test]
     fn mismatch_rejected() {
-        let pi = Term::Pi(Grade::Omega, Box::new(u(0)), Box::new(u(0)));
+        let pi = Term::Pi(Grade::Omega, Rc::new(u(0)), Rc::new(u(0)));
         assert!(check_top(u(0), pi).is_err());
     }
 
@@ -3692,7 +3693,7 @@ mod tests {
         // a dedicated Ann node. The kernel exposes annotation through check, so for inference of
         // an application head we rely on the elaborator normally. For this unit test we use the
         // Ann term variant.
-        Term::Ann(Box::new(term), Box::new(ty))
+        Term::Ann(Rc::new(term), Rc::new(ty))
     }
 
     // ---- L3: inductive families + dependent Elim (spec §2.7) ----
@@ -3819,17 +3820,17 @@ mod tests {
     #[test]
     fn elim_iota_identity_recursor() {
         // motive: λ (_:Nat). Nat
-        let motive = Term::Lam(Box::new(nat_ty()));
+        let motive = Term::Lam(Rc::new(nat_ty()));
         // method_zero : Nat = zero
         let method_zero = zero();
         // method_succ : (n:Nat) → (ih:Nat) → Nat  =  λ n. λ ih. succ ih
-        let method_succ = Term::Lam(Box::new(Term::Lam(Box::new(succ(Term::Var(0))))));
+        let method_succ = Term::Lam(Rc::new(Term::Lam(Rc::new(succ(Term::Var(0))))));
         let scrut = succ(succ(zero()));
         let elim = Term::Elim {
             data: nat_name(),
-            motive: Box::new(motive),
+            motive: Rc::new(motive),
             methods: vec![method_zero, method_succ],
-            scrutinee: Box::new(scrut),
+            scrutinee: Rc::new(scrut),
         };
         // The recursor rebuilds the number, so it has type Nat and equals succ (succ zero).
         assert!(
@@ -3855,15 +3856,15 @@ mod tests {
     /// reduce to `succ zero`.
     #[test]
     fn elim_iota_computes_method() {
-        let motive = Term::Lam(Box::new(nat_ty()));
+        let motive = Term::Lam(Rc::new(nat_ty()));
         let method_zero = zero();
         // λ n. λ ih. succ zero   (ignores recursion, returns 1)
-        let method_succ = Term::Lam(Box::new(Term::Lam(Box::new(succ(zero())))));
+        let method_succ = Term::Lam(Rc::new(Term::Lam(Rc::new(succ(zero())))));
         let elim = |scrut: Term| Term::Elim {
             data: nat_name(),
-            motive: Box::new(motive.clone()),
+            motive: Rc::new(motive.clone()),
             methods: vec![method_zero.clone(), method_succ.clone()],
-            scrutinee: Box::new(scrut),
+            scrutinee: Rc::new(scrut),
         };
         let sig = std::rc::Rc::new(nat_sig());
         let checker = Checker::new(sig);
@@ -3897,8 +3898,8 @@ mod tests {
                 name: ConName("mk".into()),
                 args: vec![Arg::NonRec(Term::Pi(
                     Grade::Omega,
-                    Box::new(Term::Data(bad_name.clone(), vec![], vec![])),
-                    Box::new(Term::Data(bad_name.clone(), vec![], vec![])),
+                    Rc::new(Term::Data(bad_name.clone(), vec![], vec![])),
+                    Rc::new(Term::Data(bad_name.clone(), vec![], vec![])),
                 ))],
                 result_indices: vec![],
             }],
@@ -4025,14 +4026,14 @@ mod tests {
         let ctx = Context::empty();
 
         // motive: λ_. Bool (non-dependent motive into Bool)
-        let motive = Term::Lam(Box::new(bool_ty()));
+        let motive = Term::Lam(Rc::new(bool_ty()));
         // point method (base ↦ false); path method (loop ↦ the constant path at false)
-        let path_method = Term::PLam(Box::new(bool_false()));
+        let path_method = Term::PLam(Rc::new(bool_false()));
         let elim = |scrut: Term| Term::Elim {
             data: s1_name(),
-            motive: Box::new(motive.clone()),
+            motive: Rc::new(motive.clone()),
             methods: vec![bool_false(), path_method.clone()],
-            scrutinee: Box::new(scrut),
+            scrutinee: Rc::new(scrut),
         };
 
         assert!(
@@ -4065,21 +4066,21 @@ mod tests {
     /// two ends.
     #[test]
     fn hit_path_constructor_elim_commutes_along_the_path() {
-        let motive = Term::Lam(Box::new(bool_ty()));
-        let path_method = Term::PLam(Box::new(bool_false()));
+        let motive = Term::Lam(Rc::new(bool_ty()));
+        let path_method = Term::PLam(Rc::new(bool_false()));
         let elim_of_loop_at = |dim: Iv| Term::Elim {
             data: s1_name(),
-            motive: Box::new(motive.clone()),
+            motive: Rc::new(motive.clone()),
             methods: vec![bool_false(), path_method.clone()],
-            scrutinee: Box::new(s1_loop(dim)),
+            scrutinee: Rc::new(s1_loop(dim)),
         };
         // λ i. S¹-elim motive [false, plam _. false] (loop @ i)
-        let proof = Term::PLam(Box::new(elim_of_loop_at(Iv::Dim(0))));
+        let proof = Term::PLam(Rc::new(elim_of_loop_at(Iv::Dim(0))));
         // : PathP (_. Bool) false false
         let path_ty = Term::PathP {
-            family: Box::new(bool_ty()),
-            lhs: Box::new(bool_false()),
-            rhs: Box::new(bool_false()),
+            family: Rc::new(bool_ty()),
+            lhs: Rc::new(bool_false()),
+            rhs: Rc::new(bool_false()),
         };
         assert!(
             check_top_with(s1_bool_sig(), proof, path_ty).is_ok(),
@@ -4094,20 +4095,20 @@ mod tests {
     /// `path_method_type` (spec §2.7) does not, by itself, protect the *caller's* stated boundary.
     #[test]
     fn hit_path_constructor_elim_wrong_boundary_rejected() {
-        let motive = Term::Lam(Box::new(bool_ty()));
-        let path_method = Term::PLam(Box::new(bool_false()));
+        let motive = Term::Lam(Rc::new(bool_ty()));
+        let path_method = Term::PLam(Rc::new(bool_false()));
         let elim_of_loop_at = |dim: Iv| Term::Elim {
             data: s1_name(),
-            motive: Box::new(motive.clone()),
+            motive: Rc::new(motive.clone()),
             methods: vec![bool_false(), path_method.clone()],
-            scrutinee: Box::new(s1_loop(dim)),
+            scrutinee: Rc::new(s1_loop(dim)),
         };
-        let proof = Term::PLam(Box::new(elim_of_loop_at(Iv::Dim(0))));
+        let proof = Term::PLam(Rc::new(elim_of_loop_at(Iv::Dim(0))));
         // : PathP (_. Bool) false true  — wrong rhs boundary (both actually reduce to `false`).
         let bad_path_ty = Term::PathP {
-            family: Box::new(bool_ty()),
-            lhs: Box::new(bool_false()),
-            rhs: Box::new(Term::Con(ConName("true".into()), vec![])),
+            family: Rc::new(bool_ty()),
+            lhs: Rc::new(bool_false()),
+            rhs: Rc::new(Term::Con(ConName("true".into()), vec![])),
         };
         assert!(
             check_top_with(s1_bool_sig(), proof, bad_path_ty).is_err(),
@@ -4122,15 +4123,15 @@ mod tests {
     /// again. Shared by the two `grades_across_hit_path_induction_*` probes below, which differ
     /// only in the outer `Pi`'s declared grade for `x`.
     fn hit_elim_using_binder_in_both_point_and_path_method() -> Term {
-        let motive = Term::Lam(Box::new(bool_ty()));
-        let methods = vec![Term::Var(0), Term::PLam(Box::new(Term::Var(0)))];
+        let motive = Term::Lam(Rc::new(bool_ty()));
+        let methods = vec![Term::Var(0), Term::PLam(Rc::new(Term::Var(0)))];
         let body = Term::Elim {
             data: s1_name(),
-            motive: Box::new(motive),
+            motive: Rc::new(motive),
             methods,
-            scrutinee: Box::new(s1_base()),
+            scrutinee: Rc::new(s1_base()),
         };
-        Term::Lam(Box::new(body))
+        Term::Lam(Rc::new(body))
     }
 
     /// **Probe** (spec's Wave 7/E4 "obligation 3", `docs/metatheory.md` §1.3): does eliminating a
@@ -4143,7 +4144,7 @@ mod tests {
     #[test]
     fn grades_across_hit_path_induction_unrestricted_accepted() {
         let term = hit_elim_using_binder_in_both_point_and_path_method();
-        let ty = Term::Pi(Grade::Omega, Box::new(bool_ty()), Box::new(bool_ty()));
+        let ty = Term::Pi(Grade::Omega, Rc::new(bool_ty()), Rc::new(bool_ty()));
         assert!(
             check_top_with(s1_bool_sig(), term, ty).is_ok(),
             "an unrestricted (ω) resource referenced by both the point and path method must check"
@@ -4171,7 +4172,7 @@ mod tests {
     #[test]
     fn grades_across_hit_path_induction_linear_double_use_rejected() {
         let term = hit_elim_using_binder_in_both_point_and_path_method();
-        let ty = Term::Pi(Grade::One, Box::new(bool_ty()), Box::new(bool_ty()));
+        let ty = Term::Pi(Grade::One, Rc::new(bool_ty()), Rc::new(bool_ty()));
         match check_top_with(s1_bool_sig(), term, ty) {
             Err(TypeError::GradeViolation(_)) => {}
             other => panic!(
@@ -4190,11 +4191,11 @@ mod tests {
     #[test]
     fn refl_checks_as_constant_path() {
         let path_ty = Term::PathP {
-            family: Box::new(nat_ty()), // constant line `i. Nat`
-            lhs: Box::new(zero()),
-            rhs: Box::new(zero()),
+            family: Rc::new(nat_ty()), // constant line `i. Nat`
+            lhs: Rc::new(zero()),
+            rhs: Rc::new(zero()),
         };
-        let refl = Term::PLam(Box::new(zero())); // λ i. zero
+        let refl = Term::PLam(Rc::new(zero())); // λ i. zero
         assert!(
             check_top_with(nat_sig(), refl, path_ty).is_ok(),
             "refl : Path Nat zero zero"
@@ -4206,11 +4207,11 @@ mod tests {
     #[test]
     fn path_boundary_mismatch_rejected() {
         let path_ty = Term::PathP {
-            family: Box::new(nat_ty()),
-            lhs: Box::new(zero()),
-            rhs: Box::new(succ(zero())),
+            family: Rc::new(nat_ty()),
+            lhs: Rc::new(zero()),
+            rhs: Rc::new(succ(zero())),
         };
-        let bad = Term::PLam(Box::new(zero()));
+        let bad = Term::PLam(Rc::new(zero()));
         assert!(
             check_top_with(nat_sig(), bad, path_ty).is_err(),
             "bad boundary must be rejected"
@@ -4221,9 +4222,9 @@ mod tests {
     #[test]
     fn pathp_formation() {
         let path_ty = Term::PathP {
-            family: Box::new(nat_ty()),
-            lhs: Box::new(zero()),
-            rhs: Box::new(zero()),
+            family: Rc::new(nat_ty()),
+            lhs: Rc::new(zero()),
+            rhs: Rc::new(zero()),
         };
         assert!(check_top_with(nat_sig(), path_ty, u(0)).is_ok());
     }
@@ -4234,14 +4235,14 @@ mod tests {
     fn papp_at_endpoint_types_and_computes() {
         // p : Path Nat (succ zero) (succ zero), p = λ i. succ zero.
         let p = Term::Ann(
-            Box::new(Term::PLam(Box::new(succ(zero())))),
-            Box::new(Term::PathP {
-                family: Box::new(nat_ty()),
-                lhs: Box::new(succ(zero())),
-                rhs: Box::new(succ(zero())),
+            Rc::new(Term::PLam(Rc::new(succ(zero())))),
+            Rc::new(Term::PathP {
+                family: Rc::new(nat_ty()),
+                lhs: Rc::new(succ(zero())),
+                rhs: Rc::new(succ(zero())),
             }),
         );
-        let app = Term::PApp(Box::new(p), Iv::I0);
+        let app = Term::PApp(Rc::new(p), Iv::I0);
         assert!(
             check_top_with(nat_sig(), app.clone(), nat_ty()).is_ok(),
             "p @ 0 : Nat"
@@ -4262,14 +4263,14 @@ mod tests {
     fn linear_var_used_once_ok() {
         let ty = Term::Pi(
             Grade::Zero,
-            Box::new(u(0)),
-            Box::new(Term::Pi(
+            Rc::new(u(0)),
+            Rc::new(Term::Pi(
                 Grade::One,
-                Box::new(Term::Var(0)),
-                Box::new(Term::Var(1)),
+                Rc::new(Term::Var(0)),
+                Rc::new(Term::Var(1)),
             )),
         );
-        let term = Term::Lam(Box::new(Term::Lam(Box::new(Term::Var(0)))));
+        let term = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Var(0)))));
         assert_eq!(
             check_top(term, ty).map(|_| ()),
             Ok(()),
@@ -4282,19 +4283,19 @@ mod tests {
     #[test]
     fn linear_var_used_twice_rejected() {
         // In scope [A, x]: A is Var(1); inside the Σ codomain one more binder ⟹ A is Var(2).
-        let sigma_ty = Term::Sigma(Box::new(Term::Var(1)), Box::new(Term::Var(2)));
+        let sigma_ty = Term::Sigma(Rc::new(Term::Var(1)), Rc::new(Term::Var(2)));
         let ty = Term::Pi(
             Grade::Zero,
-            Box::new(u(0)),
-            Box::new(Term::Pi(
+            Rc::new(u(0)),
+            Rc::new(Term::Pi(
                 Grade::One,
-                Box::new(Term::Var(0)),
-                Box::new(sigma_ty),
+                Rc::new(Term::Var(0)),
+                Rc::new(sigma_ty),
             )),
         );
-        let term = Term::Lam(Box::new(Term::Lam(Box::new(Term::Pair(
-            Box::new(Term::Var(0)),
-            Box::new(Term::Var(0)),
+        let term = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Pair(
+            Rc::new(Term::Var(0)),
+            Rc::new(Term::Var(0)),
         )))));
         match check_top(term, ty) {
             Err(TypeError::GradeViolation(_)) => {}
@@ -4309,18 +4310,18 @@ mod tests {
     fn linear_var_dropped_allowed_affine() {
         let ty = Term::Pi(
             Grade::Zero,
-            Box::new(u(0)),
-            Box::new(Term::Pi(
+            Rc::new(u(0)),
+            Rc::new(Term::Pi(
                 Grade::One,
-                Box::new(Term::Var(0)),
-                Box::new(Term::Pi(
+                Rc::new(Term::Var(0)),
+                Rc::new(Term::Pi(
                     Grade::Omega,
-                    Box::new(Term::Var(1)),
-                    Box::new(Term::Var(2)),
+                    Rc::new(Term::Var(1)),
+                    Rc::new(Term::Var(2)),
                 )),
             )),
         );
-        let term = Term::Lam(Box::new(Term::Lam(Box::new(Term::Lam(Box::new(
+        let term = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(
             Term::Var(0),
         ))))));
         assert!(
@@ -4334,19 +4335,19 @@ mod tests {
     #[test]
     fn omega_var_used_twice_ok() {
         // In scope [A, x]: A is Var(1); inside the Σ codomain ⟹ A is Var(2).
-        let sigma_ty = Term::Sigma(Box::new(Term::Var(1)), Box::new(Term::Var(2)));
+        let sigma_ty = Term::Sigma(Rc::new(Term::Var(1)), Rc::new(Term::Var(2)));
         let ty = Term::Pi(
             Grade::Zero,
-            Box::new(u(0)),
-            Box::new(Term::Pi(
+            Rc::new(u(0)),
+            Rc::new(Term::Pi(
                 Grade::Omega,
-                Box::new(Term::Var(0)),
-                Box::new(sigma_ty),
+                Rc::new(Term::Var(0)),
+                Rc::new(sigma_ty),
             )),
         );
-        let term = Term::Lam(Box::new(Term::Lam(Box::new(Term::Pair(
-            Box::new(Term::Var(0)),
-            Box::new(Term::Var(0)),
+        let term = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Pair(
+            Rc::new(Term::Var(0)),
+            Rc::new(Term::Var(0)),
         )))));
         assert!(
             check_top(term, ty).is_ok(),
@@ -4360,22 +4361,22 @@ mod tests {
     /// each demand `x`, summing to ω on the linear `x`.
     #[test]
     fn app_scales_argument_usage() {
-        let a_to_a = || Term::Pi(Grade::Omega, Box::new(Term::Var(1)), Box::new(Term::Var(2)));
+        let a_to_a = || Term::Pi(Grade::Omega, Rc::new(Term::Var(1)), Rc::new(Term::Var(2)));
         // type: (A:^0 U0) -> (f:^ω (A->A)) -> (x:^1 A) -> A
         let ty = Term::Pi(
             Grade::Zero,
-            Box::new(u(0)),
-            Box::new(Term::Pi(
+            Rc::new(u(0)),
+            Rc::new(Term::Pi(
                 Grade::Omega,
-                Box::new(Term::Pi(
+                Rc::new(Term::Pi(
                     Grade::Omega,
-                    Box::new(Term::Var(0)),
-                    Box::new(Term::Var(1)),
+                    Rc::new(Term::Var(0)),
+                    Rc::new(Term::Var(1)),
                 )),
-                Box::new(Term::Pi(
+                Rc::new(Term::Pi(
                     Grade::One,
-                    Box::new(Term::Var(1)),
-                    Box::new(Term::Var(2)),
+                    Rc::new(Term::Var(1)),
+                    Rc::new(Term::Var(2)),
                 )),
             )),
         );
@@ -4385,30 +4386,30 @@ mod tests {
         // *double* demand we instead use (f x) paired with x. See below.
         // Use: λ A. λ f. λ x. (f x, x) : ... -> Σ A A, demanding x twice (once directly, once via f).
         // In scope [A, f, x]: A is Var(2); inside the Σ codomain ⟹ A is Var(3).
-        let sigma_ty = Term::Sigma(Box::new(Term::Var(2)), Box::new(Term::Var(3)));
+        let sigma_ty = Term::Sigma(Rc::new(Term::Var(2)), Rc::new(Term::Var(3)));
         let ty2 = Term::Pi(
             Grade::Zero,
-            Box::new(u(0)),
-            Box::new(Term::Pi(
+            Rc::new(u(0)),
+            Rc::new(Term::Pi(
                 Grade::Omega,
-                Box::new(Term::Pi(
+                Rc::new(Term::Pi(
                     Grade::Omega,
-                    Box::new(Term::Var(0)),
-                    Box::new(Term::Var(1)),
+                    Rc::new(Term::Var(0)),
+                    Rc::new(Term::Var(1)),
                 )),
-                Box::new(Term::Pi(
+                Rc::new(Term::Pi(
                     Grade::One,
-                    Box::new(Term::Var(1)),
-                    Box::new(sigma_ty),
+                    Rc::new(Term::Var(1)),
+                    Rc::new(sigma_ty),
                 )),
             )),
         );
         let _ = ty;
         // λ A. λ f. λ x. (f x, x)
-        let body = Term::Lam(Box::new(Term::Lam(Box::new(Term::Lam(Box::new(
+        let body = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(
             Term::Pair(
-                Box::new(Term::App(Box::new(Term::Var(1)), Box::new(Term::Var(0)))),
-                Box::new(Term::Var(0)),
+                Rc::new(Term::App(Rc::new(Term::Var(1)), Rc::new(Term::Var(0)))),
+                Rc::new(Term::Var(0)),
             ),
         ))))));
         match check_top(body, ty2) {
@@ -4427,8 +4428,8 @@ mod tests {
     /// `λ (n :^0 Nat). zero : (n :^0 Nat) → Nat`. The body never mentions `n`, demand 0 ≤ 0.
     #[test]
     fn erased_var_not_used_ok() {
-        let ty = Term::Pi(Grade::Zero, Box::new(nat_ty()), Box::new(nat_ty()));
-        let term = Term::Lam(Box::new(zero()));
+        let ty = Term::Pi(Grade::Zero, Rc::new(nat_ty()), Rc::new(nat_ty()));
+        let term = Term::Lam(Rc::new(zero()));
         assert!(
             check_top_with(nat_sig(), term, ty).is_ok(),
             "erased binder unused at runtime is fine"
@@ -4440,8 +4441,8 @@ mod tests {
     /// value may never flow into a runtime-relevant position.
     #[test]
     fn runtime_use_of_erased_var_rejected() {
-        let ty = Term::Pi(Grade::Zero, Box::new(nat_ty()), Box::new(nat_ty()));
-        let term = Term::Lam(Box::new(Term::Var(0)));
+        let ty = Term::Pi(Grade::Zero, Rc::new(nat_ty()), Rc::new(nat_ty()));
+        let term = Term::Lam(Rc::new(Term::Var(0)));
         match check_top_with(nat_sig(), term, ty) {
             Err(TypeError::GradeViolation(_)) => {}
             other => panic!("expected GradeViolation for runtime use of erased var, got {other:?}"),
@@ -4456,14 +4457,14 @@ mod tests {
     fn erased_type_param_not_charged() {
         let ty = Term::Pi(
             Grade::Zero,
-            Box::new(u(0)),
-            Box::new(Term::Pi(
+            Rc::new(u(0)),
+            Rc::new(Term::Pi(
                 Grade::One,
-                Box::new(Term::Var(0)),
-                Box::new(Term::Var(1)),
+                Rc::new(Term::Var(0)),
+                Rc::new(Term::Var(1)),
             )),
         );
-        let term = Term::Lam(Box::new(Term::Lam(Box::new(Term::Var(0)))));
+        let term = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Var(0)))));
         assert!(
             check_top(term, ty).is_ok(),
             "type-only parameter must not be charged at runtime"
@@ -4526,20 +4527,20 @@ mod tests {
         // scrutinee : Vec Nat (succ zero) = vcons zero zero vnil  (one element)
         let vnil = Term::Con(ConName("vnil".into()), vec![]);
         let one_vec = Term::Con(ConName("vcons".into()), vec![zero(), zero(), vnil.clone()]);
-        let scrut = Term::Ann(Box::new(one_vec), Box::new(vec_ty(nat_ty(), succ(zero()))));
+        let scrut = Term::Ann(Rc::new(one_vec), Rc::new(vec_ty(nat_ty(), succ(zero()))));
         // motive : λ (n:Nat). λ (_:Vec Nat n). Nat
-        let motive = Term::Lam(Box::new(Term::Lam(Box::new(nat_ty()))));
+        let motive = Term::Lam(Rc::new(Term::Lam(Rc::new(nat_ty()))));
         // method vnil : Nat = zero
         let m_vnil = zero();
         // method vcons : (n:Nat)→(x:Nat)→(xs:Vec Nat n)→(ih:Nat)→Nat = λ.λ.λ.λ. succ ih
-        let m_vcons = Term::Lam(Box::new(Term::Lam(Box::new(Term::Lam(Box::new(
-            Term::Lam(Box::new(succ(Term::Var(0)))),
+        let m_vcons = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(
+            Term::Lam(Rc::new(succ(Term::Var(0)))),
         ))))));
         let elim = Term::Elim {
             data: vec_name(),
-            motive: Box::new(motive),
+            motive: Rc::new(motive),
             methods: vec![m_vnil, m_vcons],
-            scrutinee: Box::new(scrut),
+            scrutinee: Rc::new(scrut),
         };
         // The recursor counts elements ⟹ result is `succ zero : Nat`.
         let proof = check_top_with(vec_sig(), elim.clone(), nat_ty())
@@ -4549,7 +4550,7 @@ mod tests {
         // (succ zero ≠ zero), so checking the recursor's value is succ zero, not zero.
         assert!(check_top_with(
             vec_sig(),
-            Term::Ann(Box::new(elim), Box::new(nat_ty())),
+            Term::Ann(Rc::new(elim), Rc::new(nat_ty())),
             nat_ty()
         )
         .is_ok());
@@ -4595,20 +4596,20 @@ mod tests {
                 Term::Con(ConName("lcons".into()), vec![zero(), lnil]),
             ],
         );
-        let scrut = Term::Ann(Box::new(two), Box::new(list_nat.clone()));
+        let scrut = Term::Ann(Rc::new(two), Rc::new(list_nat.clone()));
         // motive : λ (_:List Nat). Nat
-        let motive = Term::Lam(Box::new(nat_ty()));
+        let motive = Term::Lam(Rc::new(nat_ty()));
         // method lnil = zero
         let m_lnil = zero();
         // method lcons : (x:Nat)→(xs:List Nat)→(ih:Nat)→Nat = λ.λ.λ. succ ih
-        let m_lcons = Term::Lam(Box::new(Term::Lam(Box::new(Term::Lam(Box::new(succ(
+        let m_lcons = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(succ(
             Term::Var(0),
         )))))));
         let elim = Term::Elim {
             data: DataName("List".into()),
-            motive: Box::new(motive),
+            motive: Rc::new(motive),
             methods: vec![m_lnil, m_lcons],
-            scrutinee: Box::new(scrut),
+            scrutinee: Rc::new(scrut),
         };
         assert!(
             check_top_with(list_sig(), elim, nat_ty()).is_ok(),
@@ -4652,15 +4653,15 @@ mod tests {
         );
         // scrutinee : Pair Nat Nat = mk (succ zero) zero (needs ascription — parameterized family).
         let mk = Term::Con(ConName("mk".into()), vec![succ(zero()), zero()]);
-        let scrut = Term::Ann(Box::new(mk), Box::new(pair_nat_nat.clone()));
+        let scrut = Term::Ann(Rc::new(mk), Rc::new(pair_nat_nat.clone()));
         // motive : λ (_ : Pair Nat Nat). Nat ; method mk : (x:Nat)→(y:Nat)→Nat = λ x. λ y. x.
-        let motive = Term::Lam(Box::new(nat_ty()));
-        let m_mk = Term::Lam(Box::new(Term::Lam(Box::new(Term::Var(1)))));
+        let motive = Term::Lam(Rc::new(nat_ty()));
+        let m_mk = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Var(1)))));
         let elim = Term::Elim {
             data: DataName("Pair".into()),
-            motive: Box::new(motive),
+            motive: Rc::new(motive),
             methods: vec![m_mk],
-            scrutinee: Box::new(scrut),
+            scrutinee: Rc::new(scrut),
         };
         // fst (mk (succ zero) zero) = succ zero.
         let r = check_top_with(pair_sig(), elim, nat_ty());
@@ -4702,13 +4703,13 @@ mod tests {
         // scrutinee : Square zero zero = corner.
         let scrut = Term::Con(ConName("corner".into()), vec![]);
         // motive : λ m. λ n. λ (_:Square m n). Nat ; method corner : Nat = zero.
-        let motive = Term::Lam(Box::new(Term::Lam(Box::new(Term::Lam(Box::new(nat_ty()))))));
+        let motive = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(nat_ty()))))));
         let m_corner = zero();
         let elim = Term::Elim {
             data: DataName("Square".into()),
-            motive: Box::new(motive),
+            motive: Rc::new(motive),
             methods: vec![m_corner],
-            scrutinee: Box::new(scrut),
+            scrutinee: Rc::new(scrut),
         };
         assert!(
             check_top_with(square_sig(), elim, nat_ty()).is_ok(),
@@ -4743,8 +4744,8 @@ mod tests {
         let unit = Term::Data(DataName("Unit".into()), vec![], vec![]);
         let tt = Term::Con(ConName("tt".into()), vec![]);
         // later (now tt) : Delay Unit
-        let partial = Term::Later(Box::new(Term::Now(Box::new(tt))));
-        let delay_unit = Term::Delay(Box::new(unit));
+        let partial = Term::Later(Rc::new(Term::Now(Rc::new(tt))));
+        let delay_unit = Term::Delay(Rc::new(unit));
         match check_top_with(unit_only_sig(), partial, delay_unit) {
             Err(TypeError::EffectError(msg)) => {
                 assert!(
@@ -4762,8 +4763,8 @@ mod tests {
     fn total_proof_accepted() {
         let unit = Term::Data(DataName("Unit".into()), vec![], vec![]);
         let tt = Term::Con(ConName("tt".into()), vec![]);
-        let now_tt = Term::Now(Box::new(tt));
-        let delay_unit = Term::Delay(Box::new(unit));
+        let now_tt = Term::Now(Rc::new(tt));
+        let delay_unit = Term::Delay(Rc::new(unit));
         check_top_with(unit_only_sig(), now_tt, delay_unit)
             .expect("a total `now tt : Delay Unit` is a valid proof");
     }
@@ -4775,7 +4776,7 @@ mod tests {
     fn force_now_reduces_to_value() {
         let tt = Term::Con(ConName("tt".into()), vec![]);
         // force (now tt)
-        let term = Term::Force(Box::new(Term::Now(Box::new(tt.clone()))));
+        let term = Term::Force(Rc::new(Term::Now(Rc::new(tt.clone()))));
         let sig = std::rc::Rc::new(unit_only_sig());
         let v = eval(&Env::with_sig(sig), &term);
         let q = quote(0, &v);
@@ -4793,7 +4794,7 @@ mod tests {
         let q = quote(1, &forced);
         assert_eq!(
             q,
-            Term::Force(Box::new(Term::Var(0))),
+            Term::Force(Rc::new(Term::Var(0))),
             "force on a neutral quotes to `force x`"
         );
     }
@@ -4804,14 +4805,14 @@ mod tests {
     fn force_later_stays_guarded() {
         let tt = Term::Con(ConName("tt".into()), vec![]);
         // later (now tt) : Delay Unit, then force it.
-        let inner = Term::Later(Box::new(Term::Now(Box::new(tt.clone()))));
-        let term = Term::Force(Box::new(inner.clone()));
+        let inner = Term::Later(Rc::new(Term::Now(Rc::new(tt.clone()))));
+        let term = Term::Force(Rc::new(inner.clone()));
         let sig = std::rc::Rc::new(unit_only_sig());
         let v = eval(&Env::with_sig(sig), &term);
         let q = quote(0, &v);
         assert_eq!(
             q,
-            Term::Force(Box::new(inner)),
+            Term::Force(Rc::new(inner)),
             "force (later d) stays a guarded `force (later d)`"
         );
     }
@@ -4824,7 +4825,7 @@ mod tests {
         let unit = Term::Data(DataName("Unit".into()), vec![], vec![]);
         let tt = Term::Con(ConName("tt".into()), vec![]);
         // force (now tt) : Unit — well-typed, but partial.
-        let term = Term::Force(Box::new(Term::Now(Box::new(tt))));
+        let term = Term::Force(Rc::new(Term::Now(Rc::new(tt))));
         match check_top_with(unit_only_sig(), term, unit) {
             Err(TypeError::EffectError(msg)) => {
                 assert!(
@@ -4867,19 +4868,19 @@ mod tests {
         // (A :^0 U0) → (x :^0 A) → A
         let ty = Term::Pi(
             Grade::Zero,
-            Box::new(u(0)),
-            Box::new(Term::Pi(
+            Rc::new(u(0)),
+            Rc::new(Term::Pi(
                 Grade::Zero,
-                Box::new(Term::Var(0)),
-                Box::new(Term::Var(1)),
+                Rc::new(Term::Var(0)),
+                Rc::new(Term::Var(1)),
             )),
         );
         // body: λ A. λ x. transp (i. A) ⊥ x.  Inside the family's dim binder, `A` is still Var(1)
         // (dims add no term binder); the base `x` is Var(0).
-        let body = Term::Lam(Box::new(Term::Lam(Box::new(Term::Transp {
-            family: Box::new(Term::Var(1)),
+        let body = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Transp {
+            family: Rc::new(Term::Var(1)),
             cofib: Cofib::Bot,
-            base: Box::new(Term::Var(0)),
+            base: Rc::new(Term::Var(0)),
         }))));
         match check_top(body, ty) {
             Err(TypeError::GradeViolation(_)) => {}
@@ -4896,17 +4897,17 @@ mod tests {
     fn transp_base_omega_var_accepted() {
         let ty = Term::Pi(
             Grade::Zero,
-            Box::new(u(0)),
-            Box::new(Term::Pi(
+            Rc::new(u(0)),
+            Rc::new(Term::Pi(
                 Grade::Omega,
-                Box::new(Term::Var(0)),
-                Box::new(Term::Var(1)),
+                Rc::new(Term::Var(0)),
+                Rc::new(Term::Var(1)),
             )),
         );
-        let body = Term::Lam(Box::new(Term::Lam(Box::new(Term::Transp {
-            family: Box::new(Term::Var(1)),
+        let body = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Transp {
+            family: Rc::new(Term::Var(1)),
             cofib: Cofib::Bot,
-            base: Box::new(Term::Var(0)),
+            base: Rc::new(Term::Var(0)),
         }))));
         assert!(
             check_top(body, ty).is_ok(),
@@ -4924,17 +4925,17 @@ mod tests {
         // (A :^0 U0) → (x :^ω A) → A, body transports x along the constant line `i. A`.
         let ty = Term::Pi(
             Grade::Zero,
-            Box::new(u(0)),
-            Box::new(Term::Pi(
+            Rc::new(u(0)),
+            Rc::new(Term::Pi(
                 Grade::Omega,
-                Box::new(Term::Var(0)),
-                Box::new(Term::Var(1)),
+                Rc::new(Term::Var(0)),
+                Rc::new(Term::Var(1)),
             )),
         );
-        let body = Term::Lam(Box::new(Term::Lam(Box::new(Term::Transp {
-            family: Box::new(Term::Var(1)), // A — used only in the type line (0-fragment)
+        let body = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Transp {
+            family: Rc::new(Term::Var(1)), // A — used only in the type line (0-fragment)
             cofib: Cofib::Bot,
-            base: Box::new(Term::Var(0)),
+            base: Rc::new(Term::Var(0)),
         }))));
         assert!(
             check_top(body, ty).is_ok(),
@@ -4951,18 +4952,18 @@ mod tests {
         // (A :^0 U0) → (x :^1 A) → A, body: hcomp A ⊥ (i. x) x  — x in both tube and base.
         let ty = Term::Pi(
             Grade::Zero,
-            Box::new(u(0)),
-            Box::new(Term::Pi(
+            Rc::new(u(0)),
+            Rc::new(Term::Pi(
                 Grade::One,
-                Box::new(Term::Var(0)),
-                Box::new(Term::Var(1)),
+                Rc::new(Term::Var(0)),
+                Rc::new(Term::Var(1)),
             )),
         );
-        let body = Term::Lam(Box::new(Term::Lam(Box::new(Term::HComp {
-            ty: Box::new(Term::Var(1)), // carrier A (0-fragment)
+        let body = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::HComp {
+            ty: Rc::new(Term::Var(1)), // carrier A (0-fragment)
             cofib: Cofib::Bot,
-            tube: Box::new(Term::Var(0)), // x in the tube (under a dim binder; term index unchanged)
-            base: Box::new(Term::Var(0)), // x in the base
+            tube: Rc::new(Term::Var(0)), // x in the tube (under a dim binder; term index unchanged)
+            base: Rc::new(Term::Var(0)), // x in the base
         }))));
         match check_top(body, ty) {
             Err(TypeError::GradeViolation(_)) => {}
@@ -4978,18 +4979,18 @@ mod tests {
     fn hcomp_base_and_tube_omega_var_accepted() {
         let ty = Term::Pi(
             Grade::Zero,
-            Box::new(u(0)),
-            Box::new(Term::Pi(
+            Rc::new(u(0)),
+            Rc::new(Term::Pi(
                 Grade::Omega,
-                Box::new(Term::Var(0)),
-                Box::new(Term::Var(1)),
+                Rc::new(Term::Var(0)),
+                Rc::new(Term::Var(1)),
             )),
         );
-        let body = Term::Lam(Box::new(Term::Lam(Box::new(Term::HComp {
-            ty: Box::new(Term::Var(1)),
+        let body = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::HComp {
+            ty: Rc::new(Term::Var(1)),
             cofib: Cofib::Bot,
-            tube: Box::new(Term::Var(0)),
-            base: Box::new(Term::Var(0)),
+            tube: Rc::new(Term::Var(0)),
+            base: Rc::new(Term::Var(0)),
         }))));
         assert!(
             check_top(body, ty).is_ok(),
@@ -5016,9 +5017,9 @@ mod tests {
             .extend_dim(); // one interval variable `i`
                            // transp (k. A) ⊥ x — `A` is Var(1), base `x` is Var(0).
         let term = Term::Transp {
-            family: Box::new(Term::Var(1)),
+            family: Rc::new(Term::Var(1)),
             cofib: Cofib::Bot,
-            base: Box::new(Term::Var(0)),
+            base: Rc::new(Term::Var(0)),
         };
         // Infer at ambient demand σ = 1 (one runtime use of the result).
         let (_ty, _row, usage) = checker
@@ -5075,8 +5076,8 @@ mod tests {
         fn pi_a_a(k: usize) -> Term {
             Term::Pi(
                 Grade::One,
-                Box::new(Term::Var(k)),
-                Box::new(Term::Var(k + 1)),
+                Rc::new(Term::Var(k)),
+                Rc::new(Term::Var(k + 1)),
             )
         }
         // `pi1_a_a_outer` is `f`'s *domain* (only `A` in scope there, at index 0); `pi1_a_a_inner`
@@ -5086,18 +5087,18 @@ mod tests {
         let pi1_a_a_inner = pi_a_a(1);
         let ty = Term::Pi(
             Grade::Zero,
-            Box::new(u(0)),
-            Box::new(Term::Pi(
+            Rc::new(u(0)),
+            Rc::new(Term::Pi(
                 Grade::One,
-                Box::new(pi1_a_a_outer),
-                Box::new(pi1_a_a_inner.clone()),
+                Rc::new(pi1_a_a_outer),
+                Rc::new(pi1_a_a_inner.clone()),
             )),
         );
-        let body = Term::Lam(Box::new(Term::Lam(Box::new(Term::Comp {
-            family: Box::new(pi1_a_a_inner), // i. Pi 1 A A — a real Pi former, not `Var(k)`
+        let body = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Comp {
+            family: Rc::new(pi1_a_a_inner), // i. Pi 1 A A — a real Pi former, not `Var(k)`
             cofib: Cofib::Bot,
-            tube: Box::new(Term::Var(0)), // f, under the comp's dim binder (term index unchanged)
-            base: Box::new(Term::Var(0)), // f
+            tube: Rc::new(Term::Var(0)), // f, under the comp's dim binder (term index unchanged)
+            base: Rc::new(Term::Var(0)), // f
         }))));
         match check_top(body, ty) {
             Err(TypeError::GradeViolation(_)) => {}
@@ -5116,26 +5117,26 @@ mod tests {
         fn pi_a_a(k: usize) -> Term {
             Term::Pi(
                 Grade::One,
-                Box::new(Term::Var(k)),
-                Box::new(Term::Var(k + 1)),
+                Rc::new(Term::Var(k)),
+                Rc::new(Term::Var(k + 1)),
             )
         }
         let pi1_a_a_outer = pi_a_a(0);
         let pi1_a_a_inner = pi_a_a(1);
         let ty = Term::Pi(
             Grade::Zero,
-            Box::new(u(0)),
-            Box::new(Term::Pi(
+            Rc::new(u(0)),
+            Rc::new(Term::Pi(
                 Grade::Omega,
-                Box::new(pi1_a_a_outer),
-                Box::new(pi1_a_a_inner.clone()),
+                Rc::new(pi1_a_a_outer),
+                Rc::new(pi1_a_a_inner.clone()),
             )),
         );
-        let body = Term::Lam(Box::new(Term::Lam(Box::new(Term::Comp {
-            family: Box::new(pi1_a_a_inner),
+        let body = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Comp {
+            family: Rc::new(pi1_a_a_inner),
             cofib: Cofib::Bot,
-            tube: Box::new(Term::Var(0)),
-            base: Box::new(Term::Var(0)),
+            tube: Rc::new(Term::Var(0)),
+            base: Rc::new(Term::Var(0)),
         }))));
         assert!(
             check_top(body, ty).is_ok(),
@@ -5185,8 +5186,8 @@ mod tests {
         fn pi_g(g: Grade) -> Term {
             Term::Pi(
                 g,
-                Box::new(u(0)),
-                Box::new(Term::Sigma(Box::new(u(0)), Box::new(u(0)))),
+                Rc::new(u(0)),
+                Rc::new(Term::Sigma(Rc::new(u(0)), Rc::new(u(0)))),
             )
         }
         let src_pi = pi_g(Grade::Omega); // i = 0 face (the `ty` field of the Glue)
@@ -5197,19 +5198,19 @@ mod tests {
                                        // `kan::transp_glue` reduction happens during `check_g`, only during `eval`/reduction of
                                        // the whole expression, which this probe never triggers).
         let family = Term::Glue {
-            base: Box::new(tgt_pi.clone()),
+            base: Rc::new(tgt_pi.clone()),
             cofib: Cofib::Eq0(crate::term::Interval::Dim(0)),
-            ty: Box::new(src_pi),
-            equiv: Box::new(u(0)),
+            ty: Rc::new(src_pi),
+            equiv: Rc::new(u(0)),
         };
-        let base = Term::Lam(Box::new(Term::Pair(
-            Box::new(Term::Var(0)),
-            Box::new(Term::Var(0)),
+        let base = Term::Lam(Rc::new(Term::Pair(
+            Rc::new(Term::Var(0)),
+            Rc::new(Term::Var(0)),
         )));
         let term = Term::Transp {
-            family: Box::new(family),
+            family: Rc::new(family),
             cofib: Cofib::Bot,
-            base: Box::new(base),
+            base: Rc::new(base),
         };
         match check_top(term, tgt_pi) {
             Err(TypeError::BadCubical(msg)) => {
@@ -5235,26 +5236,26 @@ mod tests {
         fn pi_g(g: Grade) -> Term {
             Term::Pi(
                 g,
-                Box::new(u(0)),
-                Box::new(Term::Sigma(Box::new(u(0)), Box::new(u(0)))),
+                Rc::new(u(0)),
+                Rc::new(Term::Sigma(Rc::new(u(0)), Rc::new(u(0)))),
             )
         }
         let src_pi = pi_g(Grade::Omega);
         let tgt_pi = pi_g(Grade::Omega);
         let family = Term::Glue {
-            base: Box::new(tgt_pi.clone()),
+            base: Rc::new(tgt_pi.clone()),
             cofib: Cofib::Eq0(crate::term::Interval::Dim(0)),
-            ty: Box::new(src_pi),
-            equiv: Box::new(u(0)),
+            ty: Rc::new(src_pi),
+            equiv: Rc::new(u(0)),
         };
-        let base = Term::Lam(Box::new(Term::Pair(
-            Box::new(Term::Var(0)),
-            Box::new(Term::Var(0)),
+        let base = Term::Lam(Rc::new(Term::Pair(
+            Rc::new(Term::Var(0)),
+            Rc::new(Term::Var(0)),
         )));
         let term = Term::Transp {
-            family: Box::new(family),
+            family: Rc::new(family),
             cofib: Cofib::Bot,
-            base: Box::new(base),
+            base: Rc::new(base),
         };
         assert!(
             check_top(term, tgt_pi).is_ok(),
@@ -5270,29 +5271,29 @@ mod tests {
     /// shape as N1's parity golden): checking it forces `depth`-deep `do_elim`/`eval`/`conv`, which
     /// is exactly what a normalization budget should be measured against.
     fn deep_plus_zero(depth: u32) -> (Signature, Term, Term) {
-        let plus = Term::Lam(Box::new(Term::Lam(Box::new(Term::Elim {
+        let plus = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Elim {
             data: nat_name(),
-            motive: Box::new(Term::Lam(Box::new(nat_ty()))),
+            motive: Rc::new(Term::Lam(Rc::new(nat_ty()))),
             methods: vec![
                 Term::Var(0),
-                Term::Lam(Box::new(Term::Lam(Box::new(succ(Term::Var(0)))))),
+                Term::Lam(Rc::new(Term::Lam(Rc::new(succ(Term::Var(0)))))),
             ],
-            scrutinee: Box::new(Term::Var(1)),
+            scrutinee: Rc::new(Term::Var(1)),
         }))));
         let mut lit = zero();
         for _ in 0..depth {
             lit = succ(lit);
         }
         let plus_applied = Term::App(
-            Box::new(Term::App(Box::new(plus), Box::new(lit.clone()))),
-            Box::new(zero()),
+            Rc::new(Term::App(Rc::new(plus), Rc::new(lit.clone()))),
+            Rc::new(zero()),
         );
         let ty = Term::PathP {
-            family: Box::new(nat_ty()),
-            lhs: Box::new(plus_applied),
-            rhs: Box::new(lit.clone()),
+            family: Rc::new(nat_ty()),
+            lhs: Rc::new(plus_applied),
+            rhs: Rc::new(lit.clone()),
         };
-        let proof_term = Term::PLam(Box::new(lit));
+        let proof_term = Term::PLam(Rc::new(lit));
         (nat_sig(), proof_term, ty)
     }
 

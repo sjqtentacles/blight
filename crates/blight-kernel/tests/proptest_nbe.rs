@@ -109,19 +109,19 @@ struct Typed {
 /// must reduce away).
 fn app_id(ty: Term, arg: Term) -> Term {
     let id = Term::Ann(
-        Box::new(Term::Lam(Box::new(Term::Var(0)))),
-        Box::new(Term::Pi(Grade::Omega, Box::new(ty.clone()), Box::new(ty))),
+        Rc::new(Term::Lam(Rc::new(Term::Var(0)))),
+        Rc::new(Term::Pi(Grade::Omega, Rc::new(ty.clone()), Rc::new(ty))),
     );
-    Term::App(Box::new(id), Box::new(arg))
+    Term::App(Rc::new(id), Rc::new(arg))
 }
 
 /// `if scrut then a else b` via the `Bool` eliminator, both branches at result type `res`.
 fn elim_bool(res: Term, scrut: Term, a: Term, b: Term) -> Term {
     Term::Elim {
         data: DataName("Bool".into()),
-        motive: Box::new(Term::Lam(Box::new(res))),
+        motive: Rc::new(Term::Lam(Rc::new(res))),
         methods: vec![a, b],
-        scrutinee: Box::new(scrut),
+        scrutinee: Rc::new(scrut),
     }
 }
 
@@ -183,8 +183,8 @@ fn arb_typed(fuel: u32) -> BoxedStrategy<Typed> {
             Typed {
                 term: Term::IntPrim {
                     op,
-                    lhs: Box::new(coerce(l, Ty::Int)),
-                    rhs: Box::new(coerce(r, Ty::Int)),
+                    lhs: Rc::new(coerce(l, Ty::Int)),
+                    rhs: Rc::new(coerce(r, Ty::Int)),
                 },
                 // Eq/Lt return a Bool-coded Int in the kernel's IntPrim semantics; treat as Int.
                 ty: Ty::Int,

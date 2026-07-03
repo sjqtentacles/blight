@@ -12,15 +12,20 @@ mod support;
 
 use blight_elab::{scope, ElabError, Outcome, Program};
 
-/// Load `src` in a fresh env on a large stack (kernel checking is deep), returning all outcomes or
-/// the first error. Mirrors `stdlib.rs`'s isolation-load helper.
-fn run(src: &'static str) -> Result<Vec<Outcome>, ElabError> {
+/// Load `src` in a fresh env on a large stack (kernel checking is deep) and hand the result — all
+/// outcomes or the first error — to `check` on the worker thread (post-S3, `Term` holds `Rc`s, so
+/// `Outcome`/`ElabError` cannot cross `join`). Mirrors `stdlib.rs`'s isolation-load helper.
+fn run_with<R: Send + 'static>(
+    src: &'static str,
+    check: impl FnOnce(Result<Vec<Outcome>, ElabError>) -> R + Send + 'static,
+) -> R {
     std::thread::Builder::new()
         .stack_size(16 * 1024 * 1024)
         .spawn(move || {
             let mut env = blight_elab::ElabEnv::new();
             let mut prog = Program::with_resolver(&mut env, support::prelude_resolver);
-            prog.run(src)
+            let result = prog.run(src);
+            check(result)
         })
         .expect("spawn load thread")
         .join()
@@ -31,22 +36,30 @@ fn run(src: &'static str) -> Result<Vec<Outcome>, ElabError> {
 /// from the single explicit `Vec Nat 3` argument — the call drops from four arguments to one.
 #[test]
 fn implicit_index_solved_from_vec_argument() {
-    let outcomes = run("(load \"std/vec.bl\")\n\
+    run_with(
+        "(load \"std/vec.bl\")\n\
          (define sample (Vec Nat 3)\n\
            (vcons 2 1 (vcons 1 2 (vcons Zero 3 (vnil)))))\n\
-         (the Nat (vec-length sample))")
-    .expect("vec-length infers both A and n from its Vec argument");
-    assert!(matches!(outcomes.last(), Some(Outcome::Checked(_))));
+         (the Nat (vec-length sample))",
+        |r| {
+            let outcomes = r.expect("vec-length infers both A and n from its Vec argument");
+            assert!(matches!(outcomes.last(), Some(Outcome::Checked(_))));
+        },
+    );
 }
 
 /// `length`'s implicit element type is solved from a plain list argument — the canonical E2 win.
 #[test]
 fn implicit_element_type_solved_from_list_argument() {
-    let outcomes = run("(load \"std/list.bl\")\n\
+    run_with(
+        "(load \"std/list.bl\")\n\
          (define xs (List Nat) (cons 1 (cons 2 nil)))\n\
-         (the Nat (length xs))")
-    .expect("length infers its element type from the list argument");
-    assert!(matches!(outcomes.last(), Some(Outcome::Checked(_))));
+         (the Nat (length xs))",
+        |r| {
+            let outcomes = r.expect("length infers its element type from the list argument");
+            assert!(matches!(outcomes.last(), Some(Outcome::Checked(_))));
+        },
+    );
 }
 
 /// When an implicit cannot be solved (the argument's type is not synthesizable — here a bare
@@ -56,20 +69,24 @@ fn implicit_element_type_solved_from_list_argument() {
 fn implicit_unsolved_reports_binder_name() {
     // `from-maybe`'s `A` is solved from its default `d`; give it a `nothing` default whose element
     // type is genuinely ambiguous and a second `nothing` argument, so neither pins `A`.
-    let err = run("(load \"std/maybe.bl\")\n\
-         (the (Maybe Nat) (maybe-or nothing nothing))")
-    .err();
-    // `maybe-or` keeps `A` explicit-free only if solvable; with two `nothing`s it is not. Whatever
-    // the exact unsolved binder, the message must name a binder in backticks so span-narrowing can
-    // anchor it — assert the message mentions the function and a backtick-quoted identifier.
-    if let Some(ElabError::BadForm(msg)) = &err {
-        assert!(
-            msg.contains('`'),
-            "unsolved-implicit error must backtick-quote the binder/function for span narrowing: {msg}"
-        );
-    }
-    // (If `maybe-or` happens to solve via the expected type, this is vacuously fine — the binder-
-    // naming behavior itself is unit-pinned in the elaborator; see `narrow_span` tests in scope.rs.)
+    run_with(
+        "(load \"std/maybe.bl\")\n\
+         (the (Maybe Nat) (maybe-or nothing nothing))",
+        |r| {
+            let err = r.err();
+            // `maybe-or` keeps `A` explicit-free only if solvable; with two `nothing`s it is not. Whatever
+            // the exact unsolved binder, the message must name a binder in backticks so span-narrowing can
+            // anchor it — assert the message mentions the function and a backtick-quoted identifier.
+            if let Some(ElabError::BadForm(msg)) = &err {
+                assert!(
+                    msg.contains('`'),
+                    "unsolved-implicit error must backtick-quote the binder/function for span narrowing: {msg}"
+                );
+            }
+            // (If `maybe-or` happens to solve via the expected type, this is vacuously fine — the binder-
+            // naming behavior itself is unit-pinned in the elaborator; see `narrow_span` tests in scope.rs.)
+        },
+    );
 }
 
 /// The span-narrowing helper anchors a backtick-named error to the identifier's source occurrence,

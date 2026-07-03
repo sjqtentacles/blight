@@ -16,6 +16,7 @@ use blight_kernel::{
     Level, Signature, Term,
 };
 use blight_recheck::{recheck_judgement, RecheckError};
+use std::rc::Rc;
 
 fn u(n: u32) -> Term {
     let mut l = Level::Zero;
@@ -104,7 +105,7 @@ fn tru() -> Term {
     Term::Con(ConName("true".into()), vec![])
 }
 fn pi(a: Term, b: Term) -> Term {
-    Term::Pi(Grade::Omega, Box::new(a), Box::new(b))
+    Term::Pi(Grade::Omega, Rc::new(a), Rc::new(b))
 }
 
 /// What the *re-checker* must do with an ill-typed term (the kernel must always reject).
@@ -170,15 +171,15 @@ fn must_reject_corpus() -> Vec<Bad> {
             // An unannotated λ reaches the re-checker via *inference*, which needs an annotation;
             // it never accepts, but honestly declines rather than pinning the Nat≠Π contradiction.
             label: "(λx. x) : Nat (a lambda claimed at a non-Π type)",
-            term: Term::Lam(Box::new(Term::Var(0))),
+            term: Term::Lam(Rc::new(Term::Var(0))),
             ty: nat(),
             expect: Expect::RejectOrDecline,
         },
         Bad {
             label: "Zero Zero : Nat (applying a non-function)",
             term: Term::App(
-                Box::new(Term::Ann(Box::new(zero()), Box::new(nat()))),
-                Box::new(zero()),
+                Rc::new(Term::Ann(Rc::new(zero()), Rc::new(nat()))),
+                Rc::new(zero()),
             ),
             ty: nat(),
             expect: Expect::Reject,
@@ -186,11 +187,11 @@ fn must_reject_corpus() -> Vec<Bad> {
         Bad {
             label: "(the (Nat->Nat) (λx. true)) Zero : Nat (body returns the wrong type)",
             term: Term::App(
-                Box::new(Term::Ann(
-                    Box::new(Term::Lam(Box::new(tru()))),
-                    Box::new(pi(nat(), nat())),
+                Rc::new(Term::Ann(
+                    Rc::new(Term::Lam(Rc::new(tru()))),
+                    Rc::new(pi(nat(), nat())),
                 )),
-                Box::new(zero()),
+                Rc::new(zero()),
             ),
             ty: nat(),
             expect: Expect::Reject,
@@ -199,8 +200,8 @@ fn must_reject_corpus() -> Vec<Bad> {
             label: "int-add Zero Zero : Int (IntPrim on Nat operands)",
             term: Term::IntPrim {
                 op: IntPrimOp::Add,
-                lhs: Box::new(zero()),
-                rhs: Box::new(zero()),
+                lhs: Rc::new(zero()),
+                rhs: Rc::new(zero()),
             },
             ty: Term::IntTy,
             expect: Expect::Reject,
@@ -209,9 +210,9 @@ fn must_reject_corpus() -> Vec<Bad> {
             label: "Bool-elim with a single method (wrong method count)",
             term: Term::Elim {
                 data: DataName("Bool".into()),
-                motive: Box::new(Term::Lam(Box::new(nat()))),
+                motive: Rc::new(Term::Lam(Rc::new(nat()))),
                 methods: vec![zero()],
-                scrutinee: Box::new(tru()),
+                scrutinee: Rc::new(tru()),
             },
             ty: nat(),
             expect: Expect::Reject,
@@ -220,9 +221,9 @@ fn must_reject_corpus() -> Vec<Bad> {
             label: "Bool-elim whose methods inhabit the wrong type",
             term: Term::Elim {
                 data: DataName("Bool".into()),
-                motive: Box::new(Term::Lam(Box::new(nat()))),
+                motive: Rc::new(Term::Lam(Rc::new(nat()))),
                 methods: vec![tru(), tru()],
-                scrutinee: Box::new(tru()),
+                scrutinee: Rc::new(tru()),
             },
             ty: nat(),
             expect: Expect::Reject,
@@ -231,9 +232,9 @@ fn must_reject_corpus() -> Vec<Bad> {
             label: "Nat-elim over a Bool scrutinee (data/scrutinee mismatch)",
             term: Term::Elim {
                 data: DataName("Nat".into()),
-                motive: Box::new(Term::Lam(Box::new(nat()))),
-                methods: vec![zero(), Term::Lam(Box::new(Term::Lam(Box::new(zero()))))],
-                scrutinee: Box::new(tru()),
+                motive: Rc::new(Term::Lam(Rc::new(nat()))),
+                methods: vec![zero(), Term::Lam(Rc::new(Term::Lam(Rc::new(zero()))))],
+                scrutinee: Rc::new(tru()),
             },
             ty: nat(),
             expect: Expect::Reject,
@@ -258,7 +259,7 @@ fn must_reject_corpus() -> Vec<Bad> {
         },
         Bad {
             label: "(the Nat Zero) : Bool (a well-typed Nat ascription claimed at Bool)",
-            term: Term::Ann(Box::new(zero()), Box::new(nat())),
+            term: Term::Ann(Rc::new(zero()), Rc::new(nat())),
             ty: boolean(),
             expect: Expect::Reject,
         },

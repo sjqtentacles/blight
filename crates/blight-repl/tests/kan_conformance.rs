@@ -118,7 +118,7 @@ fn check_program(src: &str) -> Result<blight_kernel::Proof, String> {
     let core = elaborate(&env, body).map_err(|e| format!("elab: {e:?}"))?;
     match core {
         Term::Ann(e, t) => {
-            check_top_with(env.signature().clone(), *e, *t).map_err(|e| format!("kernel: {e:?}"))
+            check_top_with(env.signature().clone(), blight_kernel::unshare(e), blight_kernel::unshare(t)).map_err(|e| format!("kernel: {e:?}"))
         }
         other => Err(format!("expected an ascribed `(the T e)`, got {other:?}")),
     }

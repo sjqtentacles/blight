@@ -1429,6 +1429,7 @@ pub(crate) fn build_elim_loop(ctors: &[CtorShape], methods: &[Cir]) -> Option<Ci
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
     use super::*;
     use blight_kernel::signature::{Constructor, DataDecl};
     use blight_kernel::term::Interval;
@@ -1476,9 +1477,9 @@ mod tests {
         // Elim Nat motive [m_zero, m_succ] (Zero) — scrutinee is a constructor.
         let term = Term::Elim {
             data: nat_name(),
-            motive: Box::new(u0()),
+            motive: Rc::new(u0()),
             methods: vec![Term::Var(0), Term::Var(1)],
-            scrutinee: Box::new(Term::Con(ConName("Zero".into()), vec![])),
+            scrutinee: Rc::new(Term::Con(ConName("Zero".into()), vec![])),
         };
         let cir = lower_erased(&term, &sig);
         // App(Fix(Lam(Case(Var0, arms))), Con Zero)
@@ -1526,11 +1527,11 @@ mod tests {
     fn lower_later_to_fix_thunk() {
         let sig = Signature::new();
         // λ self. later (self <something>) — the partial-recursion shape.
-        let body = Term::Later(Box::new(Term::App(
-            Box::new(Term::Var(0)),
-            Box::new(Term::Con(ConName("Zero".into()), vec![])),
+        let body = Term::Later(Rc::new(Term::App(
+            Rc::new(Term::Var(0)),
+            Rc::new(Term::Con(ConName("Zero".into()), vec![])),
         )));
-        let term = Term::Lam(Box::new(body));
+        let term = Term::Lam(Rc::new(body));
         let cir = lower_erased(&term, &sig);
         match cir {
             Cir::Fix(inner) => match *inner {
@@ -1545,9 +1546,9 @@ mod tests {
     #[test]
     fn paths_lowered_as_functions() {
         let sig = Signature::new();
-        let plam = Term::PLam(Box::new(Term::Var(0)));
+        let plam = Term::PLam(Rc::new(Term::Var(0)));
         assert_eq!(lower_erased(&plam, &sig), Cir::Lam(Box::new(Cir::Var(0))));
-        let papp = Term::PApp(Box::new(Term::Var(0)), Interval::I0);
+        let papp = Term::PApp(Rc::new(Term::Var(0)), Interval::I0);
         assert_eq!(lower_erased(&papp, &sig), Cir::Var(0));
     }
 
@@ -1570,8 +1571,8 @@ mod tests {
     fn erase_runs_first() {
         let sig = Signature::new();
         // type: (x :^0 U0) -> U0 ; term: λ. Con Zero  (the body ignores x).
-        let ty = Term::Pi(blight_kernel::Grade::Zero, Box::new(u0()), Box::new(u0()));
-        let term = Term::Lam(Box::new(Term::Con(ConName("Zero".into()), vec![])));
+        let ty = Term::Pi(blight_kernel::Grade::Zero, Rc::new(u0()), Rc::new(u0()));
+        let term = Term::Lam(Rc::new(Term::Con(ConName("Zero".into()), vec![])));
         let cir = lower(&term, &ty, &sig);
         // The grade-0 λ is erased, leaving just the constructor (no Lam wrapper).
         assert_eq!(cir, Cir::con(ConName("Zero".into()), vec![]));
@@ -1585,16 +1586,16 @@ mod tests {
         let sig = nat_sig();
         // body = Con "Zero" []  (the region's result; the λ binder `r : Rgn` is unused here).
         let body = Term::Con(ConName("Zero".into()), vec![]);
-        let lam = Term::Lam(Box::new(body));
+        let lam = Term::Lam(Rc::new(body));
         // Π(1, Rgn, Nat) — grade-1 binder over the opaque region handle.
         let pi = Term::Pi(
             Grade::One,
-            Box::new(Term::Con(ConName("Rgn".into()), vec![])),
-            Box::new(Term::Con(ConName("Nat".into()), vec![])),
+            Rc::new(Term::Con(ConName("Rgn".into()), vec![])),
+            Rc::new(Term::Con(ConName("Nat".into()), vec![])),
         );
         let redex = Term::App(
-            Box::new(Term::Ann(Box::new(lam), Box::new(pi))),
-            Box::new(Term::Con(ConName("rgn-tok".into()), vec![])),
+            Rc::new(Term::Ann(Rc::new(lam), Rc::new(pi))),
+            Rc::new(Term::Con(ConName("rgn-tok".into()), vec![])),
         );
         let cir = lower_erased(&redex, &sig);
         assert!(
@@ -1604,8 +1605,8 @@ mod tests {
 
         // An ordinary application (grade-many, non-token arg) stays a bare App.
         let plain = Term::App(
-            Box::new(Term::Lam(Box::new(Term::Var(0)))),
-            Box::new(Term::Con(ConName("Zero".into()), vec![])),
+            Rc::new(Term::Lam(Rc::new(Term::Var(0)))),
+            Rc::new(Term::Con(ConName("Zero".into()), vec![])),
         );
         let cir2 = lower_erased(&plain, &sig);
         assert!(

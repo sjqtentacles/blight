@@ -6,6 +6,7 @@
 //! is never stored at runtime.
 
 use crate::semiring::Grade;
+use std::rc::Rc;
 
 /// A universe level (spec §2.4): `0 | suc ℓ | ℓ ⊔ ℓ' | u` where `u` is a level variable.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,23 +69,23 @@ pub enum Term {
     /// `Univ ℓ` — a universe at level ℓ (spec §2.4).
     Univ(Level),
     /// `Pi (x :^ρ A) B` — dependent function type; `ρ` is the binder grade (spec §3).
-    Pi(Grade, Box<Term>, Box<Term>),
+    Pi(Grade, Rc<Term>, Rc<Term>),
     /// `λ. t` — function (binder is nameless).
-    Lam(Box<Term>),
+    Lam(Rc<Term>),
     /// `f a` — application.
-    App(Box<Term>, Box<Term>),
+    App(Rc<Term>, Rc<Term>),
     /// `Sigma (x : A) B` — dependent pair type.
-    Sigma(Box<Term>, Box<Term>),
+    Sigma(Rc<Term>, Rc<Term>),
     /// `(a , b)` — pair.
-    Pair(Box<Term>, Box<Term>),
+    Pair(Rc<Term>, Rc<Term>),
     /// First projection.
-    Fst(Box<Term>),
+    Fst(Rc<Term>),
     /// Second projection.
-    Snd(Box<Term>),
+    Snd(Rc<Term>),
     /// `(the A t)` — a type ascription (spec §5). Lets a checkable term (e.g. a `Lam`) appear in
     /// inference position; elaborated from the surface `the`/`define` ascriptions. The ascription
     /// is itself checked, so it adds no trust.
-    Ann(Box<Term>, Box<Term>),
+    Ann(Rc<Term>, Rc<Term>),
 
     // ---- data / recursion (spec §2.7) ----
     /// A (higher) inductive type former applied to params and indices: `Data D params indices`.
@@ -94,9 +95,9 @@ pub enum Term {
     /// The dependent eliminator: `Elim D motive methods scrutinee`.
     Elim {
         data: DataName,
-        motive: Box<Term>,
+        motive: Rc<Term>,
         methods: Vec<Term>,
-        scrutinee: Box<Term>,
+        scrutinee: Rc<Term>,
     },
     /// `PCon D c args r` — a **path constructor** `c` of the higher inductive type `D`, applied
     /// to its arguments, at interval `r` (spec §2.7 cubical layer; Wave 7/E4). At the interval
@@ -128,53 +129,53 @@ pub enum Term {
     /// `PathP (i. A) x y` — dependent path over a line of types. `Path A x y` is the constant
     /// case (line `A` ignores `i`).
     PathP {
-        family: Box<Term>,
-        lhs: Box<Term>,
-        rhs: Box<Term>,
+        family: Rc<Term>,
+        lhs: Rc<Term>,
+        rhs: Rc<Term>,
     },
     /// `λ i. t` — path abstraction (binds a dimension variable).
-    PLam(Box<Term>),
+    PLam(Rc<Term>),
     /// `p @ r` — path application at interval `r`.
-    PApp(Box<Term>, Interval),
+    PApp(Rc<Term>, Interval),
     /// `Partial φ A` — partial element of `A` on cofibration `φ`.
-    Partial(Cofib, Box<Term>),
+    Partial(Cofib, Rc<Term>),
     /// A system `[ φᵢ ↦ tᵢ ]`.
     System(Vec<SystemBranch>),
     /// `Transp (i. A) φ a0` — transport.
     Transp {
-        family: Box<Term>,
+        family: Rc<Term>,
         cofib: Cofib,
-        base: Box<Term>,
+        base: Rc<Term>,
     },
     /// `HComp A φ (i. u) a0` — homogeneous composition.
     HComp {
-        ty: Box<Term>,
+        ty: Rc<Term>,
         cofib: Cofib,
-        tube: Box<Term>,
-        base: Box<Term>,
+        tube: Rc<Term>,
+        base: Rc<Term>,
     },
     /// `Comp (i. A) φ (i. u) a0` — general Kan composition (derivable from HComp + Transp).
     Comp {
-        family: Box<Term>,
+        family: Rc<Term>,
         cofib: Cofib,
-        tube: Box<Term>,
-        base: Box<Term>,
+        tube: Rc<Term>,
+        base: Rc<Term>,
     },
     /// `Glue A φ T e` — Glue type former.
     Glue {
-        base: Box<Term>,
+        base: Rc<Term>,
         cofib: Cofib,
-        ty: Box<Term>,
-        equiv: Box<Term>,
+        ty: Rc<Term>,
+        equiv: Rc<Term>,
     },
     /// `glue` introduction.
     GlueTerm {
         cofib: Cofib,
-        partial: Box<Term>,
-        base: Box<Term>,
+        partial: Rc<Term>,
+        base: Rc<Term>,
     },
     /// `unglue` elimination.
-    Unglue(Box<Term>),
+    Unglue(Rc<Term>),
 
     // ---- effects and handlers (spec §4) ----
     /// `perform op a` — invoke effect operation `op` of `effect` with argument `a` (spec §4.2).
@@ -190,7 +191,7 @@ pub enum Term {
         /// own parameters — see the `Term::Data` rule). Empty for a non-parameterized effect (all
         /// effects declared before E2, and still the overwhelmingly common case).
         type_args: Vec<Term>,
-        arg: Box<Term>,
+        arg: Rc<Term>,
     },
     /// `handle body { return x. r ; (op x k. e)... }` (spec §4.3). The handler interprets each
     /// listed operation, discharging that label from `body`'s row. Binders:
@@ -198,27 +199,27 @@ pub enum Term {
     /// - each op clause binds the operation argument `x` then the continuation `k` (2 binders,
     ///   `k` innermost = de Bruijn 0, `x` = de Bruijn 1), where `k : Bᵢ → C ! E`.
     Handle {
-        body: Box<Term>,
-        return_clause: Box<Term>,
-        op_clauses: Vec<(crate::signature::OpName, Box<Term>)>,
+        body: Rc<Term>,
+        return_clause: Rc<Term>,
+        op_clauses: Vec<(crate::signature::OpName, Rc<Term>)>,
     },
     /// `! E A` — the effectful computation type: an `A`-computation that may use the effects in
     /// row `E` (spec §4.1). Pure `A` is `! ⟨⟩ A`.
-    EffTy(crate::row::Row, Box<Term>),
+    EffTy(crate::row::Row, Rc<Term>),
 
     // ---- partiality (spec §4.5) ----
     /// `Delay A` — the (intensional Capretta) delay type former: a possibly-non-terminating
     /// computation of `A`. Divergence surfaces in this type.
-    Delay(Box<Term>),
+    Delay(Rc<Term>),
     /// `now a : Delay A` — an immediately-available value.
-    Now(Box<Term>),
+    Now(Rc<Term>),
     /// `later d : Delay A` — a guarded delay step. NbE treats `Later` as a non-forced node so each
     /// normalization step unfolds finitely.
-    Later(Box<Term>),
+    Later(Rc<Term>),
     /// `force d : A` when `d : Delay A` — the delay eliminator (spec §4.5). `force (now a) ⇝ a`;
     /// `force` over a `later`/neutral stays stuck (NbE keeps `Later` guarded). Typing `force`
     /// contributes the built-in `Partial` label to the row, so a proof may not use it.
-    Force(Box<Term>),
+    Force(Rc<Term>),
 
     // ---- foreign function interface (spec §7.6 — the explicit unsafe hatch) ----
     /// `foreign "sym" : A` — an *opaque postulate* standing for an external C symbol `sym` of the
@@ -227,7 +228,7 @@ pub enum Term {
     /// no body), so it GROWS the trusted computing base. The independent re-checker therefore
     /// *declines* to certify any judgement that mentions a `Foreign` — a `foreign` import is trusted
     /// code that cannot be re-verified. Codegen lowers it to a direct call to the C symbol.
-    Foreign { symbol: String, ty: Box<Term> },
+    Foreign { symbol: String, ty: Rc<Term> },
 
     // ---- primitive machine integers (M10 — int-codegen; TCB-growing, user-approved) ----
     /// `Int` — the type of 64-bit signed machine integers (`i64`). A primitive kernel type:
@@ -244,8 +245,8 @@ pub enum Term {
     /// `Bool`-returning comparison can be built in untrusted stdlib on top of this.
     IntPrim {
         op: IntPrimOp,
-        lhs: Box<Term>,
-        rhs: Box<Term>,
+        lhs: Rc<Term>,
+        rhs: Rc<Term>,
     },
 
     // ---- erasure (spec §7.2) ----
@@ -255,6 +256,15 @@ pub enum Term {
     /// represented before the surrounding binder/application is dropped. Reaching it at runtime is
     /// a compiler bug.
     Erased,
+}
+
+/// Take ownership of the `Term` inside an `Rc`, cloning only when the node is shared
+/// (`Rc::try_unwrap` with clone fallback). This is the audited replacement for what was a plain
+/// `*boxed` move before the S3 `Box → Rc` representation change: behavior is identical (an
+/// unshared node moves, exactly like the old `Box`; a shared node clones — and that clone is
+/// shallow, since the node's own children are behind `Rc`).
+pub fn unshare(rc: Rc<Term>) -> Term {
+    Rc::try_unwrap(rc).unwrap_or_else(|rc| (*rc).clone())
 }
 
 /// The name of an inductive (or higher inductive) type.

@@ -288,12 +288,13 @@ impl Printer {
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
     use super::*;
 
     #[test]
     fn prints_identity_lambda() {
         // λ. 0  ==>  (lam (x) x)
-        let id = Term::Lam(Box::new(Term::Var(0)));
+        let id = Term::Lam(Rc::new(Term::Var(0)));
         assert_eq!(pretty_term(&id), "(lam (x) x)");
     }
 
@@ -302,8 +303,8 @@ mod tests {
         // Pi (_ :^1 Type0) (Var 0) ==> (Pi ((x (Type 0))) x)
         let t = Term::Pi(
             Grade::One,
-            Box::new(Term::Univ(Level::Zero)),
-            Box::new(Term::Var(0)),
+            Rc::new(Term::Univ(Level::Zero)),
+            Rc::new(Term::Var(0)),
         );
         assert_eq!(pretty_term(&t), "(Pi ((x (Type 0))) x)");
     }
@@ -311,9 +312,9 @@ mod tests {
     #[test]
     fn prints_nested_binders_distinctly() {
         // λ. λ. (1 0) ==> (lam (x) (lam (y) (x y)))
-        let t = Term::Lam(Box::new(Term::Lam(Box::new(Term::App(
-            Box::new(Term::Var(1)),
-            Box::new(Term::Var(0)),
+        let t = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::App(
+            Rc::new(Term::Var(1)),
+            Rc::new(Term::Var(0)),
         )))));
         assert_eq!(pretty_term(&t), "(lam (x) (lam (y) (x y)))");
     }

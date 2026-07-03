@@ -6,6 +6,7 @@
 
 use crate::term::{DataName, Interval, Term};
 use crate::value::{Closure, Env, Frame, Neutral, Value};
+use std::rc::Rc;
 
 // =================================================================================================
 // Wave 5 / N2: metered evaluation + honest divergence errors.
@@ -891,17 +892,17 @@ fn quote_at(lvl: usize, dlvl: usize, value: &Value) -> Term {
         Value::Univ(l) => Term::Univ(l.clone()),
         Value::Pi(grade, dom, cod) => Term::Pi(
             *grade,
-            Box::new(quote_at(lvl, dlvl, dom)),
-            Box::new(quote_closure(lvl, dlvl, cod)),
+            Rc::new(quote_at(lvl, dlvl, dom)),
+            Rc::new(quote_closure(lvl, dlvl, cod)),
         ),
-        Value::Lam(clos) => Term::Lam(Box::new(quote_closure(lvl, dlvl, clos))),
+        Value::Lam(clos) => Term::Lam(Rc::new(quote_closure(lvl, dlvl, clos))),
         Value::Sigma(dom, cod) => Term::Sigma(
-            Box::new(quote_at(lvl, dlvl, dom)),
-            Box::new(quote_closure(lvl, dlvl, cod)),
+            Rc::new(quote_at(lvl, dlvl, dom)),
+            Rc::new(quote_closure(lvl, dlvl, cod)),
         ),
         Value::Pair(a, b) => Term::Pair(
-            Box::new(quote_at(lvl, dlvl, a)),
-            Box::new(quote_at(lvl, dlvl, b)),
+            Rc::new(quote_at(lvl, dlvl, a)),
+            Rc::new(quote_at(lvl, dlvl, b)),
         ),
         Value::Data(name, params, indices) => Term::Data(
             name.clone(),
@@ -924,17 +925,17 @@ fn quote_at(lvl: usize, dlvl: usize, value: &Value) -> Term {
             dim: quote_interval(dlvl, dim),
         },
         Value::PathP { family, lhs, rhs } => Term::PathP {
-            family: Box::new(quote_dim_closure(lvl, dlvl, family)),
-            lhs: Box::new(quote_at(lvl, dlvl, lhs)),
-            rhs: Box::new(quote_at(lvl, dlvl, rhs)),
+            family: Rc::new(quote_dim_closure(lvl, dlvl, family)),
+            lhs: Rc::new(quote_at(lvl, dlvl, lhs)),
+            rhs: Rc::new(quote_at(lvl, dlvl, rhs)),
         },
-        Value::PLam(clos) => Term::PLam(Box::new(quote_dim_closure(lvl, dlvl, clos))),
+        Value::PLam(clos) => Term::PLam(Rc::new(quote_dim_closure(lvl, dlvl, clos))),
         Value::ReflectedPath { neutral, .. } => {
             // η-expand: a reflected path quotes to `λ i. p @ i`, where `p` is the underlying neutral.
             // The neutral lives outside the freshly-introduced dimension binder, so it is quoted at
             // the current `dlvl`; the bound `i` is dimension index 0.
-            Term::PLam(Box::new(Term::PApp(
-                Box::new(quote_neutral(lvl, dlvl, neutral)),
+            Term::PLam(Rc::new(Term::PApp(
+                Rc::new(quote_neutral(lvl, dlvl, neutral)),
                 Interval::Dim(0),
             )))
         }
@@ -947,7 +948,7 @@ fn quote_at(lvl: usize, dlvl: usize, value: &Value) -> Term {
                 Neutral::App(Box::new(neutral.clone()), Box::new(arg)),
                 &result_ty,
             );
-            Term::Lam(Box::new(quote_at(lvl + 1, dlvl, &body)))
+            Term::Lam(Rc::new(quote_at(lvl + 1, dlvl, &body)))
         }
         Value::Glue {
             base,
@@ -955,10 +956,10 @@ fn quote_at(lvl: usize, dlvl: usize, value: &Value) -> Term {
             ty,
             equiv,
         } => Term::Glue {
-            base: Box::new(quote_at(lvl, dlvl, base)),
+            base: Rc::new(quote_at(lvl, dlvl, base)),
             cofib: cofib.clone(),
-            ty: Box::new(quote_at(lvl, dlvl, ty)),
-            equiv: Box::new(quote_at(lvl, dlvl, equiv)),
+            ty: Rc::new(quote_at(lvl, dlvl, ty)),
+            equiv: Rc::new(quote_at(lvl, dlvl, equiv)),
         },
         // An effectful-neutral quotes to its `Op` with the recorded continuation spine replayed as
         // a stack of eliminations (mirroring how a [`Neutral`] quotes its spine).
@@ -973,7 +974,7 @@ fn quote_at(lvl: usize, dlvl: usize, value: &Value) -> Term {
                 effect: effect.clone(),
                 op: op.clone(),
                 type_args: type_args.iter().map(|v| quote_at(lvl, dlvl, v)).collect(),
-                arg: Box::new(quote_at(lvl, dlvl, arg)),
+                arg: Rc::new(quote_at(lvl, dlvl, arg)),
             };
             for frame in cont {
                 t = quote_frame(lvl, dlvl, t, frame);
@@ -986,14 +987,14 @@ fn quote_at(lvl: usize, dlvl: usize, value: &Value) -> Term {
         Value::Cont { .. } => {
             let arg = Value::Neutral(Neutral::Var(lvl));
             let body = apply(value.clone(), arg);
-            Term::Lam(Box::new(quote_at(lvl + 1, dlvl, &body)))
+            Term::Lam(Rc::new(quote_at(lvl + 1, dlvl, &body)))
         }
         // The Capretta delay quotes structurally; `Later` is *not* unfolded (guarded).
-        Value::Delay(a) => Term::Delay(Box::new(quote_at(lvl, dlvl, a))),
-        Value::Now(a) => Term::Now(Box::new(quote_at(lvl, dlvl, a))),
-        Value::Later(d) => Term::Later(Box::new(quote_at(lvl, dlvl, d))),
+        Value::Delay(a) => Term::Delay(Rc::new(quote_at(lvl, dlvl, a))),
+        Value::Now(a) => Term::Now(Rc::new(quote_at(lvl, dlvl, a))),
+        Value::Later(d) => Term::Later(Rc::new(quote_at(lvl, dlvl, d))),
         // A `force` stuck on a guarded `later` quotes back structurally.
-        Value::Force(d) => Term::Force(Box::new(quote_at(lvl, dlvl, d))),
+        Value::Force(d) => Term::Force(Rc::new(quote_at(lvl, dlvl, d))),
         // Primitive machine integers quote back to their literal/type forms.
         Value::IntTy => Term::IntTy,
         Value::IntLit(n) => Term::IntLit(*n),
@@ -1004,23 +1005,23 @@ fn quote_at(lvl: usize, dlvl: usize, value: &Value) -> Term {
 /// quoting an [`Value::OpNode`] spine back to a term).
 fn quote_frame(lvl: usize, dlvl: usize, base: Term, frame: &Frame) -> Term {
     match frame {
-        Frame::App(a) => Term::App(Box::new(base), Box::new(quote_at(lvl, dlvl, a))),
-        Frame::AppFun(f) => Term::App(Box::new(quote_at(lvl, dlvl, f)), Box::new(base)),
-        Frame::Fst => Term::Fst(Box::new(base)),
-        Frame::Snd => Term::Snd(Box::new(base)),
-        Frame::PApp(r) => Term::PApp(Box::new(base), quote_interval(dlvl, r)),
-        Frame::Unglue => Term::Unglue(Box::new(base)),
+        Frame::App(a) => Term::App(Rc::new(base), Rc::new(quote_at(lvl, dlvl, a))),
+        Frame::AppFun(f) => Term::App(Rc::new(quote_at(lvl, dlvl, f)), Rc::new(base)),
+        Frame::Fst => Term::Fst(Rc::new(base)),
+        Frame::Snd => Term::Snd(Rc::new(base)),
+        Frame::PApp(r) => Term::PApp(Rc::new(base), quote_interval(dlvl, r)),
+        Frame::Unglue => Term::Unglue(Rc::new(base)),
         Frame::Elim {
             data,
             motive,
             methods,
         } => Term::Elim {
             data: data.clone(),
-            motive: Box::new(quote_at(lvl, dlvl, motive)),
+            motive: Rc::new(quote_at(lvl, dlvl, motive)),
             methods: methods.iter().map(|m| quote_at(lvl, dlvl, m)).collect(),
-            scrutinee: Box::new(base),
+            scrutinee: Rc::new(base),
         },
-        Frame::Force => Term::Force(Box::new(base)),
+        Frame::Force => Term::Force(Rc::new(base)),
     }
 }
 
@@ -1067,13 +1068,13 @@ fn quote_neutral(lvl: usize, dlvl: usize, n: &Neutral) -> Term {
     match n {
         Neutral::Var(k) => Term::Var(lvl - k - 1),
         Neutral::App(f, a) => Term::App(
-            Box::new(quote_neutral(lvl, dlvl, f)),
-            Box::new(quote_at(lvl, dlvl, a)),
+            Rc::new(quote_neutral(lvl, dlvl, f)),
+            Rc::new(quote_at(lvl, dlvl, a)),
         ),
-        Neutral::Fst(p) => Term::Fst(Box::new(quote_neutral(lvl, dlvl, p))),
-        Neutral::Snd(p) => Term::Snd(Box::new(quote_neutral(lvl, dlvl, p))),
+        Neutral::Fst(p) => Term::Fst(Rc::new(quote_neutral(lvl, dlvl, p))),
+        Neutral::Snd(p) => Term::Snd(Rc::new(quote_neutral(lvl, dlvl, p))),
         Neutral::PApp(p, r) => Term::PApp(
-            Box::new(quote_neutral(lvl, dlvl, p)),
+            Rc::new(quote_neutral(lvl, dlvl, p)),
             quote_interval(dlvl, r),
         ),
         Neutral::Elim {
@@ -1083,19 +1084,19 @@ fn quote_neutral(lvl: usize, dlvl: usize, n: &Neutral) -> Term {
             scrutinee,
         } => Term::Elim {
             data: data.clone(),
-            motive: Box::new(quote_at(lvl, dlvl, motive)),
+            motive: Rc::new(quote_at(lvl, dlvl, motive)),
             methods: methods.iter().map(|m| quote_at(lvl, dlvl, m)).collect(),
-            scrutinee: Box::new(quote_neutral(lvl, dlvl, scrutinee)),
+            scrutinee: Rc::new(quote_neutral(lvl, dlvl, scrutinee)),
         },
-        Neutral::Force(d) => Term::Force(Box::new(quote_neutral(lvl, dlvl, d))),
+        Neutral::Force(d) => Term::Force(Rc::new(quote_neutral(lvl, dlvl, d))),
         Neutral::Foreign { symbol, ty } => Term::Foreign {
             symbol: symbol.clone(),
-            ty: Box::new(quote_at(lvl, dlvl, ty)),
+            ty: Rc::new(quote_at(lvl, dlvl, ty)),
         },
         Neutral::IntPrim { op, lhs, rhs } => Term::IntPrim {
             op: *op,
-            lhs: Box::new(quote_at(lvl, dlvl, lhs)),
-            rhs: Box::new(quote_at(lvl, dlvl, rhs)),
+            lhs: Rc::new(quote_at(lvl, dlvl, lhs)),
+            rhs: Rc::new(quote_at(lvl, dlvl, rhs)),
         },
     }
 }
@@ -1467,8 +1468,8 @@ mod tests {
     #[test]
     fn beta_reduces_application() {
         // (λ x. x) (Univ 0)
-        let id = Term::Lam(Box::new(Term::Var(0)));
-        let app = Term::App(Box::new(id), Box::new(u0()));
+        let id = Term::Lam(Rc::new(Term::Var(0)));
+        let app = Term::App(Rc::new(id), Rc::new(u0()));
         let v = eval(&Env::empty(), &app);
         assert_eq!(quote(0, &v), u0());
     }
@@ -1479,8 +1480,8 @@ mod tests {
         // Pi (x :^ω Univ 0). Univ 0
         let pi = Term::Pi(
             crate::semiring::Grade::Omega,
-            Box::new(u0()),
-            Box::new(u0()),
+            Rc::new(u0()),
+            Rc::new(u0()),
         );
         let v = eval(&Env::empty(), &pi);
         assert_eq!(quote(0, &v), pi);
@@ -1489,7 +1490,7 @@ mod tests {
     /// `Conv` accepts definitionally equal terms: `(λ x. x) (Univ 0) ≡ Univ 0`.
     #[test]
     fn conv_accepts_equal() {
-        let id_app = Term::App(Box::new(Term::Lam(Box::new(Term::Var(0)))), Box::new(u0()));
+        let id_app = Term::App(Rc::new(Term::Lam(Rc::new(Term::Var(0)))), Rc::new(u0()));
         let a = eval(&Env::empty(), &id_app);
         let b = eval(&Env::empty(), &u0());
         assert!(conv(0, &a, &b));
@@ -1511,9 +1512,9 @@ mod tests {
     fn eta_for_functions() {
         // In context with one free var f at level 0, compare (λ. f 0) with f.
         // We model f as a neutral by quoting at depth 1.
-        let lam_eta = Term::Lam(Box::new(Term::App(
-            Box::new(Term::Var(1)),
-            Box::new(Term::Var(0)),
+        let lam_eta = Term::Lam(Rc::new(Term::App(
+            Rc::new(Term::Var(1)),
+            Rc::new(Term::Var(0)),
         )));
         // Evaluate under an env where Var(0) (the f) is a neutral variable at level 0.
         let env = Env::empty().extend(Value::Neutral(crate::value::Neutral::Var(0)));
@@ -1584,8 +1585,8 @@ mod tests {
     #[test]
     fn path_beta() {
         let env = Env::empty().extend(Value::Neutral(crate::value::Neutral::Var(0)));
-        let p = Term::PLam(Box::new(Term::Var(0)));
-        let papp0 = Term::PApp(Box::new(p), Iv::I0);
+        let p = Term::PLam(Rc::new(Term::Var(0)));
+        let papp0 = Term::PApp(Rc::new(p), Iv::I0);
         let v = eval(&env, &papp0);
         let point = eval(&env, &Term::Var(0));
         assert!(conv(1, &v, &point), "path β: (λ i. x) @ 0 ≡ x");
@@ -1602,8 +1603,8 @@ mod tests {
     fn stuck_papp_connection_under_nested_dims_quotes() {
         let env = Env::empty().extend(Value::Neutral(crate::value::Neutral::Var(0)));
         // λ i. λ j. p @ (imax (~ i) j)  — under the j-binder, i is dim index 1, j is dim index 0.
-        let body = Term::PApp(Box::new(Term::Var(0)), imax(neg(dim(1)), dim(0)));
-        let term = Term::PLam(Box::new(Term::PLam(Box::new(body))));
+        let body = Term::PApp(Rc::new(Term::Var(0)), imax(neg(dim(1)), dim(0)));
+        let term = Term::PLam(Rc::new(Term::PLam(Rc::new(body))));
         let v = eval(&env, &term);
         let q = quote_at(1, 0, &v);
         let v2 = eval(&env, &q);
@@ -1703,7 +1704,7 @@ mod tests {
         let env = Env::empty();
         let resume = Value::Lam(Closure {
             env: env.clone(),
-            body: Term::Pair(Box::new(Term::Var(0)), Box::new(Term::Var(0))),
+            body: Term::Pair(Rc::new(Term::Var(0)), Rc::new(Term::Var(0))),
         });
         let cont = vec![
             crate::value::Frame::App(Value::Univ(Level::Zero)),
@@ -1744,7 +1745,7 @@ mod tests {
             effect: crate::row::EffName::new("E"),
             op: "op".to_string(),
             type_args: Vec::new(),
-            arg: Box::new(u0()),
+            arg: Rc::new(u0()),
         };
         let v = eval(&Env::empty(), &op);
         assert_eq!(quote(0, &v), op);
@@ -1760,15 +1761,18 @@ mod tests {
     // that O(n) cost once per level — an O(depth × env-size) compounding that `ValueChain` (an
     // O(1)-clone persistent chain) closes.
     //
-    // Residual, *not* fixed here (documented honestly rather than silently left untested): a
-    // wide flat `let`-chain still pays O(width²) the *first* time it is evaluated, because
-    // `eval`'s `Term::Lam`/`Pi`/`Sigma`/`PLam` arms still deep-`clone()` the remaining `Box<Term>`
-    // subtree into each new `Closure` — a one-time construction cost, not a repeated-reduction
-    // one, and it is orthogonal to `ValueChain`. Closing it fully needs `Term`'s own recursive
-    // fields to move from `Box<Term>` to `Rc<Term>` (so a closure can share a pointer into the
-    // original tree instead of cloning a subtree), which touches the term representation used by
-    // every crate in the pipeline (elab/kernel/recheck/codegen) — too large a TCB-adjacent change
-    // to take in the same pass as the `Env` fix. Flagged here as the natural N1 follow-on.
+    // Residual (updated after S3 + the arc-N review, docs/roadmap-v0.1.md): the O(width²)
+    // first-evaluation clone cost this paragraph blamed on `Box<Term>` was *fixed* — `Term`'s
+    // recursive fields are `Rc<Term>` since S3, so the `Lam`/`Pi`/`Sigma`/`PLam` arms' `.clone()`
+    // into each new `Closure` is a shallow per-node refcount bump — and it was **not** the
+    // dominant cost at self-host scale. That cost is now identified and code-cited: `do_elim`
+    // eagerly computes *discarded* induction hypotheses (the unconditional `ih = do_elim(...)`
+    // per recursive constructor argument below), so a single `nat-eq` over character codepoints
+    // costs ~2^min(codepoints) eliminator steps — measured slope ×~2.0 per +1 codepoint on
+    // match-forced `nat-eq k k`, identical (±15%) in blight-recheck. Every known "cliff"
+    // reproducer (RECHECK_SKIP, reader-demo-refl) is this one defect at 0% progress on its first
+    // character comparison. Fix tracked as arc N / N2 (lazy IH or IH-free case trees); the
+    // secondary Θ(k)-per-level `Value` deep-clone multiplier is N3.
 
     use crate::signature::{Arg, Constructor, DataDecl, Signature};
     use crate::term::{ConName, DataName};
@@ -1834,14 +1838,14 @@ mod tests {
     /// `λ a. λ b. Elim Nat (λ_. Nat) [b, λn.λih. succ ih] a` — structural `plus`, recursive on
     /// its *first* argument (so `plus (nat_lit n) zero` drives an `n`-deep `do_elim` recursion).
     fn plus_term() -> Term {
-        Term::Lam(Box::new(Term::Lam(Box::new(Term::Elim {
+        Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Elim {
             data: nat_name(),
-            motive: Box::new(Term::Lam(Box::new(nat_ty()))),
+            motive: Rc::new(Term::Lam(Rc::new(nat_ty()))),
             methods: vec![
                 Term::Var(0), // zero case: the second argument `b`
-                Term::Lam(Box::new(Term::Lam(Box::new(nat_succ(Term::Var(0)))))), // λn.λih. succ ih
+                Term::Lam(Rc::new(Term::Lam(Rc::new(nat_succ(Term::Var(0)))))), // λn.λih. succ ih
             ],
-            scrutinee: Box::new(Term::Var(1)), // the first argument `a`
+            scrutinee: Rc::new(Term::Var(1)), // the first argument `a`
         }))))
     }
 
@@ -1851,7 +1855,7 @@ mod tests {
     fn wrap_in_wide_env(width: u32, body: Term) -> Term {
         let mut t = body;
         for _ in 0..width {
-            t = Term::App(Box::new(Term::Lam(Box::new(t))), Box::new(u0()));
+            t = Term::App(Rc::new(Term::Lam(Rc::new(t))), Rc::new(u0()));
         }
         t
     }
@@ -1876,8 +1880,8 @@ mod tests {
             // `plus (nat_lit depth) zero` inside a `width`-deep ambient environment: exercises
             // both compounding dimensions of the documented blowup at once.
             let plus_applied = Term::App(
-                Box::new(Term::App(Box::new(plus_term()), Box::new(nat_lit(depth)))),
-                Box::new(nat_zero()),
+                Rc::new(Term::App(Rc::new(plus_term()), Rc::new(nat_lit(depth)))),
+                Rc::new(nat_zero()),
             );
             let term = wrap_in_wide_env(width, plus_applied);
 
@@ -1908,8 +1912,8 @@ mod tests {
             let env = Env::with_sig(sig);
 
             let plus_applied = Term::App(
-                Box::new(Term::App(Box::new(plus_term()), Box::new(nat_lit(depth)))),
-                Box::new(nat_zero()),
+                Rc::new(Term::App(Rc::new(plus_term()), Rc::new(nat_lit(depth)))),
+                Rc::new(nat_zero()),
             );
             let result = eval(&env, &plus_applied);
             // Off by one: not convertible.

@@ -13,6 +13,7 @@
 //! the elaborator, so this encoding never escapes into the kernel.
 
 use blight_kernel::Term;
+use std::rc::Rc;
 
 /// Reserved de Bruijn base for metavariables. Real contexts never reach this depth.
 pub const META_BASE: usize = 1 << 40;
@@ -182,24 +183,24 @@ impl MetaCtx {
             Term::Var(_) | Term::Univ(_) | Term::Interval(_) | Term::Erased | Term::System(_) => {
                 t.clone()
             }
-            Term::Pi(g, a, b) => Term::Pi(*g, Box::new(self.zonk(a)), Box::new(self.zonk(b))),
-            Term::Sigma(a, b) => Term::Sigma(Box::new(self.zonk(a)), Box::new(self.zonk(b))),
-            Term::Lam(b) => Term::Lam(Box::new(self.zonk(b))),
-            Term::PLam(b) => Term::PLam(Box::new(self.zonk(b))),
-            Term::App(f, x) => Term::App(Box::new(self.zonk(f)), Box::new(self.zonk(x))),
-            Term::Pair(a, b) => Term::Pair(Box::new(self.zonk(a)), Box::new(self.zonk(b))),
-            Term::Fst(p) => Term::Fst(Box::new(self.zonk(p))),
-            Term::Snd(p) => Term::Snd(Box::new(self.zonk(p))),
-            Term::Ann(a, b) => Term::Ann(Box::new(self.zonk(a)), Box::new(self.zonk(b))),
+            Term::Pi(g, a, b) => Term::Pi(*g, Rc::new(self.zonk(a)), Rc::new(self.zonk(b))),
+            Term::Sigma(a, b) => Term::Sigma(Rc::new(self.zonk(a)), Rc::new(self.zonk(b))),
+            Term::Lam(b) => Term::Lam(Rc::new(self.zonk(b))),
+            Term::PLam(b) => Term::PLam(Rc::new(self.zonk(b))),
+            Term::App(f, x) => Term::App(Rc::new(self.zonk(f)), Rc::new(self.zonk(x))),
+            Term::Pair(a, b) => Term::Pair(Rc::new(self.zonk(a)), Rc::new(self.zonk(b))),
+            Term::Fst(p) => Term::Fst(Rc::new(self.zonk(p))),
+            Term::Snd(p) => Term::Snd(Rc::new(self.zonk(p))),
+            Term::Ann(a, b) => Term::Ann(Rc::new(self.zonk(a)), Rc::new(self.zonk(b))),
             Term::Data(n, ps, is) => Term::Data(
                 n.clone(),
                 ps.iter().map(|x| self.zonk(x)).collect(),
                 is.iter().map(|x| self.zonk(x)).collect(),
             ),
             Term::Con(n, args) => Term::Con(n.clone(), args.iter().map(|x| self.zonk(x)).collect()),
-            Term::Delay(a) => Term::Delay(Box::new(self.zonk(a))),
-            Term::Now(a) => Term::Now(Box::new(self.zonk(a))),
-            Term::Later(a) => Term::Later(Box::new(self.zonk(a))),
+            Term::Delay(a) => Term::Delay(Rc::new(self.zonk(a))),
+            Term::Now(a) => Term::Now(Rc::new(self.zonk(a))),
+            Term::Later(a) => Term::Later(Rc::new(self.zonk(a))),
             // Other nodes carry no metas in M3 elaboration; clone structurally.
             other => other.clone(),
         }
@@ -267,7 +268,7 @@ mod tests {
         let mut mc = MetaCtx::new();
         let m = mc.fresh();
         // Domain `List ?m`; argument's synthesized type `(! E (List Nat))`.
-        let eff = Term::EffTy(Row::empty(), Box::new(list(nat())));
+        let eff = Term::EffTy(Row::empty(), Rc::new(list(nat())));
         mc.unify(&list(meta_term(m)), &eff).unwrap();
         assert_eq!(mc.solution(m), Some(&nat()));
     }

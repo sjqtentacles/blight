@@ -49,11 +49,29 @@ pub fn build_binary_opt(
     // (`compile_source_to_anf`) — so a deep but finite term compiles instead of aborting. `scope`
     // borrows `term`/`ty`/`sig` without `'static`, and propagates the inner `Result`/panic.
     let run = || -> Result<(), String> { build_binary_pipeline(term, ty, sig, out_bin, work, opt) };
+    // SAFETY (S3, `Term: Box → Rc`): `&Term` stopped being `Send` because `Rc`'s refcounts are
+    // non-atomic. Handing the borrow to the backend thread is still sound *here* because access is
+    // strictly serialized: the parent blocks on `join()` inside the same `scope` and touches
+    // nothing reachable from `term`/`ty`/`sig` while the child runs, no other thread holds these
+    // `Rc`s (the CLI/tests elaborate and then call in on one thread), and `spawn`/`join` establish
+    // happens-before edges around every refcount update. The child is the *only* thread touching
+    // the terms for its whole lifetime — exactly the old `Box` situation with a bigger stack.
+    struct AssertSend<T>(T);
+    unsafe impl<T> Send for AssertSend<T> {}
+    impl<T> AssertSend<T> {
+        // A method taking `self` forces the closure below to capture the *whole* wrapper:
+        // edition-2021 disjoint capture would otherwise reach through to the `.0` field and
+        // bypass the `Send` shield.
+        fn into_inner(self) -> T {
+            self.0
+        }
+    }
+    let run = AssertSend(run);
     let res = std::thread::scope(|s| {
         std::thread::Builder::new()
             .name("blight-backend".into())
             .stack_size(512 * 1024 * 1024)
-            .spawn_scoped(s, run)
+            .spawn_scoped(s, move || run.into_inner()())
             .map_err(|e| format!("spawn backend thread: {e}"))?
             .join()
             .map_err(|_| "backend pipeline panicked".to_string())?

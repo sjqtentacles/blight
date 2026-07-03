@@ -6,6 +6,7 @@
 //! the M3 tower), so the `Vec`/erasure cases drive the *kernel* public API directly — still a
 //! black-box test of the trusted base, just one layer in from the parser.
 
+use std::rc::Rc;
 use blight_kernel::{
     check_top_with, erase::erase, Arg, ConName, Constructor, DataDecl, DataName, Grade, Level,
     Signature, Term, TypeError,
@@ -124,16 +125,16 @@ fn repl_rejects_linear_use_twice() {
             Term::Pi(
                 grade,
                 dom,
-                Box::new(Term::Sigma(Box::new(nat_ty()), Box::new(nat_ty()))),
+                Rc::new(Term::Sigma(Rc::new(nat_ty()), Rc::new(nat_ty()))),
             )
         }
         other => panic!("expected a Pi type, got {other:?}"),
     };
 
     // body = λ x. (x, x)  — uses the linear `x` twice.
-    let body = Term::Lam(Box::new(Term::Pair(
-        Box::new(Term::Var(0)),
-        Box::new(Term::Var(0)),
+    let body = Term::Lam(Rc::new(Term::Pair(
+        Rc::new(Term::Var(0)),
+        Rc::new(Term::Var(0)),
     )));
 
     match check_top_with(env.signature().clone(), body, ty_core) {
@@ -152,7 +153,7 @@ fn repl_accepts_linear_use_once() {
 
     let ty_surface = read_surface("(Pi ((x Nat 1)) Nat)");
     let ty_core = elaborate(&env, &ty_surface).expect("type elaborates");
-    let body = Term::Lam(Box::new(Term::Var(0)));
+    let body = Term::Lam(Rc::new(Term::Var(0)));
 
     check_top_with(env.signature().clone(), body, ty_core)
         .expect("a linear binder used exactly once must be accepted");
@@ -190,11 +191,11 @@ fn erased_index_absent_after_erasure() {
     // ty = (n : Nat) →⁰ (x : Nat) →¹ Nat
     let ty = Term::Pi(
         Grade::Zero,
-        Box::new(nat_ty()),
-        Box::new(Term::Pi(Grade::One, Box::new(nat_ty()), Box::new(nat_ty()))),
+        Rc::new(nat_ty()),
+        Rc::new(Term::Pi(Grade::One, Rc::new(nat_ty()), Rc::new(nat_ty()))),
     );
     // term = λ n. λ x. x
-    let term = Term::Lam(Box::new(Term::Lam(Box::new(Term::Var(0)))));
+    let term = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Var(0)))));
 
     // The kernel accepts it: `n` is never used at runtime (grade 0), `x` exactly once.
     check_top_with(nat_sig(), term.clone(), ty.clone())
@@ -220,7 +221,7 @@ fn erased_index_absent_after_erasure() {
 
 /// The type of the residual `λ x. x` after the grade-0 binder is removed: `(x : Nat) →¹ Nat`.
 fn erased_ty_after_drop() -> Term {
-    Term::Pi(Grade::One, Box::new(nat_ty()), Box::new(nat_ty()))
+    Term::Pi(Grade::One, Rc::new(nat_ty()), Rc::new(nat_ty()))
 }
 
 /// True if the term references what *was* the erased index — i.e. the `Erased` sentinel appears,

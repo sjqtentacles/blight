@@ -7,13 +7,19 @@
 
 use blight_elab::{ElabError, Outcome, Program};
 
-fn run(src: String) -> Result<Vec<Outcome>, ElabError> {
+/// Run `src` in a fresh env on a large stack and hand the result to `check` on the worker
+/// thread (post-S3, `Term` holds `Rc`s, so `Outcome`/`ElabError` cannot cross `join`).
+fn run_with<R: Send + 'static>(
+    src: String,
+    check: impl FnOnce(Result<Vec<Outcome>, ElabError>) -> R + Send + 'static,
+) -> R {
     std::thread::Builder::new()
         .stack_size(32 * 1024 * 1024)
         .spawn(move || {
             let mut env = blight_elab::ElabEnv::new();
             let mut prog = Program::new(&mut env);
-            prog.run(&src)
+            let result = prog.run(&src);
+            check(result)
         })
         .expect("spawn")
         .join()
@@ -109,8 +115,10 @@ fn measured_definition_computes_when_measure_adequate() {
            (lam (n) (match n [(Zero) Zero] [(Succ k) (count-down (pred (Succ k)))])))\n\
          (the (Path Nat (count-down (Succ (Succ Zero))) Zero) (plam (i) Zero))"
     );
-    let outcomes = run(src).expect("measured count-down computes to Zero");
-    assert!(matches!(outcomes.last(), Some(Outcome::Checked(_))));
+    run_with(src, |r| {
+        let outcomes = r.expect("measured count-down computes to Zero");
+        assert!(matches!(outcomes.last(), Some(Outcome::Checked(_))));
+    });
 }
 
 /// The honest contract, pinned: a *wrong* measure (seeding zero fuel) still yields a TOTAL function
@@ -131,10 +139,12 @@ fn wrong_measure_is_total_but_returns_default() {
     );
     // Fuel seed = (Succ Zero) = 1. cd 2 → one Succ-arm unfolding: cd (pred 2) = cd 1, but the inner
     // call is at fuel Zero → returns the default 3. So `cd 2 = 3` (the default), definitionally.
-    let outcomes = run(src).expect(
-        "a wrong measure still type-checks (total) and returns the default, definitionally",
-    );
-    assert!(matches!(outcomes.last(), Some(Outcome::Checked(_))));
+    run_with(src, |r| {
+        let outcomes = r.expect(
+            "a wrong measure still type-checks (total) and returns the default, definitionally",
+        );
+        assert!(matches!(outcomes.last(), Some(Outcome::Checked(_))));
+    });
 }
 
 /// `(measure …)` without a following `(default …)` is not recognized as the measured shape (it
@@ -142,28 +152,32 @@ fn wrong_measure_is_total_but_returns_default() {
 /// default is mandatory.
 #[test]
 fn measure_without_default_is_rejected() {
-    let err = run(format!(
-        "{NAT}(deftotal f (Pi ((n Nat)) Nat) (measure n) (lam (n) (f n)))"
-    ))
-    .expect_err("measure without default is rejected");
-    // The ordinary deftotal path errors on the unexpected arity.
-    let (ElabError::BadForm(_) | ElabError::BadMatch(_)) = err else {
-        panic!("expected a form error, got {err:?}")
-    };
+    run_with(
+        format!("{NAT}(deftotal f (Pi ((n Nat)) Nat) (measure n) (lam (n) (f n)))"),
+        |r| {
+            let err = r.expect_err("measure without default is rejected");
+            // The ordinary deftotal path errors on the unexpected arity.
+            let (ElabError::BadForm(_) | ElabError::BadMatch(_)) = err else {
+                panic!("expected a form error, got {err:?}")
+            };
+        },
+    );
 }
 
 /// A measured definition whose body never recurses is rejected (the clauses are pointless).
 #[test]
 fn measure_on_non_recursive_body_is_error() {
-    let err = run(format!(
-        "{NAT}(deftotal f (Pi ((n Nat)) Nat) (measure n) (default Zero) (lam (n) Zero))"
-    ))
-    .expect_err("non-recursive measured def rejected");
-    let ElabError::BadForm(m) = err else {
-        panic!("expected BadForm, got {err:?}")
-    };
-    assert!(
-        m.contains("never calls"),
-        "message explains the body doesn't recurse: {m}"
+    run_with(
+        format!("{NAT}(deftotal f (Pi ((n Nat)) Nat) (measure n) (default Zero) (lam (n) Zero))"),
+        |r| {
+            let err = r.expect_err("non-recursive measured def rejected");
+            let ElabError::BadForm(m) = err else {
+                panic!("expected BadForm, got {err:?}")
+            };
+            assert!(
+                m.contains("never calls"),
+                "message explains the body doesn't recurse: {m}"
+            );
+        },
     );
 }

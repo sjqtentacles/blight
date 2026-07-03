@@ -140,6 +140,7 @@ pub fn recheck_proof(sig: &Signature, proof: &Proof) -> RecheckResult {
 // =================================================================================================
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
     use super::*;
     use blight_kernel::term::{Cofib, SystemBranch};
     use blight_kernel::{Arg, ConName, Constructor, DataDecl, DataName, Interval, Level, Term};
@@ -179,16 +180,16 @@ mod tests {
     fn from_kernel_declines_glue() {
         let u0 = || Term::Univ(Level::Zero);
         let glue = Term::Glue {
-            base: Box::new(u0()),
+            base: Rc::new(u0()),
             cofib: Cofib::Eq0(Interval::I0),
-            ty: Box::new(u0()),
-            equiv: Box::new(u0()),
+            ty: Rc::new(u0()),
+            equiv: Rc::new(u0()),
         };
         assert!(matches!(
             term::from_kernel(&glue),
             Err(RecheckError::Declined(_))
         ));
-        let unglue = Term::Unglue(Box::new(glue));
+        let unglue = Term::Unglue(Rc::new(glue));
         assert!(matches!(
             term::from_kernel(&unglue),
             Err(RecheckError::Declined(_))
@@ -198,7 +199,7 @@ mod tests {
     /// `from_kernel` declines cubical partial elements and systems.
     #[test]
     fn from_kernel_declines_partial_and_system() {
-        let partial = Term::Partial(Cofib::Top, Box::new(nat()));
+        let partial = Term::Partial(Cofib::Top, Rc::new(nat()));
         assert!(matches!(
             term::from_kernel(&partial),
             Err(RecheckError::Declined(_))
@@ -233,7 +234,7 @@ mod tests {
     fn from_kernel_declines_foreign() {
         let f = Term::Foreign {
             symbol: "bl_x".into(),
-            ty: Box::new(nat()),
+            ty: Rc::new(nat()),
         };
         match term::from_kernel(&f) {
             Err(RecheckError::Declined(m)) => assert!(m.contains("foreign")),
@@ -269,8 +270,8 @@ mod tests {
     #[test]
     fn require_pure_flag_rejects_partial_at_proof_boundary() {
         let sig = nat_sig();
-        let delay_nat = Term::Delay(Box::new(nat()));
-        let later = Term::Later(Box::new(Term::Now(Box::new(zero()))));
+        let delay_nat = Term::Delay(Rc::new(nat()));
+        let later = Term::Later(Rc::new(Term::Now(Rc::new(zero()))));
         let rterm = term::from_kernel(&later).expect("partial term is in-fragment");
         let rty = term::from_kernel(&delay_nat).expect("Delay Nat is in-fragment");
 
@@ -290,8 +291,8 @@ mod tests {
     #[test]
     fn require_pure_flag_accepts_pure_term() {
         let sig = nat_sig();
-        let delay_nat = Term::Delay(Box::new(nat()));
-        let now = Term::Now(Box::new(zero()));
+        let delay_nat = Term::Delay(Rc::new(nat()));
+        let now = Term::Now(Rc::new(zero()));
         let rterm = term::from_kernel(&now).unwrap();
         let rty = term::from_kernel(&delay_nat).unwrap();
         assert!(typecheck::Recheck::new(&sig)

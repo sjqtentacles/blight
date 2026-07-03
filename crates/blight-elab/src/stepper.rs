@@ -32,6 +32,7 @@ use crate::ElabEnv;
 use blight_kernel::normalize::{eval, quote, run_metered};
 use blight_kernel::value::Env;
 use blight_kernel::Term;
+use std::rc::Rc;
 
 /// The default step budget for `:step` (same order of magnitude as `tactic.rs`'s `(by compute)` —
 /// generous for any genuinely terminating expression a REPL user would type, small enough that a
@@ -163,7 +164,7 @@ fn pretty_folding_globals(env: &ElabEnv, term: &Term) -> String {
 /// shapes `elab.rs`'s inlining rule can produce).
 fn fold_whole_term(env: &ElabEnv, term: &Term) -> Option<String> {
     for (name, body, ty) in env.typed_globals() {
-        if body == *term || Term::Ann(Box::new(body.clone()), Box::new(ty)) == *term {
+        if body == *term || Term::Ann(Rc::new(body.clone()), Rc::new(ty)) == *term {
             return Some(name);
         }
     }

@@ -8,6 +8,7 @@
 use blight_elab::ElabEnv;
 use blight_kernel::{check_top_with, ConName, DataName, Grade, Judgement, Proof, Signature, Term};
 use blight_recheck::{recheck_judgement, recheck_proof, RecheckError};
+use std::rc::Rc;
 
 /// The headline cubical `plus-zero` program (spec §5.3).
 const PLUS_ZERO_SRC: &str = r#"
@@ -106,7 +107,7 @@ fn recheck_rejects_mutated_term() {
     let nat = Term::Data(DataName("Nat".into()), vec![], vec![]);
     let bad = Judgement::HasType {
         term: Term::Con(ConName("Zero".into()), vec![]),
-        ty: Term::Pi(Grade::Omega, Box::new(nat.clone()), Box::new(nat)),
+        ty: Term::Pi(Grade::Omega, Rc::new(nat.clone()), Rc::new(nat)),
     };
     match recheck_judgement(&sig, &bad) {
         Err(RecheckError::Rejected(_)) => {}
@@ -124,7 +125,7 @@ fn recheck_declines_foreign() {
     let j = Judgement::HasType {
         term: Term::Foreign {
             symbol: "bl_foreign_answer".into(),
-            ty: Box::new(u0.clone()),
+            ty: Rc::new(u0.clone()),
         },
         ty: u0,
     };
@@ -150,10 +151,10 @@ fn recheck_declines_glue() {
     let sig = Signature::new();
     let u0 = || Term::Univ(blight_kernel::Level::Zero);
     let glue = Term::Glue {
-        base: Box::new(u0()),
+        base: Rc::new(u0()),
         cofib: blight_kernel::Cofib::Eq0(blight_kernel::Interval::I0),
-        ty: Box::new(u0()),
-        equiv: Box::new(u0()),
+        ty: Rc::new(u0()),
+        equiv: Rc::new(u0()),
     };
     let j = Judgement::HasType {
         term: glue,
@@ -195,17 +196,17 @@ fn recheck_conv_eta() {
     // β: `((the (Nat -> Nat) (λx. x)) Zero) : Nat`. The function must be inferable, so it carries
     // an ascription — exactly as the elaborator produces it.
     let id_fn = Term::Ann(
-        Box::new(Term::Lam(Box::new(Term::Var(0)))),
-        Box::new(Term::Pi(
+        Rc::new(Term::Lam(Rc::new(Term::Var(0)))),
+        Rc::new(Term::Pi(
             Grade::Omega,
-            Box::new(nat.clone()),
-            Box::new(nat.clone()),
+            Rc::new(nat.clone()),
+            Rc::new(nat.clone()),
         )),
     );
     let beta = Judgement::HasType {
         term: Term::App(
-            Box::new(id_fn),
-            Box::new(Term::Con(ConName("Zero".into()), vec![])),
+            Rc::new(id_fn),
+            Rc::new(Term::Con(ConName("Zero".into()), vec![])),
         ),
         ty: nat.clone(),
     };
@@ -214,19 +215,19 @@ fn recheck_conv_eta() {
     // η: `λx. (id x) : Nat -> Nat` where `id = (the (Nat -> Nat) (λy. y))`. The η-expanded form
     // must re-check against the same Π type the kernel accepts.
     let id = Term::Ann(
-        Box::new(Term::Lam(Box::new(Term::Var(0)))),
-        Box::new(Term::Pi(
+        Rc::new(Term::Lam(Rc::new(Term::Var(0)))),
+        Rc::new(Term::Pi(
             Grade::Omega,
-            Box::new(nat.clone()),
-            Box::new(nat.clone()),
+            Rc::new(nat.clone()),
+            Rc::new(nat.clone()),
         )),
     );
     let eta = Judgement::HasType {
-        term: Term::Lam(Box::new(Term::App(
-            Box::new(id.clone()),
-            Box::new(Term::Var(0)),
+        term: Term::Lam(Rc::new(Term::App(
+            Rc::new(id.clone()),
+            Rc::new(Term::Var(0)),
         ))),
-        ty: Term::Pi(Grade::Omega, Box::new(nat.clone()), Box::new(nat.clone())),
+        ty: Term::Pi(Grade::Omega, Rc::new(nat.clone()), Rc::new(nat.clone())),
     };
     recheck_judgement(&sig, &eta).expect("η: λx.(id x) : Nat -> Nat should re-check");
 }
@@ -378,9 +379,9 @@ fn recheck_checks_transp_not_declined() {
 
     // transp (i. Nat) ⊥ Zero : Nat — a constant line, so it reduces to `Zero`.
     let transp = Term::Transp {
-        family: Box::new(nat()),
+        family: Rc::new(nat()),
         cofib: Cofib::Bot,
-        base: Box::new(zero()),
+        base: Rc::new(zero()),
     };
     let proof = check_top_with(sig.clone(), transp, nat())
         .expect("kernel accepts the constant transport at type Nat");
@@ -453,14 +454,14 @@ fn recheck_agrees_on_multi_param_and_multi_index() {
     });
     let pair_nat_nat = Term::Data(DataName("Pair".into()), vec![nat(), nat()], vec![]);
     let mk = Term::Ann(
-        Box::new(Term::Con(ConName("mk".into()), vec![succ(zero()), zero()])),
-        Box::new(pair_nat_nat),
+        Rc::new(Term::Con(ConName("mk".into()), vec![succ(zero()), zero()])),
+        Rc::new(pair_nat_nat),
     );
     let elim = Term::Elim {
         data: DataName("Pair".into()),
-        motive: Box::new(Term::Lam(Box::new(nat()))),
-        methods: vec![Term::Lam(Box::new(Term::Lam(Box::new(Term::Var(1)))))],
-        scrutinee: Box::new(mk),
+        motive: Rc::new(Term::Lam(Rc::new(nat()))),
+        methods: vec![Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Var(1)))))],
+        scrutinee: Rc::new(mk),
     };
     let proof = check_top_with(sig.clone(), elim, nat())
         .expect("kernel accepts the two-parameter Pair eliminator");
@@ -485,13 +486,13 @@ fn recheck_agrees_on_multi_param_and_multi_index() {
     let elim2 = Term::Elim {
         data: DataName("Square".into()),
         // λ m. λ n. λ (_:Square m n). Nat
-        motive: Box::new(Term::Lam(Box::new(Term::Lam(Box::new(Term::Lam(
-            Box::new(nat()),
+        motive: Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(
+            Rc::new(nat()),
         )))))),
         methods: vec![zero()],
-        scrutinee: Box::new(Term::Ann(
-            Box::new(Term::Con(ConName("corner".into()), vec![])),
-            Box::new(Term::Data(
+        scrutinee: Rc::new(Term::Ann(
+            Rc::new(Term::Con(ConName("corner".into()), vec![])),
+            Rc::new(Term::Data(
                 DataName("Square".into()),
                 vec![],
                 vec![zero(), zero()],
@@ -570,31 +571,31 @@ fn recheck_agrees_on_indexed_elim() {
     });
 
     // motive P = λ (n : Nat). λ (_ : Vec Nat n). Nat   (the length-erasing "always Nat" motive).
-    let motive = Term::Lam(Box::new(Term::Lam(Box::new(nat()))));
+    let motive = Term::Lam(Rc::new(Term::Lam(Rc::new(nat()))));
     // methods: vnil ↦ Zero ;  vcons ↦ λ n. λ x. λ xs. λ ih. Succ ih   (computes the length).
     let m_vnil = zero();
-    let m_vcons = Term::Lam(Box::new(Term::Lam(Box::new(Term::Lam(Box::new(
-        Term::Lam(Box::new(succ(Term::Var(0)))),
+    let m_vcons = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(
+        Term::Lam(Rc::new(succ(Term::Var(0)))),
     ))))));
     // scrutinee: vcons Zero Zero vnil : Vec Nat (Succ Zero). The constructor of a parameterized
     // family needs a type ascription to be inferable (the kernel cannot recover `A` otherwise).
     let vec_nat = |len: Term| Term::Data(DataName("Vec".into()), vec![nat()], vec![len]);
     let vnil = Term::Ann(
-        Box::new(Term::Con(ConName("vnil".into()), vec![])),
-        Box::new(vec_nat(zero())),
+        Rc::new(Term::Con(ConName("vnil".into()), vec![])),
+        Rc::new(vec_nat(zero())),
     );
     let vcons = Term::Ann(
-        Box::new(Term::Con(
+        Rc::new(Term::Con(
             ConName("vcons".into()),
             vec![zero(), zero(), vnil],
         )),
-        Box::new(vec_nat(succ(zero()))),
+        Rc::new(vec_nat(succ(zero()))),
     );
     let elim = Term::Elim {
         data: DataName("Vec".into()),
-        motive: Box::new(motive),
+        motive: Rc::new(motive),
         methods: vec![m_vnil, m_vcons],
-        scrutinee: Box::new(vcons),
+        scrutinee: Rc::new(vcons),
     };
 
     // The kernel accepts `elim : Nat`; the independent checker must agree.
@@ -636,7 +637,7 @@ fn recheck_accepts_delay_layer() {
     });
     let nat = || Term::Data(DataName("Nat".into()), vec![], vec![]);
     let zero = || Term::Con(ConName("Zero".into()), vec![]);
-    let delay_nat = || Term::Delay(Box::new(nat()));
+    let delay_nat = || Term::Delay(Rc::new(nat()));
 
     let accept = |term: Term, ty: Term, what: &str| {
         let j = Judgement::HasType { term, ty };
@@ -654,22 +655,22 @@ fn recheck_accepts_delay_layer() {
     accept(delay_nat(), Term::Univ(Level::Zero), "`Delay Nat : Univ 0`");
     // `now Zero : Delay Nat`.
     accept(
-        Term::Now(Box::new(zero())),
+        Term::Now(Rc::new(zero())),
         delay_nat(),
         "`now Zero : Delay Nat`",
     );
     // `later (now Zero) : Delay Nat` — a partial (possibly-diverging) buildable judgement, accepted.
     accept(
-        Term::Later(Box::new(Term::Now(Box::new(zero())))),
+        Term::Later(Rc::new(Term::Now(Rc::new(zero())))),
         delay_nat(),
         "`later (now Zero) : Delay Nat`",
     );
     // The headline: `force (now Zero) : Nat` — forcing re-checks to the underlying type, with
     // `force (now a) ⇝ a` in the independent normalizer. `force` infers its argument, so the
     // payload carries an ascription (`now (the Nat Zero)`), exactly as the elaborator produces.
-    let now_zero_ann = Term::Now(Box::new(Term::Ann(Box::new(zero()), Box::new(nat()))));
+    let now_zero_ann = Term::Now(Rc::new(Term::Ann(Rc::new(zero()), Rc::new(nat()))));
     accept(
-        Term::Force(Box::new(now_zero_ann)),
+        Term::Force(Rc::new(now_zero_ann)),
         nat(),
         "`force (now Zero) : Nat`",
     );
@@ -711,11 +712,11 @@ fn recheck_proof_path_demands_purity() {
     });
     let nat = || Term::Data(DataName("Nat".into()), vec![], vec![]);
     let zero = || Term::Con(ConName("Zero".into()), vec![]);
-    let delay_nat = || Term::Delay(Box::new(nat()));
+    let delay_nat = || Term::Delay(Rc::new(nat()));
 
     // A pure `now Zero : Delay Nat` is accepted by *both* doors.
     let pure = Judgement::HasType {
-        term: Term::Now(Box::new(zero())),
+        term: Term::Now(Rc::new(zero())),
         ty: delay_nat(),
     };
     assert!(recheck_judgement(&sig, &pure).is_ok());
@@ -727,7 +728,7 @@ fn recheck_proof_path_demands_purity() {
     // `later (now Zero) : Delay Nat` carries `Partial`: accepted by the buildable door, REJECTED by
     // the proof door for impurity.
     let later = Judgement::HasType {
-        term: Term::Later(Box::new(Term::Now(Box::new(zero())))),
+        term: Term::Later(Rc::new(Term::Now(Rc::new(zero())))),
         ty: delay_nat(),
     };
     assert!(
@@ -740,9 +741,9 @@ fn recheck_proof_path_demands_purity() {
     }
 
     // `force (now Zero) : Nat` likewise carries `Partial` and is rejected at the proof boundary.
-    let now_zero_ann = Term::Now(Box::new(Term::Ann(Box::new(zero()), Box::new(nat()))));
+    let now_zero_ann = Term::Now(Rc::new(Term::Ann(Rc::new(zero()), Rc::new(nat()))));
     let force = Judgement::HasType {
-        term: Term::Force(Box::new(now_zero_ann)),
+        term: Term::Force(Rc::new(now_zero_ann)),
         ty: nat(),
     };
     match blight_recheck::recheck_judgement_as_proof(&sig, &force) {
@@ -766,8 +767,8 @@ fn recheck_accepts_int_arith() {
     let lit = |n: i64| Term::IntLit(n);
     let prim = |op, a: Term, b: Term| Term::IntPrim {
         op,
-        lhs: Box::new(a),
-        rhs: Box::new(b),
+        lhs: Rc::new(a),
+        rhs: Rc::new(b),
     };
 
     let accept = |term: Term, ty: Term, what: &str| {
@@ -857,7 +858,7 @@ fn recheck_accepts_effects_and_handlers() {
     accept(
         Term::EffTy(
             Row::single(EffName::new("E"), Grade::One),
-            Box::new(unit_ty()),
+            Rc::new(unit_ty()),
         ),
         Term::Univ(Level::Zero),
         "`! E Unit : Univ 0`",
@@ -870,7 +871,7 @@ fn recheck_accepts_effects_and_handlers() {
             effect: EffName::new("E"),
             op: "op".into(),
             type_args: vec![],
-            arg: Box::new(tt()),
+            arg: Rc::new(tt()),
         },
         unit_ty(),
         "`perform op tt : Unit`",
@@ -881,16 +882,16 @@ fn recheck_accepts_effects_and_handlers() {
     // (`k` = de Bruijn 0, `x` = de Bruijn 1) and resumes `k tt`. The Handle's type is `Unit`.
     accept(
         Term::Handle {
-            body: Box::new(Term::Op {
+            body: Rc::new(Term::Op {
                 effect: EffName::new("E"),
                 op: "op".into(),
                 type_args: vec![],
-                arg: Box::new(tt()),
+                arg: Rc::new(tt()),
             }),
-            return_clause: Box::new(Term::Var(0)),
+            return_clause: Rc::new(Term::Var(0)),
             op_clauses: vec![(
                 "op".into(),
-                Box::new(Term::App(Box::new(Term::Var(0)), Box::new(tt()))),
+                Rc::new(Term::App(Rc::new(Term::Var(0)), Rc::new(tt()))),
             )],
         },
         unit_ty(),
@@ -949,18 +950,18 @@ fn recheck_enforces_continuation_grade() {
     // `handle (perform op tt) { return x. x ; op x k. (k (k tt)) } : Unit`. The op clause binds
     // `x:Unit` (de Bruijn 1) then `k:Unit→Unit` (de Bruijn 0) and resumes `k` *twice* — `k (k tt)`.
     let double_resume_handle = || Term::Handle {
-        body: Box::new(Term::Op {
+        body: Rc::new(Term::Op {
             effect: EffName::new("E"),
             op: "op".into(),
             type_args: vec![],
-            arg: Box::new(tt()),
+            arg: Rc::new(tt()),
         }),
-        return_clause: Box::new(Term::Var(0)),
+        return_clause: Rc::new(Term::Var(0)),
         op_clauses: vec![(
             "op".into(),
-            Box::new(Term::App(
-                Box::new(Term::Var(0)),
-                Box::new(Term::App(Box::new(Term::Var(0)), Box::new(tt()))),
+            Rc::new(Term::App(
+                Rc::new(Term::Var(0)),
+                Rc::new(Term::App(Rc::new(Term::Var(0)), Rc::new(tt()))),
             )),
         )],
     };
@@ -1244,40 +1245,40 @@ fn deep_plus_zero_proof(depth: u32) -> (Signature, Term) {
     // for a reason unrelated to what N1 fixes.
     let plus_ty = Term::Pi(
         Grade::Omega,
-        Box::new(nat_ty()),
-        Box::new(Term::Pi(
+        Rc::new(nat_ty()),
+        Rc::new(Term::Pi(
             Grade::Omega,
-            Box::new(nat_ty()),
-            Box::new(nat_ty()),
+            Rc::new(nat_ty()),
+            Rc::new(nat_ty()),
         )),
     );
     let plus = Term::Ann(
-        Box::new(Term::Lam(Box::new(Term::Lam(Box::new(Term::Elim {
+        Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Elim {
             data: nat.clone(),
-            motive: Box::new(Term::Lam(Box::new(nat_ty()))),
+            motive: Rc::new(Term::Lam(Rc::new(nat_ty()))),
             methods: vec![
                 Term::Var(0),
-                Term::Lam(Box::new(Term::Lam(Box::new(succ(Term::Var(0)))))),
+                Term::Lam(Rc::new(Term::Lam(Rc::new(succ(Term::Var(0)))))),
             ],
-            scrutinee: Box::new(Term::Var(1)),
+            scrutinee: Rc::new(Term::Var(1)),
         }))))),
-        Box::new(plus_ty),
+        Rc::new(plus_ty),
     );
     let plus_applied = Term::App(
-        Box::new(Term::App(Box::new(plus), Box::new(nat_lit(depth)))),
-        Box::new(zero()),
+        Rc::new(Term::App(Rc::new(plus), Rc::new(nat_lit(depth)))),
+        Rc::new(zero()),
     );
 
     // Proof term: the constant path `λi. nat_lit depth`, checked against
     // `Path Nat (plus (nat_lit depth) Zero) (nat_lit depth)` — the boundary check at `i = 0`
     // forces exactly the deep `conv` this golden pins.
     let ty = Term::PathP {
-        family: Box::new(nat_ty()),
-        lhs: Box::new(plus_applied),
-        rhs: Box::new(nat_lit(depth)),
+        family: Rc::new(nat_ty()),
+        lhs: Rc::new(plus_applied),
+        rhs: Rc::new(nat_lit(depth)),
     };
-    let proof_term = Term::PLam(Box::new(nat_lit(depth)));
-    (sig, Term::Ann(Box::new(proof_term), Box::new(ty)))
+    let proof_term = Term::PLam(Rc::new(nat_lit(depth)));
+    (sig, Term::Ann(Rc::new(proof_term), Rc::new(ty)))
 }
 
 /// `eval`/`check`/`conv` recurse natively in the Rust call stack; mirrors
@@ -1304,7 +1305,7 @@ fn deep_plus_zero_conv_kernel_and_recheck_agree_in_bounded_time() {
         };
 
         let start = std::time::Instant::now();
-        let proof = check_top_with(sig.clone(), *term, *ty)
+        let proof = check_top_with(sig.clone(), blight_kernel::unshare(term), blight_kernel::unshare(ty.clone()))
             .expect("kernel accepts the deep plus-zero proof");
         let recheck_result = blight_recheck::recheck_proof(&sig, &proof);
         let elapsed = start.elapsed();
@@ -1332,16 +1333,16 @@ fn deep_plus_zero_conv_off_by_one_still_rejected_by_kernel() {
         };
         // Corrupt the claimed type's `rhs` endpoint by one `Succ`, matching `deep_plus_zero_proof`'s
         // internal shape without needing to reconstruct it (off-by-one term instead).
-        let Term::PathP { family, lhs, rhs } = *ty else {
+        let Term::PathP { family, lhs, rhs } = blight_kernel::unshare(ty) else {
             unreachable!()
         };
-        let bumped_rhs = Term::Con(ConName("Succ".into()), vec![*rhs]);
+        let bumped_rhs = Term::Con(ConName("Succ".into()), vec![blight_kernel::unshare(rhs)]);
         let bumped_ty = Term::PathP {
             family,
             lhs,
-            rhs: Box::new(bumped_rhs),
+            rhs: Rc::new(bumped_rhs),
         };
-        match check_top_with(sig, *term, bumped_ty) {
+        match check_top_with(sig, blight_kernel::unshare(term), bumped_ty) {
             Err(_) => {}
             Ok(p) => panic!("kernel must reject the off-by-one plus-zero proof, got {p:?}"),
         }

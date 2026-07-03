@@ -339,7 +339,7 @@ fn size(t: &Term) -> usize {
 /// preserved verbatim. Exotic cubical/`System` shapes are traversed structurally where they carry
 /// boxed `Term` children and cloned otherwise.
 fn map_children(t: &Term, f: impl Fn(&Term) -> Term) -> Term {
-    let b = |x: &Term| Box::new(f(x));
+    let b = |x: &Term| Rc::new(f(x));
     match t {
         Term::Var(_)
         | Term::Univ(_)
@@ -513,8 +513,8 @@ mod tests {
     fn folds_closed_int_arithmetic() {
         let t = Term::IntPrim {
             op: IntPrimOp::Add,
-            lhs: Box::new(Term::IntLit(2)),
-            rhs: Box::new(Term::IntLit(3)),
+            lhs: Rc::new(Term::IntLit(2)),
+            rhs: Rc::new(Term::IntLit(3)),
         };
         assert_eq!(fold(&t), Term::IntLit(5));
     }
@@ -526,18 +526,18 @@ mod tests {
         // (x * (10 * 4))  with x = Var(0) free → outer is not closed, inner (10*4) is.
         let t = Term::IntPrim {
             op: IntPrimOp::Mul,
-            lhs: Box::new(Term::Var(0)),
-            rhs: Box::new(Term::IntPrim {
+            lhs: Rc::new(Term::Var(0)),
+            rhs: Rc::new(Term::IntPrim {
                 op: IntPrimOp::Mul,
-                lhs: Box::new(Term::IntLit(10)),
-                rhs: Box::new(Term::IntLit(4)),
+                lhs: Rc::new(Term::IntLit(10)),
+                rhs: Rc::new(Term::IntLit(4)),
             }),
         };
         let got = fold(&t);
         let want = Term::IntPrim {
             op: IntPrimOp::Mul,
-            lhs: Box::new(Term::Var(0)),
-            rhs: Box::new(Term::IntLit(40)),
+            lhs: Rc::new(Term::Var(0)),
+            rhs: Rc::new(Term::IntLit(40)),
         };
         assert_eq!(got, want);
     }
@@ -562,18 +562,18 @@ mod tests {
         // Elim Nat (λ_. Nat) [ Zero ; λk.λih. Succ ih ] (Succ (Succ Zero))  — a "double"-ish fold.
         let t = Term::Elim {
             data: DataName("Nat".into()),
-            motive: Box::new(Term::Lam(Box::new(Term::Con(
+            motive: Rc::new(Term::Lam(Rc::new(Term::Con(
                 ConName("Nat".into()),
                 vec![],
             )))),
             methods: vec![
                 Term::Con(ConName("Zero".into()), vec![]),
-                Term::Lam(Box::new(Term::Lam(Box::new(Term::Con(
+                Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Con(
                     ConName("Succ".into()),
                     vec![Term::Var(0)],
                 ))))),
             ],
-            scrutinee: Box::new(nat(2)),
+            scrutinee: Rc::new(nat(2)),
         };
         // `contains_elim` short-circuits the fold; the term is returned structurally intact (children
         // may be touched, but the eliminator itself must survive).
@@ -587,7 +587,7 @@ mod tests {
             effect: blight_kernel::EffName("IO".into()),
             op: "print".to_string(),
             type_args: vec![],
-            arg: Box::new(Term::IntLit(1)),
+            arg: Rc::new(Term::IntLit(1)),
         };
         assert_eq!(fold(&t), t);
     }

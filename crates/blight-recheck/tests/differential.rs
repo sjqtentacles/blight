@@ -19,6 +19,7 @@ use blight_kernel::{
 };
 use blight_kernel::{Judgement, Signature};
 use blight_recheck::{recheck_judgement, RecheckError};
+use std::rc::Rc;
 
 // ---------------------------------------------------------------------------------------------
 // A tiny deterministic PRNG (xorshift64*). Reproducible: a failing case prints its seed.
@@ -216,8 +217,8 @@ fn gen_value(rng: &mut Rng, ty: BaseTy, fuel: u32) -> Term {
                 };
                 Term::IntPrim {
                     op,
-                    lhs: Box::new(gen_value(rng, BaseTy::Int, fuel - 1)),
-                    rhs: Box::new(gen_value(rng, BaseTy::Int, fuel - 1)),
+                    lhs: Rc::new(gen_value(rng, BaseTy::Int, fuel - 1)),
+                    rhs: Rc::new(gen_value(rng, BaseTy::Int, fuel - 1)),
                 }
             }
         }
@@ -242,19 +243,19 @@ fn gen_leaf(rng: &mut Rng, ty: BaseTy) -> Term {
 fn app_id(ty: BaseTy, arg: Term) -> Term {
     let t = ty.ty();
     let id = Term::Ann(
-        Box::new(Term::Lam(Box::new(Term::Var(0)))),
-        Box::new(Term::Pi(Grade::Omega, Box::new(t.clone()), Box::new(t))),
+        Rc::new(Term::Lam(Rc::new(Term::Var(0)))),
+        Rc::new(Term::Pi(Grade::Omega, Rc::new(t.clone()), Rc::new(t))),
     );
-    Term::App(Box::new(id), Box::new(arg))
+    Term::App(Rc::new(id), Rc::new(arg))
 }
 
 /// Eliminate a `Bool` scrutinee into result type `res`, generating both branches.
 fn elim_bool(rng: &mut Rng, res: BaseTy, scrut: Term, fuel: u32) -> Term {
     Term::Elim {
         data: DataName("Bool".into()),
-        motive: Box::new(Term::Lam(Box::new(res.ty()))),
+        motive: Rc::new(Term::Lam(Rc::new(res.ty()))),
         methods: vec![gen_value(rng, res, fuel), gen_value(rng, res, fuel)],
-        scrutinee: Box::new(scrut),
+        scrutinee: Rc::new(scrut),
     }
 }
 
@@ -340,8 +341,8 @@ fn differential_indexed_vec_eliminators_agree() {
         let k = rng.below(5); // a concrete length 0..4
                               // Build `vcons 0 0 (vcons 0 0 (... vnil))` : Vec Nat k via nested ascriptions.
         let mut acc = Term::Ann(
-            Box::new(Term::Con(ConName("vnil".into()), vec![])),
-            Box::new(vec_of(nat(), zero())),
+            Rc::new(Term::Con(ConName("vnil".into()), vec![])),
+            Rc::new(vec_of(nat(), zero())),
         );
         for i in 0..k {
             let len_here = {
@@ -352,24 +353,24 @@ fn differential_indexed_vec_eliminators_agree() {
                 l
             };
             acc = Term::Ann(
-                Box::new(Term::Con(
+                Rc::new(Term::Con(
                     ConName("vcons".into()),
                     vec![len_here.clone(), zero(), acc],
                 )),
-                Box::new(vec_of(nat(), succ(len_here))),
+                Rc::new(vec_of(nat(), succ(len_here))),
             );
         }
         // motive: λ n. λ (_ : Vec Nat n). Nat ; methods compute the length.
-        let motive = Term::Lam(Box::new(Term::Lam(Box::new(nat()))));
+        let motive = Term::Lam(Rc::new(Term::Lam(Rc::new(nat()))));
         let m_vnil = zero();
-        let m_vcons = Term::Lam(Box::new(Term::Lam(Box::new(Term::Lam(Box::new(
-            Term::Lam(Box::new(succ(Term::Var(0)))),
+        let m_vcons = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(
+            Term::Lam(Rc::new(succ(Term::Var(0)))),
         ))))));
         let elim = Term::Elim {
             data: DataName("Vec".into()),
-            motive: Box::new(motive),
+            motive: Rc::new(motive),
             methods: vec![m_vnil, m_vcons],
-            scrutinee: Box::new(acc),
+            scrutinee: Rc::new(acc),
         };
         match differential_step(&sig, elim, nat(), seed) {
             Outcome::BothAgree => agreed += 1,

@@ -99,7 +99,7 @@ fn perform(op: &str, arg: Term) -> Term {
         effect: EffName::new("State"),
         op: op.into(),
         type_args: vec![],
-        arg: Box::new(arg),
+        arg: Rc::new(arg),
     }
 }
 
@@ -113,26 +113,26 @@ fn perform(op: &str, arg: Term) -> Term {
 fn counter() -> Term {
     // inner: (λ _:Unit. n) (perform put (succ n))   — `_:Unit` because `put` returns `Unit`.
     let inner = Term::App(
-        Box::new(Term::Ann(
-            Box::new(Term::Lam(Box::new(Term::Var(1)))), // λ _. n
-            Box::new(Term::Pi(
+        Rc::new(Term::Ann(
+            Rc::new(Term::Lam(Rc::new(Term::Var(1)))), // λ _. n
+            Rc::new(Term::Pi(
                 Grade::Omega,
-                Box::new(unit_ty()),
-                Box::new(nat_ty()),
+                Rc::new(unit_ty()),
+                Rc::new(nat_ty()),
             )),
         )),
-        Box::new(perform("put", succ(Term::Var(0)))), // perform put (succ n)
+        Rc::new(perform("put", succ(Term::Var(0)))), // perform put (succ n)
     );
     Term::App(
-        Box::new(Term::Ann(
-            Box::new(Term::Lam(Box::new(inner))), // λ n. inner
-            Box::new(Term::Pi(
+        Rc::new(Term::Ann(
+            Rc::new(Term::Lam(Rc::new(inner))), // λ n. inner
+            Rc::new(Term::Pi(
                 Grade::Omega,
-                Box::new(nat_ty()),
-                Box::new(nat_ty()),
+                Rc::new(nat_ty()),
+                Rc::new(nat_ty()),
             )),
         )),
-        Box::new(perform("get", tt())), // perform get tt
+        Rc::new(perform("get", tt())), // perform get tt
     )
 }
 
@@ -143,27 +143,27 @@ fn counter() -> Term {
 /// - `put s' k. λ _. (k tt) s'`               — resume with `tt`, then run at the new state `s'`.
 fn handled(body: Term) -> Term {
     Term::Handle {
-        body: Box::new(body),
+        body: Rc::new(body),
         // return x. λ s. (x, s)   (after `λ s`: s = idx 0, x = idx 1)
-        return_clause: Box::new(Term::Lam(Box::new(Term::Pair(
-            Box::new(Term::Var(1)),
-            Box::new(Term::Var(0)),
+        return_clause: Rc::new(Term::Lam(Rc::new(Term::Pair(
+            Rc::new(Term::Var(1)),
+            Rc::new(Term::Var(0)),
         )))),
         op_clauses: vec![
             (
                 // get _ k. λ s. (k s) s   (after `λ s`: s=0, k=1, x=2)
                 "get".into(),
-                Box::new(Term::Lam(Box::new(Term::App(
-                    Box::new(Term::App(Box::new(Term::Var(1)), Box::new(Term::Var(0)))),
-                    Box::new(Term::Var(0)),
+                Rc::new(Term::Lam(Rc::new(Term::App(
+                    Rc::new(Term::App(Rc::new(Term::Var(1)), Rc::new(Term::Var(0)))),
+                    Rc::new(Term::Var(0)),
                 )))),
             ),
             (
                 // put s' k. λ _. (k tt) s'   (after `λ _`: _=0, k=1, s'=2)
                 "put".into(),
-                Box::new(Term::Lam(Box::new(Term::App(
-                    Box::new(Term::App(Box::new(Term::Var(1)), Box::new(tt()))),
-                    Box::new(Term::Var(2)),
+                Rc::new(Term::Lam(Rc::new(Term::App(
+                    Rc::new(Term::App(Rc::new(Term::Var(1)), Rc::new(tt()))),
+                    Rc::new(Term::Var(2)),
                 )))),
             ),
         ],
@@ -174,8 +174,8 @@ fn handled(body: Term) -> Term {
 fn state_transformer_ty() -> Term {
     Term::Pi(
         Grade::Omega,
-        Box::new(nat_ty()),
-        Box::new(Term::Sigma(Box::new(nat_ty()), Box::new(nat_ty()))),
+        Rc::new(nat_ty()),
+        Rc::new(Term::Sigma(Rc::new(nat_ty()), Rc::new(nat_ty()))),
     )
 }
 
@@ -196,12 +196,12 @@ fn state_counter_runs_under_handler() {
         .expect("the handled State counter must type-check as a pure (State-discharged) program");
 
     // Run it at initial state 0: `(handle counter {…}) zero`.
-    let run = Term::App(Box::new(program), Box::new(zero()));
+    let run = Term::App(Rc::new(program), Rc::new(zero()));
     let env = Env::with_sig(Rc::new(sig));
     let result = eval(&env, &run);
 
     // Expected `(0, 1)`: the counter returns the original state `0`, and the final state is `succ 0`.
-    let expected = Term::Pair(Box::new(zero()), Box::new(succ(zero())));
+    let expected = Term::Pair(Rc::new(zero()), Rc::new(succ(zero())));
     let expected_v = eval(&env, &expected);
     assert!(
         conv(0, &result, &expected_v),

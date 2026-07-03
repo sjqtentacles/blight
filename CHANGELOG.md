@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **v0.1 roadmap arc S, milestone S3 (kernel `Term` representation: `Box` → `Rc`):** the kernel
+  term grammar's 42 recursive fields now hold `Rc<Term>`, so cloning a term (notably `eval`'s
+  closure construction) is a shallow per-node refcount bump instead of a deep subtree copy.
+  Landed under the pre-registered protocol: representation-only diff (one audited helper,
+  `blight_kernel::unshare`; zero move-sites in the kernel itself), full suite green, per-global
+  kernel+re-checker verdicts over the whole corpus byte-identical to a golden captured before the
+  change (`crates/blight-repl/tests/verdict_diff.rs`, the new harness), compiled binaries
+  bit-identical across the `BL_NO_*` fast-path matrix, criterion within ±5%, cargo-mutants over
+  the new logic. Honest outcome: the predicted payoff did **not** materialize — the deferred
+  refl-at-scale go-bar (`reader-demo-refl`) is still infeasible post-Rc. The follow-up
+  adversarial review identified the true mechanism, shared by kernel and re-checker at measured
+  parity: `do_elim` eagerly computes *discarded* induction hypotheses, making a single character
+  comparison cost ~2^codepoint eliminator steps (roadmap arc N has the code-cited analysis and
+  fix plan; the harness's skip-list units are its pinned reproducers). The red-phase harness
+  also surfaced two pre-existing false `Rejected` verdicts in the re-checker (nested
+  `Pair`-match inference; trans-chain path boundary), filed as their own fixes.
+
 ### Added
 
 - **v0.1 roadmap arc E, milestone E6 (measure-based totality / auto-fuel):** a `deftotal` with a

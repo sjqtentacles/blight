@@ -8,7 +8,8 @@ use crate::meta::{meta_term, MetaCtx, UnifyError};
 use crate::pretty::pretty_term;
 use crate::sexpr::Sexpr;
 use crate::surface::{Binder, Clause, Cofibration, ConstructorDecl, Decl, Surface};
-use blight_kernel::Term;
+use blight_kernel::{unshare, Term};
+use std::rc::Rc;
 
 /// An elaboration error (parsing-into-surface or surface-into-core).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -305,7 +306,7 @@ impl ElabEnv {
                 };
                 let term = Term::Foreign {
                     symbol: symbol.clone(),
-                    ty: Box::new(core_ty.clone()),
+                    ty: Rc::new(core_ty.clone()),
                 };
                 self.define_global(name.clone(), term, Some(core_ty));
                 Ok(())
@@ -1690,11 +1691,11 @@ fn elab_handle(
     for (op, x_name, k_name, clause_body) in op_clauses {
         let clause_scope = scope.push_var(x_name).push_var(k_name);
         let clause_c = elab(env, &clause_scope, clause_body, None)?;
-        op_clauses_c.push((op.clone(), Box::new(clause_c)));
+        op_clauses_c.push((op.clone(), Rc::new(clause_c)));
     }
     Ok(Term::Handle {
-        body: Box::new(body_c),
-        return_clause: Box::new(return_c),
+        body: Rc::new(body_c),
+        return_clause: Rc::new(return_c),
         op_clauses: op_clauses_c,
     })
 }
@@ -1743,10 +1744,10 @@ fn try_elab_row_polymorphic_handle(
         })?;
     let mut row_vars = RowVarScope::new();
     let resolved = row_vars.unify(&pattern, &result_row)?;
-    let ty_resolved = Term::EffTy(resolved, Box::new(a_c));
+    let ty_resolved = Term::EffTy(resolved, Rc::new(a_c));
     Ok(Some(Term::Ann(
-        Box::new(handle_term),
-        Box::new(ty_resolved),
+        Rc::new(handle_term),
+        Rc::new(ty_resolved),
     )))
 }
 
@@ -1789,7 +1790,7 @@ fn elab(
             //    the kernel can infer through applications of an otherwise-bare `Lam`.
             if let Some((t, ty)) = env.globals.get(name) {
                 return Ok(match ty {
-                    Some(ty) => Term::Ann(Box::new(t.clone()), Box::new(ty.clone())),
+                    Some(ty) => Term::Ann(Rc::new(t.clone()), Rc::new(ty.clone())),
                     None => t.clone(),
                 });
             }
@@ -1812,7 +1813,7 @@ fn elab(
                 }
                 if let Some((t, ty)) = env.globals.get(base) {
                     return Ok(match ty {
-                        Some(ty) => Term::Ann(Box::new(t.clone()), Box::new(ty.clone())),
+                        Some(ty) => Term::Ann(Rc::new(t.clone()), Rc::new(ty.clone())),
                         None => t.clone(),
                     });
                 }
@@ -1829,7 +1830,7 @@ fn elab(
             }
             let ty_c = elab(env, scope, ty, None)?;
             let e_c = elab(env, scope, e, Some(&ty_c))?;
-            Ok(Term::Ann(Box::new(e_c), Box::new(ty_c)))
+            Ok(Term::Ann(Rc::new(e_c), Rc::new(ty_c)))
         }
 
         Surface::Univ(l) => Ok(Term::Univ(nat_level(*l))),
@@ -1841,7 +1842,7 @@ fn elab(
             let mut cur = expected.cloned();
             for n in names {
                 let (dom, cod) = match cur {
-                    Some(Term::Pi(_, dom, cod)) => (Some(*dom), Some(*cod)),
+                    Some(Term::Pi(_, dom, cod)) => (Some(unshare(dom)), Some(unshare(cod))),
                     _ => (None, None),
                 };
                 sc = sc.push_var_ty(n, dom);
@@ -1849,7 +1850,7 @@ fn elab(
             }
             let mut core = elab(env, &sc, body, cur.as_ref())?;
             for _ in names {
-                core = Term::Lam(Box::new(core));
+                core = Term::Lam(Rc::new(core));
             }
             Ok(core)
         }
@@ -1875,7 +1876,7 @@ fn elab(
                     let k = env.implicit_arity(g);
                     if k > 0 && scope.var_index(g).is_none() {
                         if let Some((gt, Some(gty))) = env.globals.get(g) {
-                            let g_term = Term::Ann(Box::new(gt.clone()), Box::new(gty.clone()));
+                            let g_term = Term::Ann(Rc::new(gt.clone()), Rc::new(gty.clone()));
                             let specs = env.implicits.get(g).cloned().unwrap_or_default();
                             return elab_implicit_app(
                                 env, scope, g, &g_term, gty, &specs, args, expected,
@@ -1889,7 +1890,7 @@ fn elab(
             }
             let mut head = elab(env, scope, f, None)?;
             for a in args {
-                head = Term::App(Box::new(head), Box::new(elab(env, scope, a, None)?));
+                head = Term::App(Rc::new(head), Rc::new(elab(env, scope, a, None)?));
             }
             Ok(head)
         }
@@ -1900,29 +1901,29 @@ fn elab(
             let lhs = elab(env, scope, x, None)?;
             let rhs = elab(env, scope, y, None)?;
             Ok(Term::PathP {
-                family: Box::new(family),
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
+                family: Rc::new(family),
+                lhs: Rc::new(lhs),
+                rhs: Rc::new(rhs),
             })
         }
 
         Surface::PLam(dim, body) => {
             let sc = scope.push_dim(dim);
             let core = elab(env, &sc, body, None)?;
-            Ok(Term::PLam(Box::new(core)))
+            Ok(Term::PLam(Rc::new(core)))
         }
 
         Surface::PApp(p, r) => {
             let pc = elab(env, scope, p, None)?;
             let rc = elab_interval(scope, r)?;
-            Ok(Term::PApp(Box::new(pc), rc))
+            Ok(Term::PApp(Rc::new(pc), rc))
         }
 
         // ---- cubical Kan / Glue layer (plan A2b) ----
         Surface::Partial(cofib, a) => {
             let c = elab_cofib(scope, cofib)?;
             let a_c = elab(env, scope, a, None)?;
-            Ok(Term::Partial(c, Box::new(a_c)))
+            Ok(Term::Partial(c, Rc::new(a_c)))
         }
         Surface::System(branches) => {
             let mut bs = Vec::with_capacity(branches.len());
@@ -1939,10 +1940,10 @@ fn elab(
             let ty_c = elab(env, scope, ty, None)?;
             let equiv_c = elab(env, scope, equiv, None)?;
             Ok(Term::Glue {
-                base: Box::new(base_c),
+                base: Rc::new(base_c),
                 cofib: c,
-                ty: Box::new(ty_c),
-                equiv: Box::new(equiv_c),
+                ty: Rc::new(ty_c),
+                equiv: Rc::new(equiv_c),
             })
         }
         Surface::GlueTerm(cofib, partial, base) => {
@@ -1951,17 +1952,17 @@ fn elab(
             let base_c = elab(env, scope, base, None)?;
             Ok(Term::GlueTerm {
                 cofib: c,
-                partial: Box::new(partial_c),
-                base: Box::new(base_c),
+                partial: Rc::new(partial_c),
+                base: Rc::new(base_c),
             })
         }
-        Surface::Unglue(g) => Ok(Term::Unglue(Box::new(elab(env, scope, g, None)?))),
+        Surface::Unglue(g) => Ok(Term::Unglue(Rc::new(elab(env, scope, g, None)?))),
         Surface::Transp(line, cofib, base) => {
             // The line is `(plam (i) A)`; elaborate it to a `PLam`, then unwrap to the bare body so
             // the kernel's `Transp { family, .. }` sees the dimension-binding family directly.
             let line_c = elab(env, scope, line, None)?;
             let family = match line_c {
-                Term::PLam(body) => *body,
+                Term::PLam(body) => unshare(body),
                 other => {
                     return Err(ElabError::BadForm(format!(
                         "(transp line φ a0): line must be `(plam (i) A)`, got {other:?}"
@@ -1971,9 +1972,9 @@ fn elab(
             let c = elab_cofib(scope, cofib)?;
             let base_c = elab(env, scope, base, None)?;
             Ok(Term::Transp {
-                family: Box::new(family),
+                family: Rc::new(family),
                 cofib: c,
-                base: Box::new(base_c),
+                base: Rc::new(base_c),
             })
         }
 
@@ -1984,7 +1985,7 @@ fn elab(
             // kernel's `HComp { tube, .. }` sees it directly, mirroring `Transp`'s `family` handling.
             let tube_c = elab(env, scope, tube, None)?;
             let tube_body = match tube_c {
-                Term::PLam(body) => *body,
+                Term::PLam(body) => unshare(body),
                 other => {
                     return Err(ElabError::BadForm(format!(
                         "(hcomp A φ line a0): line must be `(plam (j) u)`, got {other:?}"
@@ -1993,10 +1994,10 @@ fn elab(
             };
             let base_c = elab(env, scope, base, None)?;
             Ok(Term::HComp {
-                ty: Box::new(ty_c),
+                ty: Rc::new(ty_c),
                 cofib: c,
-                tube: Box::new(tube_body),
-                base: Box::new(base_c),
+                tube: Rc::new(tube_body),
+                base: Rc::new(base_c),
             })
         }
 
@@ -2004,7 +2005,7 @@ fn elab(
             let sc_dim = scope.push_dim("_");
             let family_c = elab(env, &sc_dim, family, None)?;
             let family_body = match family_c {
-                Term::PLam(body) => *body,
+                Term::PLam(body) => unshare(body),
                 other => {
                     return Err(ElabError::BadForm(format!(
                         "(comp line φ tube a0): line must be `(plam (i) A)`, got {other:?}"
@@ -2014,7 +2015,7 @@ fn elab(
             let c = elab_cofib(scope, cofib)?;
             let tube_c = elab(env, scope, tube, None)?;
             let tube_body = match tube_c {
-                Term::PLam(body) => *body,
+                Term::PLam(body) => unshare(body),
                 other => {
                     return Err(ElabError::BadForm(format!(
                         "(comp line φ tube a0): tube must be `(plam (j) u)`, got {other:?}"
@@ -2023,10 +2024,10 @@ fn elab(
             };
             let base_c = elab(env, scope, base, None)?;
             Ok(Term::Comp {
-                family: Box::new(family_body),
+                family: Rc::new(family_body),
                 cofib: c,
-                tube: Box::new(tube_body),
-                base: Box::new(base_c),
+                tube: Rc::new(tube_body),
+                base: Rc::new(base_c),
             })
         }
 
@@ -2064,24 +2065,24 @@ fn elab(
         }
 
         // ---- partiality (spec §4.5) ----
-        Surface::Delay(a) => Ok(Term::Delay(Box::new(elab(env, scope, a, None)?))),
+        Surface::Delay(a) => Ok(Term::Delay(Rc::new(elab(env, scope, a, None)?))),
         Surface::Now(a) => {
             // When checking against `Delay A`, the payload is checked against `A`.
             let inner_expected = match expected {
                 Some(Term::Delay(a_ty)) => Some(a_ty.as_ref()),
                 _ => None,
             };
-            Ok(Term::Now(Box::new(elab(env, scope, a, inner_expected)?)))
+            Ok(Term::Now(Rc::new(elab(env, scope, a, inner_expected)?)))
         }
         Surface::Later(d) => {
             // `later d : Delay A` when `d : Delay A`: the guarded continuation has the same type.
-            Ok(Term::Later(Box::new(elab(env, scope, d, expected)?)))
+            Ok(Term::Later(Rc::new(elab(env, scope, d, expected)?)))
         }
         Surface::Force(d) => {
             // `force d : A` when `d : Delay A`. When checking against an expected `A`, the payload
             // is checked against `Delay A`; otherwise it is inferred.
-            let inner_expected = expected.map(|a| Term::Delay(Box::new(a.clone())));
-            Ok(Term::Force(Box::new(elab(
+            let inner_expected = expected.map(|a| Term::Delay(Rc::new(a.clone())));
+            Ok(Term::Force(Rc::new(elab(
                 env,
                 scope,
                 d,
@@ -2100,8 +2101,8 @@ fn elab(
             let rhs = elab(env, scope, b, Some(&int_ty))?;
             Ok(Term::IntPrim {
                 op: *op,
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
+                lhs: Rc::new(lhs),
+                rhs: Rc::new(rhs),
             })
         }
 
@@ -2134,7 +2135,7 @@ fn elab(
                 effect,
                 op: op.clone(),
                 type_args: type_args_c,
-                arg: Box::new(arg_c),
+                arg: Rc::new(arg_c),
             })
         }
         Surface::Handle {
@@ -2158,7 +2159,7 @@ fn elab(
                 ))
             })?;
             let a_c = elab(env, scope, a, None)?;
-            Ok(Term::EffTy(row, Box::new(a_c)))
+            Ok(Term::EffTy(row, Rc::new(a_c)))
         }
 
         // ---- records / dependent pairs (spec §6.4/§6.5) ----
@@ -2177,10 +2178,10 @@ fn elab(
             // infer and rely on re-checking.
             let exp_b = exp_b.filter(|t| !term_mentions_var(t, 0));
             let b_c = elab(env, scope, b, exp_b)?;
-            Ok(Term::Pair(Box::new(a_c), Box::new(b_c)))
+            Ok(Term::Pair(Rc::new(a_c), Rc::new(b_c)))
         }
-        Surface::Fst(p) => Ok(Term::Fst(Box::new(elab(env, scope, p, None)?))),
-        Surface::Snd(p) => Ok(Term::Snd(Box::new(elab(env, scope, p, None)?))),
+        Surface::Fst(p) => Ok(Term::Fst(Rc::new(elab(env, scope, p, None)?))),
+        Surface::Snd(p) => Ok(Term::Snd(Rc::new(elab(env, scope, p, None)?))),
         Surface::Let(x, e, body) => {
             // `(let ((x e)) b)` ⤳ `((lam (x) b) e)`. Elaborate `e` first (inference), then the body
             // under a binder. When both the bound value's type and the expected result type are
@@ -2197,7 +2198,7 @@ fn elab(
             // the true expected type was wanted) whenever `expected` mentioned an outer variable.
             let expected_in_sc = expected.map(|c| weaken(c, 1));
             let body_c = elab(env, &sc, body, expected_in_sc.as_ref())?;
-            let lam = Term::Lam(Box::new(body_c.clone()));
+            let lam = Term::Lam(Rc::new(body_c.clone()));
             // The codomain: the expected result if known, else the body's synthesized type
             // (strengthened back past the `x` binder so it is valid in the outer scope).
             let cod = match expected {
@@ -2206,12 +2207,12 @@ fn elab(
             };
             let fun = match (e_ty, cod) {
                 (Some(dom), Some(cod)) => {
-                    let pi = Term::Pi(blight_kernel::Grade::Omega, Box::new(dom), Box::new(cod));
-                    Term::Ann(Box::new(lam), Box::new(pi))
+                    let pi = Term::Pi(blight_kernel::Grade::Omega, Rc::new(dom), Rc::new(cod));
+                    Term::Ann(Rc::new(lam), Rc::new(pi))
                 }
                 _ => lam,
             };
-            Ok(Term::App(Box::new(fun), Box::new(e_c)))
+            Ok(Term::App(Rc::new(fun), Rc::new(e_c)))
         }
 
         Surface::Region(r, body) => {
@@ -2246,9 +2247,9 @@ fn elab(
                         .into(),
                 ));
             }
-            let pi = Term::Pi(blight_kernel::Grade::One, Box::new(rgn_ty), Box::new(cod));
-            let fun = Term::Ann(Box::new(Term::Lam(Box::new(body_c))), Box::new(pi));
-            Ok(Term::App(Box::new(fun), Box::new(tok)))
+            let pi = Term::Pi(blight_kernel::Grade::One, Rc::new(rgn_ty), Rc::new(cod));
+            let fun = Term::Ann(Rc::new(Term::Lam(Rc::new(body_c))), Rc::new(pi));
+            Ok(Term::App(Rc::new(fun), Rc::new(tok)))
         }
     }
 }
@@ -2330,7 +2331,7 @@ fn elab_pi(
             let grade = parse_grade(b.grade.as_ref())?;
             let sc = scope.push_var(&b.name);
             let cod_c = elab_pi(env, &sc, rest, cod)?;
-            Ok(Term::Pi(grade, Box::new(dom), Box::new(cod_c)))
+            Ok(Term::Pi(grade, Rc::new(dom), Rc::new(cod_c)))
         }
     }
 }
@@ -2486,24 +2487,24 @@ fn weaken_above(t: &Term, cutoff: usize, d: usize) -> Term {
                 *i
             }),
             T::Univ(_) | T::Interval(_) | T::Erased | T::System(_) => t.clone(),
-            T::Pi(g, a, b) => T::Pi(*g, Box::new(go(a, j, d)), Box::new(go(b, j + 1, d))),
-            T::Sigma(a, b) => T::Sigma(Box::new(go(a, j, d)), Box::new(go(b, j + 1, d))),
-            T::Lam(b) => T::Lam(Box::new(go(b, j + 1, d))),
-            T::PLam(b) => T::PLam(Box::new(go(b, j + 1, d))),
-            T::App(f, x) => T::App(Box::new(go(f, j, d)), Box::new(go(x, j, d))),
-            T::Pair(a, b) => T::Pair(Box::new(go(a, j, d)), Box::new(go(b, j, d))),
-            T::Fst(p) => T::Fst(Box::new(go(p, j, d))),
-            T::Snd(p) => T::Snd(Box::new(go(p, j, d))),
-            T::Ann(a, b) => T::Ann(Box::new(go(a, j, d)), Box::new(go(b, j, d))),
+            T::Pi(g, a, b) => T::Pi(*g, Rc::new(go(a, j, d)), Rc::new(go(b, j + 1, d))),
+            T::Sigma(a, b) => T::Sigma(Rc::new(go(a, j, d)), Rc::new(go(b, j + 1, d))),
+            T::Lam(b) => T::Lam(Rc::new(go(b, j + 1, d))),
+            T::PLam(b) => T::PLam(Rc::new(go(b, j + 1, d))),
+            T::App(f, x) => T::App(Rc::new(go(f, j, d)), Rc::new(go(x, j, d))),
+            T::Pair(a, b) => T::Pair(Rc::new(go(a, j, d)), Rc::new(go(b, j, d))),
+            T::Fst(p) => T::Fst(Rc::new(go(p, j, d))),
+            T::Snd(p) => T::Snd(Rc::new(go(p, j, d))),
+            T::Ann(a, b) => T::Ann(Rc::new(go(a, j, d)), Rc::new(go(b, j, d))),
             T::Data(n, ps, is) => T::Data(
                 n.clone(),
                 ps.iter().map(|x| go(x, j, d)).collect(),
                 is.iter().map(|x| go(x, j, d)).collect(),
             ),
             T::Con(n, args) => T::Con(n.clone(), args.iter().map(|x| go(x, j, d)).collect()),
-            T::Delay(a) => T::Delay(Box::new(go(a, j, d))),
-            T::Now(a) => T::Now(Box::new(go(a, j, d))),
-            T::Later(a) => T::Later(Box::new(go(a, j, d))),
+            T::Delay(a) => T::Delay(Rc::new(go(a, j, d))),
+            T::Now(a) => T::Now(Rc::new(go(a, j, d))),
+            T::Later(a) => T::Later(Rc::new(go(a, j, d))),
             other => other.clone(),
         }
     }
@@ -2661,10 +2662,10 @@ fn elab_implicit_app(
     // 5. Build `((g implicit…) explicit…)`.
     let mut head = g_term.clone();
     for s in inserted {
-        head = Term::App(Box::new(head), Box::new(s));
+        head = Term::App(Rc::new(head), Rc::new(s));
     }
     for e in explicit {
-        head = Term::App(Box::new(head), Box::new(e));
+        head = Term::App(Rc::new(head), Rc::new(e));
     }
     Ok(head)
 }
@@ -2700,7 +2701,7 @@ fn elab_sigma(
             let dom = elab(env, scope, &b.ty, None)?;
             let sc = scope.push_var(&b.name);
             let cod_c = elab_sigma(env, &sc, rest, cod)?;
-            Ok(Term::Sigma(Box::new(dom), Box::new(cod_c)))
+            Ok(Term::Sigma(Rc::new(dom), Rc::new(cod_c)))
         }
     }
 }
@@ -2872,8 +2873,8 @@ fn elab_app_head(
                                         let mut head = Term::Var(idx);
                                         for a in &args[k + 1..] {
                                             head = Term::App(
-                                                Box::new(head),
-                                                Box::new(elab(env, scope, a, None)?),
+                                                Rc::new(head),
+                                                Rc::new(elab(env, scope, a, None)?),
                                             );
                                         }
                                         return Ok(Some(head));
@@ -2889,7 +2890,7 @@ fn elab_app_head(
                             let mut head = Term::Var(idx);
                             for a in &args[1..] {
                                 head =
-                                    Term::App(Box::new(head), Box::new(elab(env, scope, a, None)?));
+                                    Term::App(Rc::new(head), Rc::new(elab(env, scope, a, None)?));
                             }
                             return Ok(Some(head));
                         }
@@ -2910,9 +2911,9 @@ fn elab_app_head(
                     .ok_or_else(|| ElabError::Unbound(format!("self-reference `{name}`")))?;
                 let mut head = Term::Var(self_idx);
                 for a in args {
-                    head = Term::App(Box::new(head), Box::new(elab(env, scope, a, None)?));
+                    head = Term::App(Rc::new(head), Rc::new(elab(env, scope, a, None)?));
                 }
-                return Ok(Some(Term::Later(Box::new(head))));
+                return Ok(Some(Term::Later(Rc::new(head))));
             }
         }
     }
@@ -3227,7 +3228,7 @@ fn elaborate_rec(
             // `body` is checked against `ty` under the extra `self` binder; `ty` mentions no
             // bound vars (it is closed), so no shifting is needed for it.
             let inner = elab(env, &scope, body, Some(ty))?;
-            Ok(Term::Lam(Box::new(inner)))
+            Ok(Term::Lam(Rc::new(inner)))
         }
     }
 }
@@ -3566,7 +3567,7 @@ fn infer_match_motive(env: &ElabEnv, scope: &Scope, flat: &Surface) -> Result<Te
 /// top-level `App(Lam, a)`. Returns `(grade, domain, codomain)` when a `Pi` is reached.
 fn whnf_pi(t: &Term) -> Option<(blight_kernel::Grade, Term, Term)> {
     match whnf_head(t) {
-        Term::Pi(g, a, b) => Some((g, *a, *b)),
+        Term::Pi(g, a, b) => Some((g, unshare(a), unshare(b))),
         _ => None,
     }
 }
@@ -3574,7 +3575,7 @@ fn whnf_pi(t: &Term) -> Option<(blight_kernel::Grade, Term, Term)> {
 /// Reduce a type term toward a `Sigma` head (see [`whnf_pi`]). Returns `(domain, codomain)`.
 fn whnf_sigma(t: &Term) -> Option<(Term, Term)> {
     match whnf_head(t) {
-        Term::Sigma(a, b) => Some((*a, *b)),
+        Term::Sigma(a, b) => Some((unshare(a), unshare(b))),
         _ => None,
     }
 }
@@ -3586,18 +3587,18 @@ fn whnf_head(t: &Term) -> Term {
     let mut cur = t.clone();
     for _ in 0..64 {
         cur = match cur {
-            Term::Ann(e, _) => *e,
+            Term::Ann(e, _) => unshare(e),
             Term::App(f, x) => match whnf_head(&f) {
                 Term::Lam(b) => subst0_closed(&b, &x),
-                other => return Term::App(Box::new(other), x),
+                other => return Term::App(Rc::new(other), x),
             },
             Term::Fst(p) => match whnf_head(&p) {
-                Term::Pair(a, _) => *a,
-                other => return Term::Fst(Box::new(other)),
+                Term::Pair(a, _) => unshare(a),
+                other => return Term::Fst(Rc::new(other)),
             },
             Term::Snd(p) => match whnf_head(&p) {
-                Term::Pair(_, b) => *b,
-                other => return Term::Snd(Box::new(other)),
+                Term::Pair(_, b) => unshare(b),
+                other => return Term::Snd(Rc::new(other)),
             },
             other => return other,
         };
@@ -3662,25 +3663,25 @@ fn strengthen(t: &Term, d: usize) -> Term {
             Term::Var(i) if crate::meta::is_meta(*i) => Term::Var(*i),
             Term::Var(i) if *i >= depth + d => Term::Var(*i - d),
             Term::Var(i) => Term::Var(*i),
-            Term::Lam(b) => Term::Lam(Box::new(go(b, depth + 1, d))),
-            Term::Now(b) => Term::Now(Box::new(go(b, depth, d))),
-            Term::Later(b) => Term::Later(Box::new(go(b, depth, d))),
-            Term::Delay(b) => Term::Delay(Box::new(go(b, depth, d))),
-            Term::Force(b) => Term::Force(Box::new(go(b, depth, d))),
-            Term::PLam(b) => Term::PLam(Box::new(go(b, depth + 1, d))),
+            Term::Lam(b) => Term::Lam(Rc::new(go(b, depth + 1, d))),
+            Term::Now(b) => Term::Now(Rc::new(go(b, depth, d))),
+            Term::Later(b) => Term::Later(Rc::new(go(b, depth, d))),
+            Term::Delay(b) => Term::Delay(Rc::new(go(b, depth, d))),
+            Term::Force(b) => Term::Force(Rc::new(go(b, depth, d))),
+            Term::PLam(b) => Term::PLam(Rc::new(go(b, depth + 1, d))),
             Term::Pi(gr, a, b) => Term::Pi(
                 *gr,
-                Box::new(go(a, depth, d)),
-                Box::new(go(b, depth + 1, d)),
+                Rc::new(go(a, depth, d)),
+                Rc::new(go(b, depth + 1, d)),
             ),
             Term::Sigma(a, b) => {
-                Term::Sigma(Box::new(go(a, depth, d)), Box::new(go(b, depth + 1, d)))
+                Term::Sigma(Rc::new(go(a, depth, d)), Rc::new(go(b, depth + 1, d)))
             }
-            Term::App(f, x) => Term::App(Box::new(go(f, depth, d)), Box::new(go(x, depth, d))),
-            Term::Pair(a, b) => Term::Pair(Box::new(go(a, depth, d)), Box::new(go(b, depth, d))),
-            Term::Fst(p) => Term::Fst(Box::new(go(p, depth, d))),
-            Term::Snd(p) => Term::Snd(Box::new(go(p, depth, d))),
-            Term::Ann(e, ty) => Term::Ann(Box::new(go(e, depth, d)), Box::new(go(ty, depth, d))),
+            Term::App(f, x) => Term::App(Rc::new(go(f, depth, d)), Rc::new(go(x, depth, d))),
+            Term::Pair(a, b) => Term::Pair(Rc::new(go(a, depth, d)), Rc::new(go(b, depth, d))),
+            Term::Fst(p) => Term::Fst(Rc::new(go(p, depth, d))),
+            Term::Snd(p) => Term::Snd(Rc::new(go(p, depth, d))),
+            Term::Ann(e, ty) => Term::Ann(Rc::new(go(e, depth, d)), Rc::new(go(ty, depth, d))),
             other => other.clone(),
         }
     }
@@ -3834,7 +3835,7 @@ fn elab_flat_match(
     }
     // Fold innermost-first to assemble `Π(t_{m-1})…Π(t_0). expected'`.
     for dom in domains.into_iter().rev() {
-        motive_body = Term::Pi(Grade::Omega, Box::new(dom), Box::new(motive_body));
+        motive_body = Term::Pi(Grade::Omega, Rc::new(dom), Rc::new(motive_body));
     }
 
     // For an *indexed* family the kernel and the re-checker both require the motive to be `λ i1..im.
@@ -3924,16 +3925,16 @@ fn elab_flat_match(
             // shifting every free variable `≥ 1` up by `nindices`. The scrutinee (0) is untouched.
             let shifted = weaken_above(&scrut_body, 1, decl_nindices);
             // Wrap: innermost `λ s`, then `nindices` fresh index binders outermost.
-            let mut motive = Term::Lam(Box::new(shifted));
+            let mut motive = Term::Lam(Rc::new(shifted));
             for _ in 0..decl_nindices {
-                motive = Term::Lam(Box::new(motive));
+                motive = Term::Lam(Rc::new(motive));
             }
             motive
         }
         // Non-indexed family, or an out-of-fragment dependent indexed motive: the bare `λ s. …`
         // shape. For an indexed family the kernel/re-checker will adjudicate (decline/reject) rather
         // than silently accept an ill-formed motive.
-        _ => Term::Lam(Box::new(abstract_var(&motive_body, scrut_idx))),
+        _ => Term::Lam(Rc::new(abstract_var(&motive_body, scrut_idx))),
     };
 
     // The *leading* parameters of the matched function are the binders bound strictly *outside*
@@ -4156,8 +4157,8 @@ fn elab_flat_match(
                                 .collect::<Option<Vec<_>>>()?,
                         ),
                         T::App(f, x) => T::App(
-                            Box::new(conv(f, depth, num_args, arg_db)?),
-                            Box::new(conv(x, depth, num_args, arg_db)?),
+                            Rc::new(conv(f, depth, num_args, arg_db)?),
+                            Rc::new(conv(x, depth, num_args, arg_db)?),
                         ),
                         // Anything richer is outside the fragment we refine.
                         _ => return None,
@@ -4212,26 +4213,26 @@ fn elab_flat_match(
         // Wrap: innermost are the trailing binders, then the constructor/IH binders.
         let mut method = body;
         for _ in 0..m {
-            method = Term::Lam(Box::new(method));
+            method = Term::Lam(Rc::new(method));
         }
         for _ in 0..n_con_binders {
-            method = Term::Lam(Box::new(method));
+            method = Term::Lam(Rc::new(method));
         }
         methods.push(method);
     }
 
     let elim = Term::Elim {
         data: DataName(data_name),
-        motive: Box::new(motive),
+        motive: Rc::new(motive),
         methods,
-        scrutinee: Box::new(Term::Var(scrut_idx)),
+        scrutinee: Rc::new(Term::Var(scrut_idx)),
     };
 
     // The match produced a value of `motive scrut`, i.e. `Pi(trailing) expected`. Re-apply it to
     // the trailing binders so the surrounding lambdas see a value of `expected`.
     let mut applied = elim;
     for i in (0..m).rev() {
-        applied = Term::App(Box::new(applied), Box::new(Term::Var(i)));
+        applied = Term::App(Rc::new(applied), Rc::new(Term::Var(i)));
     }
     Ok(applied)
 }
@@ -4293,16 +4294,16 @@ fn abstract_vars(term: &Term, targets: &[usize]) -> Term {
             | T::IntTy
             | T::IntLit(_)
             | T::Foreign { .. } => t.clone(),
-            T::Pi(g, a, b) => T::Pi(*g, Box::new(r(a)), Box::new(r1(b))),
-            T::Sigma(a, b) => T::Sigma(Box::new(r(a)), Box::new(r1(b))),
-            T::Lam(b) => T::Lam(Box::new(r1(b))),
-            T::PLam(b) => T::PLam(Box::new(r(b))),
-            T::PApp(pp, iv) => T::PApp(Box::new(r(pp)), iv.clone()),
-            T::App(f, a) => T::App(Box::new(r(f)), Box::new(r(a))),
-            T::Pair(a, b) => T::Pair(Box::new(r(a)), Box::new(r(b))),
-            T::Fst(a) => T::Fst(Box::new(r(a))),
-            T::Snd(a) => T::Snd(Box::new(r(a))),
-            T::Ann(a, b) => T::Ann(Box::new(r(a)), Box::new(r(b))),
+            T::Pi(g, a, b) => T::Pi(*g, Rc::new(r(a)), Rc::new(r1(b))),
+            T::Sigma(a, b) => T::Sigma(Rc::new(r(a)), Rc::new(r1(b))),
+            T::Lam(b) => T::Lam(Rc::new(r1(b))),
+            T::PLam(b) => T::PLam(Rc::new(r(b))),
+            T::PApp(pp, iv) => T::PApp(Rc::new(r(pp)), iv.clone()),
+            T::App(f, a) => T::App(Rc::new(r(f)), Rc::new(r(a))),
+            T::Pair(a, b) => T::Pair(Rc::new(r(a)), Rc::new(r(b))),
+            T::Fst(a) => T::Fst(Rc::new(r(a))),
+            T::Snd(a) => T::Snd(Rc::new(r(a))),
+            T::Ann(a, b) => T::Ann(Rc::new(r(a)), Rc::new(r(b))),
             T::Data(d, ps, is) => T::Data(
                 d.clone(),
                 ps.iter().map(&r).collect(),
@@ -4328,26 +4329,26 @@ fn abstract_vars(term: &Term, targets: &[usize]) -> Term {
             } => T::Elim {
                 data: data.clone(),
                 // The motive binds one variable (the scrutinee).
-                motive: Box::new(r1(motive)),
+                motive: Rc::new(r1(motive)),
                 methods: methods.iter().map(&r).collect(),
-                scrutinee: Box::new(r(scrutinee)),
+                scrutinee: Rc::new(r(scrutinee)),
             },
             T::PathP { family, lhs, rhs } => T::PathP {
                 // `family` binds one dimension variable, not a term variable: keep term depth.
-                family: Box::new(r(family)),
-                lhs: Box::new(r(lhs)),
-                rhs: Box::new(r(rhs)),
+                family: Rc::new(r(family)),
+                lhs: Rc::new(r(lhs)),
+                rhs: Rc::new(r(rhs)),
             },
-            T::Partial(c, a) => T::Partial(c.clone(), Box::new(r(a))),
+            T::Partial(c, a) => T::Partial(c.clone(), Rc::new(r(a))),
             T::System(_) => t.clone(),
             T::Transp {
                 family,
                 cofib,
                 base,
             } => T::Transp {
-                family: Box::new(r(family)),
+                family: Rc::new(r(family)),
                 cofib: cofib.clone(),
-                base: Box::new(r(base)),
+                base: Rc::new(r(base)),
             },
             T::HComp {
                 ty,
@@ -4355,10 +4356,10 @@ fn abstract_vars(term: &Term, targets: &[usize]) -> Term {
                 tube,
                 base,
             } => T::HComp {
-                ty: Box::new(r(ty)),
+                ty: Rc::new(r(ty)),
                 cofib: cofib.clone(),
-                tube: Box::new(r(tube)),
-                base: Box::new(r(base)),
+                tube: Rc::new(r(tube)),
+                base: Rc::new(r(base)),
             },
             T::Comp {
                 family,
@@ -4366,10 +4367,10 @@ fn abstract_vars(term: &Term, targets: &[usize]) -> Term {
                 tube,
                 base,
             } => T::Comp {
-                family: Box::new(r(family)),
+                family: Rc::new(r(family)),
                 cofib: cofib.clone(),
-                tube: Box::new(r(tube)),
-                base: Box::new(r(base)),
+                tube: Rc::new(r(tube)),
+                base: Rc::new(r(base)),
             },
             T::Glue {
                 base,
@@ -4377,10 +4378,10 @@ fn abstract_vars(term: &Term, targets: &[usize]) -> Term {
                 ty,
                 equiv,
             } => T::Glue {
-                base: Box::new(r(base)),
+                base: Rc::new(r(base)),
                 cofib: cofib.clone(),
-                ty: Box::new(r(ty)),
-                equiv: Box::new(r(equiv)),
+                ty: Rc::new(r(ty)),
+                equiv: Rc::new(r(equiv)),
             },
             T::GlueTerm {
                 cofib,
@@ -4388,10 +4389,10 @@ fn abstract_vars(term: &Term, targets: &[usize]) -> Term {
                 base,
             } => T::GlueTerm {
                 cofib: cofib.clone(),
-                partial: Box::new(r(partial)),
-                base: Box::new(r(base)),
+                partial: Rc::new(r(partial)),
+                base: Rc::new(r(base)),
             },
-            T::Unglue(a) => T::Unglue(Box::new(r(a))),
+            T::Unglue(a) => T::Unglue(Rc::new(r(a))),
             T::Op {
                 effect,
                 op,
@@ -4401,38 +4402,38 @@ fn abstract_vars(term: &Term, targets: &[usize]) -> Term {
                 effect: effect.clone(),
                 op: op.clone(),
                 type_args: type_args.iter().map(&r).collect(),
-                arg: Box::new(r(arg)),
+                arg: Rc::new(r(arg)),
             },
             T::Handle {
                 body,
                 return_clause,
                 op_clauses,
             } => T::Handle {
-                body: Box::new(r(body)),
+                body: Rc::new(r(body)),
                 // `return_clause` binds the result value `x` (1 binder).
-                return_clause: Box::new(r1(return_clause)),
+                return_clause: Rc::new(r1(return_clause)),
                 // each op clause binds the operation argument `x` then the continuation `k`
                 // (2 binders).
                 op_clauses: op_clauses
                     .iter()
-                    .map(|(name, cl)| (name.clone(), Box::new(go(cl, depth + 2, p, binder_of))))
+                    .map(|(name, cl)| (name.clone(), Rc::new(go(cl, depth + 2, p, binder_of))))
                     .collect(),
             },
-            T::EffTy(row, a) => T::EffTy(row.clone(), Box::new(r(a))),
-            T::Delay(a) => T::Delay(Box::new(r(a))),
-            T::Now(a) => T::Now(Box::new(r(a))),
-            T::Later(a) => T::Later(Box::new(r(a))),
-            T::Force(a) => T::Force(Box::new(r(a))),
+            T::EffTy(row, a) => T::EffTy(row.clone(), Rc::new(r(a))),
+            T::Delay(a) => T::Delay(Rc::new(r(a))),
+            T::Now(a) => T::Now(Rc::new(r(a))),
+            T::Later(a) => T::Later(Rc::new(r(a))),
+            T::Force(a) => T::Force(Rc::new(r(a))),
             T::IntPrim { op, lhs, rhs } => T::IntPrim {
                 op: *op,
-                lhs: Box::new(r(lhs)),
-                rhs: Box::new(r(rhs)),
+                lhs: Rc::new(r(lhs)),
+                rhs: Rc::new(r(rhs)),
             },
         }
     }
     let mut body = go(term, 0, p, &binder_of);
     for _ in 0..p {
-        body = Term::Lam(Box::new(body));
+        body = Term::Lam(Rc::new(body));
     }
     body
 }
@@ -4471,24 +4472,24 @@ fn subst0_closed(t: &Term, c: &Term) -> Term {
                 }
             }
             T::Univ(_) | T::Interval(_) | T::Erased | T::System(_) => t.clone(),
-            T::Pi(g, a, b) => T::Pi(*g, Box::new(go(a, j, c)), Box::new(go(b, j + 1, c))),
-            T::Sigma(a, b) => T::Sigma(Box::new(go(a, j, c)), Box::new(go(b, j + 1, c))),
-            T::Lam(b) => T::Lam(Box::new(go(b, j + 1, c))),
-            T::PLam(b) => T::PLam(Box::new(go(b, j + 1, c))),
-            T::App(f, x) => T::App(Box::new(go(f, j, c)), Box::new(go(x, j, c))),
-            T::Pair(a, b) => T::Pair(Box::new(go(a, j, c)), Box::new(go(b, j, c))),
-            T::Fst(p) => T::Fst(Box::new(go(p, j, c))),
-            T::Snd(p) => T::Snd(Box::new(go(p, j, c))),
-            T::Ann(a, b) => T::Ann(Box::new(go(a, j, c)), Box::new(go(b, j, c))),
+            T::Pi(g, a, b) => T::Pi(*g, Rc::new(go(a, j, c)), Rc::new(go(b, j + 1, c))),
+            T::Sigma(a, b) => T::Sigma(Rc::new(go(a, j, c)), Rc::new(go(b, j + 1, c))),
+            T::Lam(b) => T::Lam(Rc::new(go(b, j + 1, c))),
+            T::PLam(b) => T::PLam(Rc::new(go(b, j + 1, c))),
+            T::App(f, x) => T::App(Rc::new(go(f, j, c)), Rc::new(go(x, j, c))),
+            T::Pair(a, b) => T::Pair(Rc::new(go(a, j, c)), Rc::new(go(b, j, c))),
+            T::Fst(p) => T::Fst(Rc::new(go(p, j, c))),
+            T::Snd(p) => T::Snd(Rc::new(go(p, j, c))),
+            T::Ann(a, b) => T::Ann(Rc::new(go(a, j, c)), Rc::new(go(b, j, c))),
             T::Data(n, ps, is) => T::Data(
                 n.clone(),
                 ps.iter().map(|x| go(x, j, c)).collect(),
                 is.iter().map(|x| go(x, j, c)).collect(),
             ),
             T::Con(n, args) => T::Con(n.clone(), args.iter().map(|x| go(x, j, c)).collect()),
-            T::Delay(a) => T::Delay(Box::new(go(a, j, c))),
-            T::Now(a) => T::Now(Box::new(go(a, j, c))),
-            T::Later(a) => T::Later(Box::new(go(a, j, c))),
+            T::Delay(a) => T::Delay(Rc::new(go(a, j, c))),
+            T::Now(a) => T::Now(Rc::new(go(a, j, c))),
+            T::Later(a) => T::Later(Rc::new(go(a, j, c))),
             // M3 implicit insertion only instantiates ordinary (non-cubical, non-effect) codomains.
             other => other.clone(),
         }
@@ -4524,16 +4525,16 @@ fn subst_var(t: &Term, target: usize, repl: &Term) -> Term {
             | T::IntTy
             | T::IntLit(_)
             | T::Foreign { .. } => t.clone(),
-            T::Pi(g, a, b) => T::Pi(*g, Box::new(r(a)), Box::new(r1(b))),
-            T::Sigma(a, b) => T::Sigma(Box::new(r(a)), Box::new(r1(b))),
-            T::Lam(b) => T::Lam(Box::new(r1(b))),
-            T::PLam(b) => T::PLam(Box::new(r(b))),
-            T::PApp(p, iv) => T::PApp(Box::new(r(p)), iv.clone()),
-            T::App(f, x) => T::App(Box::new(r(f)), Box::new(r(x))),
-            T::Pair(a, b) => T::Pair(Box::new(r(a)), Box::new(r(b))),
-            T::Fst(p) => T::Fst(Box::new(r(p))),
-            T::Snd(p) => T::Snd(Box::new(r(p))),
-            T::Ann(a, b) => T::Ann(Box::new(r(a)), Box::new(r(b))),
+            T::Pi(g, a, b) => T::Pi(*g, Rc::new(r(a)), Rc::new(r1(b))),
+            T::Sigma(a, b) => T::Sigma(Rc::new(r(a)), Rc::new(r1(b))),
+            T::Lam(b) => T::Lam(Rc::new(r1(b))),
+            T::PLam(b) => T::PLam(Rc::new(r(b))),
+            T::PApp(p, iv) => T::PApp(Rc::new(r(p)), iv.clone()),
+            T::App(f, x) => T::App(Rc::new(r(f)), Rc::new(r(x))),
+            T::Pair(a, b) => T::Pair(Rc::new(r(a)), Rc::new(r(b))),
+            T::Fst(p) => T::Fst(Rc::new(r(p))),
+            T::Snd(p) => T::Snd(Rc::new(r(p))),
+            T::Ann(a, b) => T::Ann(Rc::new(r(a)), Rc::new(r(b))),
             T::Data(n, ps, is) => T::Data(
                 n.clone(),
                 ps.iter().map(&r).collect(),
@@ -4547,14 +4548,14 @@ fn subst_var(t: &Term, target: usize, repl: &Term) -> Term {
                 scrutinee,
             } => T::Elim {
                 data: data.clone(),
-                motive: Box::new(r1(motive)),
+                motive: Rc::new(r1(motive)),
                 methods: methods.iter().map(&r).collect(),
-                scrutinee: Box::new(r(scrutinee)),
+                scrutinee: Rc::new(r(scrutinee)),
             },
-            T::Delay(a) => T::Delay(Box::new(r(a))),
-            T::Now(a) => T::Now(Box::new(r(a))),
-            T::Later(a) => T::Later(Box::new(r(a))),
-            T::Force(a) => T::Force(Box::new(r(a))),
+            T::Delay(a) => T::Delay(Rc::new(r(a))),
+            T::Now(a) => T::Now(Rc::new(r(a))),
+            T::Later(a) => T::Later(Rc::new(r(a))),
+            T::Force(a) => T::Force(Rc::new(r(a))),
             // Refinement only ever touches simple type/term structure (Pi/Sigma/Data/Con/App over
             // the index variables); cubical/effect nodes are left structurally untouched here. If a
             // trailing type contained one, its inner free vars would not be refined — but those are
@@ -4581,14 +4582,14 @@ fn abstract_var_at(term: &Term, k: usize, depth: usize) -> Term {
             }
         }
         T::Univ(l) => T::Univ(l.clone()),
-        T::Pi(g, a, b) => T::Pi(*g, Box::new(r(a)), Box::new(r1(b))),
-        T::Lam(b) => T::Lam(Box::new(r1(b))),
-        T::App(f, a) => T::App(Box::new(r(f)), Box::new(r(a))),
-        T::Sigma(a, b) => T::Sigma(Box::new(r(a)), Box::new(r1(b))),
-        T::Pair(a, b) => T::Pair(Box::new(r(a)), Box::new(r(b))),
-        T::Fst(a) => T::Fst(Box::new(r(a))),
-        T::Snd(a) => T::Snd(Box::new(r(a))),
-        T::Ann(a, b) => T::Ann(Box::new(r(a)), Box::new(r(b))),
+        T::Pi(g, a, b) => T::Pi(*g, Rc::new(r(a)), Rc::new(r1(b))),
+        T::Lam(b) => T::Lam(Rc::new(r1(b))),
+        T::App(f, a) => T::App(Rc::new(r(f)), Rc::new(r(a))),
+        T::Sigma(a, b) => T::Sigma(Rc::new(r(a)), Rc::new(r1(b))),
+        T::Pair(a, b) => T::Pair(Rc::new(r(a)), Rc::new(r(b))),
+        T::Fst(a) => T::Fst(Rc::new(r(a))),
+        T::Snd(a) => T::Snd(Rc::new(r(a))),
+        T::Ann(a, b) => T::Ann(Rc::new(r(a)), Rc::new(r(b))),
         T::Data(d, ps, is) => T::Data(
             d.clone(),
             ps.iter().map(r).collect(),
@@ -4614,29 +4615,29 @@ fn abstract_var_at(term: &Term, k: usize, depth: usize) -> Term {
         } => T::Elim {
             data: data.clone(),
             // motive binds one variable (the scrutinee).
-            motive: Box::new(r1(motive)),
+            motive: Rc::new(r1(motive)),
             methods: methods.iter().map(r).collect(),
-            scrutinee: Box::new(r(scrutinee)),
+            scrutinee: Rc::new(r(scrutinee)),
         },
         T::Interval(iv) => T::Interval(iv.clone()),
         T::PathP { family, lhs, rhs } => T::PathP {
             // family binds one dimension variable, not a term variable: keep term depth.
-            family: Box::new(r(family)),
-            lhs: Box::new(r(lhs)),
-            rhs: Box::new(r(rhs)),
+            family: Rc::new(r(family)),
+            lhs: Rc::new(r(lhs)),
+            rhs: Rc::new(r(rhs)),
         },
-        T::PLam(b) => T::PLam(Box::new(r(b))),
-        T::PApp(p, iv) => T::PApp(Box::new(r(p)), iv.clone()),
-        T::Partial(c, a) => T::Partial(c.clone(), Box::new(r(a))),
+        T::PLam(b) => T::PLam(Rc::new(r(b))),
+        T::PApp(p, iv) => T::PApp(Rc::new(r(p)), iv.clone()),
+        T::Partial(c, a) => T::Partial(c.clone(), Rc::new(r(a))),
         T::System(_) => term.clone(),
         T::Transp {
             family,
             cofib,
             base,
         } => T::Transp {
-            family: Box::new(r(family)),
+            family: Rc::new(r(family)),
             cofib: cofib.clone(),
-            base: Box::new(r(base)),
+            base: Rc::new(r(base)),
         },
         T::HComp {
             ty,
@@ -4644,10 +4645,10 @@ fn abstract_var_at(term: &Term, k: usize, depth: usize) -> Term {
             tube,
             base,
         } => T::HComp {
-            ty: Box::new(r(ty)),
+            ty: Rc::new(r(ty)),
             cofib: cofib.clone(),
-            tube: Box::new(r(tube)),
-            base: Box::new(r(base)),
+            tube: Rc::new(r(tube)),
+            base: Rc::new(r(base)),
         },
         T::Comp {
             family,
@@ -4655,10 +4656,10 @@ fn abstract_var_at(term: &Term, k: usize, depth: usize) -> Term {
             tube,
             base,
         } => T::Comp {
-            family: Box::new(r(family)),
+            family: Rc::new(r(family)),
             cofib: cofib.clone(),
-            tube: Box::new(r(tube)),
-            base: Box::new(r(base)),
+            tube: Rc::new(r(tube)),
+            base: Rc::new(r(base)),
         },
         T::Glue {
             base,
@@ -4666,10 +4667,10 @@ fn abstract_var_at(term: &Term, k: usize, depth: usize) -> Term {
             ty,
             equiv,
         } => T::Glue {
-            base: Box::new(r(base)),
+            base: Rc::new(r(base)),
             cofib: cofib.clone(),
-            ty: Box::new(r(ty)),
-            equiv: Box::new(r(equiv)),
+            ty: Rc::new(r(ty)),
+            equiv: Rc::new(r(equiv)),
         },
         T::GlueTerm {
             cofib,
@@ -4677,10 +4678,10 @@ fn abstract_var_at(term: &Term, k: usize, depth: usize) -> Term {
             base,
         } => T::GlueTerm {
             cofib: cofib.clone(),
-            partial: Box::new(r(partial)),
-            base: Box::new(r(base)),
+            partial: Rc::new(r(partial)),
+            base: Rc::new(r(base)),
         },
-        T::Unglue(a) => T::Unglue(Box::new(r(a))),
+        T::Unglue(a) => T::Unglue(Rc::new(r(a))),
         T::Op {
             effect,
             op,
@@ -4690,7 +4691,7 @@ fn abstract_var_at(term: &Term, k: usize, depth: usize) -> Term {
             effect: effect.clone(),
             op: op.clone(),
             type_args: type_args.iter().map(&r).collect(),
-            arg: Box::new(r(arg)),
+            arg: Rc::new(r(arg)),
         },
         T::Handle {
             body,
@@ -4699,29 +4700,29 @@ fn abstract_var_at(term: &Term, k: usize, depth: usize) -> Term {
         } => {
             let r2 = |t: &T| abstract_var_at(t, k, depth + 2);
             T::Handle {
-                body: Box::new(r(body)),
-                return_clause: Box::new(r1(return_clause)),
+                body: Rc::new(r(body)),
+                return_clause: Rc::new(r1(return_clause)),
                 op_clauses: op_clauses
                     .iter()
-                    .map(|(name, e)| (name.clone(), Box::new(r2(e))))
+                    .map(|(name, e)| (name.clone(), Rc::new(r2(e))))
                     .collect(),
             }
         }
-        T::EffTy(row, a) => T::EffTy(row.clone(), Box::new(r(a))),
-        T::Delay(a) => T::Delay(Box::new(r(a))),
-        T::Now(a) => T::Now(Box::new(r(a))),
-        T::Later(a) => T::Later(Box::new(r(a))),
-        T::Force(a) => T::Force(Box::new(r(a))),
+        T::EffTy(row, a) => T::EffTy(row.clone(), Rc::new(r(a))),
+        T::Delay(a) => T::Delay(Rc::new(r(a))),
+        T::Now(a) => T::Now(Rc::new(r(a))),
+        T::Later(a) => T::Later(Rc::new(r(a))),
+        T::Force(a) => T::Force(Rc::new(r(a))),
         T::Foreign { symbol, ty } => T::Foreign {
             symbol: symbol.clone(),
-            ty: Box::new(r(ty)),
+            ty: Rc::new(r(ty)),
         },
         // Int type/literal carry no de Bruijn content; an IntPrim's operands must be abstracted.
         T::IntTy | T::IntLit(_) => term.clone(),
         T::IntPrim { op, lhs, rhs } => T::IntPrim {
             op: *op,
-            lhs: Box::new(r(lhs)),
-            rhs: Box::new(r(rhs)),
+            lhs: Rc::new(r(lhs)),
+            rhs: Rc::new(r(rhs)),
         },
         T::Erased => T::Erased,
     }
@@ -4748,7 +4749,7 @@ mod tests {
     fn force_elaborates_to_term_force() {
         let t = elab_str("(force (now (Type 0)))").expect("force elaborates");
         match t {
-            Term::Force(inner) => match *inner {
+            Term::Force(inner) => match unshare(inner) {
                 Term::Now(payload) => {
                     assert!(matches!(*payload, Term::Univ(_)), "payload is the universe");
                 }
@@ -5524,7 +5525,7 @@ mod tests {
             &parse_surface(&read_one("(Pi ((n Nat)) Bool)").unwrap().0).unwrap(),
         )
         .expect("type elaborates");
-        let ident = Term::Lam(Box::new(Term::Var(0)));
+        let ident = Term::Lam(Rc::new(Term::Var(0)));
         match env.kernel_check_def("bogus", &ident, &ty) {
             Err(ElabError::BadForm(msg)) => assert!(
                 msg.contains("kernel rejected definition `bogus`"),
@@ -5635,10 +5636,10 @@ mod tests {
         // The term has type `T → T` where `T = Nat → Delay Nat`. Ascribe it so it infers.
         let self_ty = Term::Pi(
             Grade::Omega,
-            Box::new(ty.clone()),
-            Box::new(shift_closed(&ty)),
+            Rc::new(ty.clone()),
+            Rc::new(shift_closed(&ty)),
         );
-        let ann = Term::Ann(Box::new(term), Box::new(self_ty));
+        let ann = Term::Ann(Rc::new(term), Rc::new(self_ty));
         let (_t, row, _u) = checker
             .infer_g(&Context::empty(), &ann, Grade::Omega)
             .expect("infers");
@@ -6043,7 +6044,7 @@ mod tests {
                     matches!(*inner, Term::Handle { .. }),
                     "the ascribed term is the Handle, unchanged"
                 );
-                match *ty {
+                match unshare(ty) {
                     Term::EffTy(row, _) => {
                         assert!(
                             row.contains(&blight_kernel::EffName::new("Extra1")),

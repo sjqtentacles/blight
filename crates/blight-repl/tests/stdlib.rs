@@ -9,17 +9,20 @@ use blight_elab::{ElabEnv, Outcome, Program};
 mod support;
 use support::prelude_resolver;
 
-/// Load one std module, assert every form is accepted, and return the resulting env for further
-/// assertions. Runs on an 8 MiB-stack worker thread (matching `examples.rs`/`spore.rs`): several
+/// Load one std module, assert every form is accepted, and run `check` against the resulting env
+/// *on the worker thread* (post-S3, `Term` holds `Rc`s, so an `ElabEnv` cannot cross `join`). Runs on an 8 MiB-stack worker thread (matching `examples.rs`/`spore.rs`): several
 /// std modules elaborate/kernel-check deeply-recursive bodies — `char` codepoint chains and the
 /// higher-order (`Π`-conclusion) eliminator motives the kernel now fully certifies — which exceed
 /// the ~2 MiB `cargo test` worker stack but fit comfortably here (the CLI main thread already uses a
 /// large stack).
-fn load_module(module: &str) -> ElabEnv {
+fn with_module<R: Send + 'static>(
+    module: &str,
+    check: impl FnOnce(&ElabEnv) -> R + Send + 'static,
+) -> R {
     let module = module.to_string();
     std::thread::Builder::new()
         .stack_size(8 * 1024 * 1024)
-        .spawn(move || load_module_inner(&module))
+        .spawn(move || check(&load_module_inner(&module)))
         .expect("spawn std-module load thread")
         .join()
         .expect("std-module load thread panicked (see message above)")
@@ -43,175 +46,187 @@ fn load_module_inner(module: &str) -> ElabEnv {
 
 #[test]
 fn std_nat_loads_in_isolation() {
-    let env = load_module("std/nat.bl");
-    assert!(env.data_constructors("Nat").is_some(), "Nat is declared");
-    for f in ["plus", "mult", "pred", "min", "max", "sub", "even", "odd"] {
-        assert!(env.global_term(f).is_some(), "std/nat defines `{f}`");
-    }
+    with_module("std/nat.bl", |env| {
+        assert!(env.data_constructors("Nat").is_some(), "Nat is declared");
+        for f in ["plus", "mult", "pred", "min", "max", "sub", "even", "odd"] {
+            assert!(env.global_term(f).is_some(), "std/nat defines `{f}`");
+        }
+    });
 }
 
 #[test]
 fn std_bool_loads_in_isolation() {
-    let env = load_module("std/bool.bl");
-    assert!(env.data_constructors("Bool").is_some(), "Bool is declared");
-    for f in ["not", "and", "or"] {
-        assert!(env.global_term(f).is_some(), "std/bool defines `{f}`");
-    }
+    with_module("std/bool.bl", |env| {
+        assert!(env.data_constructors("Bool").is_some(), "Bool is declared");
+        for f in ["not", "and", "or"] {
+            assert!(env.global_term(f).is_some(), "std/bool defines `{f}`");
+        }
+    });
 }
 
 #[test]
 fn std_order_loads_in_isolation() {
-    let env = load_module("std/order.bl");
-    for f in ["nat-le", "nat-eq", "show", "cmp", "ORD", "Nat-Ord"] {
-        assert!(env.global_term(f).is_some(), "std/order defines `{f}`");
-    }
-    assert!(env.is_class("Show"), "Show is a registered class");
-    assert!(env.is_class("Ord"), "Ord is a registered class");
+    with_module("std/order.bl", |env| {
+        for f in ["nat-le", "nat-eq", "show", "cmp", "ORD", "Nat-Ord"] {
+            assert!(env.global_term(f).is_some(), "std/order defines `{f}`");
+        }
+        assert!(env.is_class("Show"), "Show is a registered class");
+        assert!(env.is_class("Ord"), "Ord is a registered class");
+    });
 }
 
 #[test]
 fn std_char_loads_in_isolation() {
-    let env = load_module("std/char.bl");
-    for f in [
-        "char-newline",
-        "char-space",
-        "char-zero",
-        "char-A",
-        "char-a",
-        "digit-char",
-        "is-lower",
-        "is-upper",
-    ] {
-        assert!(env.global_term(f).is_some(), "std/char defines `{f}`");
-    }
+    with_module("std/char.bl", |env| {
+        for f in [
+            "char-newline",
+            "char-space",
+            "char-zero",
+            "char-A",
+            "char-a",
+            "digit-char",
+            "is-lower",
+            "is-upper",
+        ] {
+            assert!(env.global_term(f).is_some(), "std/char defines `{f}`");
+        }
+    });
 }
 
 #[test]
 fn std_list_loads_in_isolation() {
-    let env = load_module("std/list.bl");
-    assert!(env.data_constructors("List").is_some(), "List is declared");
-    for f in [
-        "length", "append", "map", "filter", "reverse", "foldr", "concat",
-    ] {
-        assert!(env.global_term(f).is_some(), "std/list defines `{f}`");
-    }
+    with_module("std/list.bl", |env| {
+        assert!(env.data_constructors("List").is_some(), "List is declared");
+        for f in [
+            "length", "append", "map", "filter", "reverse", "foldr", "concat",
+        ] {
+            assert!(env.global_term(f).is_some(), "std/list defines `{f}`");
+        }
+    });
 }
 
 #[test]
 fn std_list_extra_loads_in_isolation() {
-    let env = load_module("std/list_extra.bl");
-    for f in ["take", "drop", "foldl", "zip", "elem", "sort"] {
-        assert!(env.global_term(f).is_some(), "std/list_extra defines `{f}`");
-    }
+    with_module("std/list_extra.bl", |env| {
+        for f in ["take", "drop", "foldl", "zip", "elem", "sort"] {
+            assert!(env.global_term(f).is_some(), "std/list_extra defines `{f}`");
+        }
+    });
 }
 
 #[test]
 fn std_maybe_loads_in_isolation() {
-    let env = load_module("std/maybe.bl");
-    assert!(
-        env.data_constructors("Maybe").is_some(),
-        "Maybe is declared"
-    );
-    for f in ["maybe", "maybe-map", "from-maybe", "maybe-bind", "maybe-or"] {
-        assert!(env.global_term(f).is_some(), "std/maybe defines `{f}`");
-    }
+    with_module("std/maybe.bl", |env| {
+        assert!(
+            env.data_constructors("Maybe").is_some(),
+            "Maybe is declared"
+        );
+        for f in ["maybe", "maybe-map", "from-maybe", "maybe-bind", "maybe-or"] {
+            assert!(env.global_term(f).is_some(), "std/maybe defines `{f}`");
+        }
+    });
 }
 
 #[test]
 fn std_either_loads_in_isolation() {
     // `Either` is a two-parameter inductive — only loadable after the multi-parameter cap lift.
-    let env = load_module("std/either.bl");
-    assert!(
-        env.data_constructors("Either").is_some(),
-        "Either is declared"
-    );
-    for f in [
-        "either",
-        "either-map-right",
-        "either-map-left",
-        "either-bind",
-    ] {
-        assert!(env.global_term(f).is_some(), "std/either defines `{f}`");
-    }
-    // Re-check a multi-parameter eliminator end-to-end through the *independent* re-checker: the
-    // cap-lift is a TCB change, so the second checker must agree (or honestly decline), never reject.
-    let ty = env.global_type("either").expect("either type").clone();
-    let term = env.global_term("either").expect("either term").clone();
-    match blight_recheck::recheck_judgement(
-        env.signature(),
-        &blight_kernel::Judgement::HasType { term, ty },
-    ) {
-        Ok(()) | Err(blight_recheck::RecheckError::Declined(_)) => {}
-        Err(blight_recheck::RecheckError::Rejected(m)) => {
-            panic!("re-checker REJECTED std/either `either` (soundness alarm): {m}")
+    with_module("std/either.bl", |env| {
+        assert!(
+            env.data_constructors("Either").is_some(),
+            "Either is declared"
+        );
+        for f in [
+            "either",
+            "either-map-right",
+            "either-map-left",
+            "either-bind",
+        ] {
+            assert!(env.global_term(f).is_some(), "std/either defines `{f}`");
         }
-    }
+        // Re-check a multi-parameter eliminator end-to-end through the *independent* re-checker: the
+        // cap-lift is a TCB change, so the second checker must agree (or honestly decline), never reject.
+        let ty = env.global_type("either").expect("either type").clone();
+        let term = env.global_term("either").expect("either term").clone();
+        match blight_recheck::recheck_judgement(
+            env.signature(),
+            &blight_kernel::Judgement::HasType { term, ty },
+        ) {
+            Ok(()) | Err(blight_recheck::RecheckError::Declined(_)) => {}
+            Err(blight_recheck::RecheckError::Rejected(m)) => {
+                panic!("re-checker REJECTED std/either `either` (soundness alarm): {m}")
+            }
+        }
+    });
 }
 
 #[test]
 fn std_string_loads_in_isolation() {
-    let env = load_module("std/string.bl");
-    assert!(
-        env.data_constructors("String").is_some(),
-        "String is declared"
-    );
-    for f in [
-        "string-length",
-        "string-append",
-        "string-reverse",
-        "string-eq",
-        "string-map",
-        "string-shift",
-    ] {
-        assert!(env.global_term(f).is_some(), "std/string defines `{f}`");
-    }
+    with_module("std/string.bl", |env| {
+        assert!(
+            env.data_constructors("String").is_some(),
+            "String is declared"
+        );
+        for f in [
+            "string-length",
+            "string-append",
+            "string-reverse",
+            "string-eq",
+            "string-map",
+            "string-shift",
+        ] {
+            assert!(env.global_term(f).is_some(), "std/string defines `{f}`");
+        }
+    });
 }
 
 #[test]
 fn std_string_extra_loads_in_isolation() {
-    let env = load_module("std/string_extra.bl");
-    for f in [
-        "string-take",
-        "string-drop",
-        "string-repeat",
-        "string-concat",
-    ] {
-        assert!(
-            env.global_term(f).is_some(),
-            "std/string_extra defines `{f}`"
-        );
-    }
+    with_module("std/string_extra.bl", |env| {
+        for f in [
+            "string-take",
+            "string-drop",
+            "string-repeat",
+            "string-concat",
+        ] {
+            assert!(
+                env.global_term(f).is_some(),
+                "std/string_extra defines `{f}`"
+            );
+        }
+    });
 }
 
 #[test]
 fn std_function_loads_in_isolation() {
-    let env = load_module("std/function.bl");
-    for f in ["id", "compose", "const", "flip"] {
-        assert!(env.global_term(f).is_some(), "std/function defines `{f}`");
-    }
+    with_module("std/function.bl", |env| {
+        for f in ["id", "compose", "const", "flip"] {
+            assert!(env.global_term(f).is_some(), "std/function defines `{f}`");
+        }
+    });
 }
 
 #[test]
 fn std_pair_loads_in_isolation() {
     // `Pair a b` is a two-parameter inductive (non-dependent product).
-    let env = load_module("std/pair.bl");
-    assert!(env.data_constructors("Pair").is_some(), "Pair is declared");
-    for f in ["pair-fst", "pair-snd", "pair-swap"] {
-        assert!(env.global_term(f).is_some(), "std/pair defines `{f}`");
-    }
-    // Multi-parameter eliminator must agree across both checkers (Declined is acceptable, Rejected
-    // is a soundness alarm).
-    let ty = env.global_type("pair-fst").expect("pair-fst type").clone();
-    let term = env.global_term("pair-fst").expect("pair-fst term").clone();
-    match blight_recheck::recheck_judgement(
-        env.signature(),
-        &blight_kernel::Judgement::HasType { term, ty },
-    ) {
-        Ok(()) | Err(blight_recheck::RecheckError::Declined(_)) => {}
-        Err(blight_recheck::RecheckError::Rejected(m)) => {
-            panic!("re-checker REJECTED std/pair `pair-fst` (soundness alarm): {m}")
+    with_module("std/pair.bl", |env| {
+        assert!(env.data_constructors("Pair").is_some(), "Pair is declared");
+        for f in ["pair-fst", "pair-snd", "pair-swap"] {
+            assert!(env.global_term(f).is_some(), "std/pair defines `{f}`");
         }
-    }
+        // Multi-parameter eliminator must agree across both checkers (Declined is acceptable, Rejected
+        // is a soundness alarm).
+        let ty = env.global_type("pair-fst").expect("pair-fst type").clone();
+        let term = env.global_term("pair-fst").expect("pair-fst term").clone();
+        match blight_recheck::recheck_judgement(
+            env.signature(),
+            &blight_kernel::Judgement::HasType { term, ty },
+        ) {
+            Ok(()) | Err(blight_recheck::RecheckError::Declined(_)) => {}
+            Err(blight_recheck::RecheckError::Rejected(m)) => {
+                panic!("re-checker REJECTED std/pair `pair-fst` (soundness alarm): {m}")
+            }
+        }
+    });
 }
 
 #[test]
@@ -219,15 +234,16 @@ fn std_io_loads_in_isolation() {
     // `std/io.bl` declares the `Console` (M7) and `FileIO` (C1) effects plus their convenience
     // wrappers, and splices in `std/string.bl` and `std/pair.bl` (the `Pair` envelope `write-file`
     // uses). Loading it cleanly is the surface-level proof the C1 effect is well-formed.
-    let env = load_module("std/io.bl");
-    for f in ["put-str", "get-line", "read-file-str", "write-file-str"] {
-        assert!(env.global_term(f).is_some(), "std/io defines `{f}`");
-    }
-    // `write-file` carries a `(Pair String String)` arg, so the module must pull in `Pair`.
-    assert!(
-        env.data_constructors("Pair").is_some(),
-        "std/io splices in std/pair (write-file's Pair envelope)"
-    );
+    with_module("std/io.bl", |env| {
+        for f in ["put-str", "get-line", "read-file-str", "write-file-str"] {
+            assert!(env.global_term(f).is_some(), "std/io defines `{f}`");
+        }
+        // `write-file` carries a `(Pair String String)` arg, so the module must pull in `Pair`.
+        assert!(
+            env.data_constructors("Pair").is_some(),
+            "std/io splices in std/pair (write-file's Pair envelope)"
+        );
+    });
 }
 
 #[test]
@@ -236,15 +252,16 @@ fn std_bytes_loads_in_isolation() {
     // `bytes-set` wrappers, splicing in `std/nat`, `std/int` (the `Int` handle type), and `std/pair`
     // (the multi-arg envelopes). Loading it cleanly is the surface-level proof the C2 effect is
     // well-formed; `example_bytes_scratch_builds_and_runs` runs it natively.
-    let env = load_module("std/bytes.bl");
-    for f in ["bytes-new", "bytes-length", "bytes-get", "bytes-set"] {
-        assert!(env.global_term(f).is_some(), "std/bytes defines `{f}`");
-    }
-    // The handle is a plain `Int` and multi-arg ops are packed with `Pair`.
-    assert!(
-        env.data_constructors("Pair").is_some(),
-        "std/bytes splices in std/pair (the get/set arg envelopes)"
-    );
+    with_module("std/bytes.bl", |env| {
+        for f in ["bytes-new", "bytes-length", "bytes-get", "bytes-set"] {
+            assert!(env.global_term(f).is_some(), "std/bytes defines `{f}`");
+        }
+        // The handle is a plain `Int` and multi-arg ops are packed with `Pair`.
+        assert!(
+            env.data_constructors("Pair").is_some(),
+            "std/bytes splices in std/pair (the get/set arg envelopes)"
+        );
+    });
 }
 
 #[test]
@@ -254,15 +271,16 @@ fn std_array_loads_in_isolation() {
     // bytes, splicing in `std/nat`, `std/int` (both the handle type and the element type), and
     // `std/pair` (the multi-arg envelopes). Loading it cleanly is the surface-level proof the A3a
     // effect is well-formed; `example_array_scratch_builds_and_runs` runs it natively.
-    let env = load_module("std/array.bl");
-    for f in ["array-new", "array-length", "array-get", "array-set"] {
-        assert!(env.global_term(f).is_some(), "std/array defines `{f}`");
-    }
-    // The handle is a plain `Int` and multi-arg ops are packed with `Pair`.
-    assert!(
-        env.data_constructors("Pair").is_some(),
-        "std/array splices in std/pair (the get/set arg envelopes)"
-    );
+    with_module("std/array.bl", |env| {
+        for f in ["array-new", "array-length", "array-get", "array-set"] {
+            assert!(env.global_term(f).is_some(), "std/array defines `{f}`");
+        }
+        // The handle is a plain `Int` and multi-arg ops are packed with `Pair`.
+        assert!(
+            env.data_constructors("Pair").is_some(),
+            "std/array splices in std/pair (the get/set arg envelopes)"
+        );
+    });
 }
 
 #[test]
@@ -274,15 +292,16 @@ fn std_array_boxed_loads_in_isolation() {
     // effect declaration and its wrappers are well-formed; `example_boxed_array_scratch_builds_and_runs`
     // runs it natively (and `runtime/tests/gc_test.c`'s boxed-array tests prove the GC-safety design
     // this effect rides on: a rooted handle table + write barrier, see boxed_array.c).
-    let env = load_module("std/array.bl");
-    for f in [
-        "boxed-array-new",
-        "boxed-array-length",
-        "boxed-array-get",
-        "boxed-array-set",
-    ] {
-        assert!(env.global_term(f).is_some(), "std/array defines `{f}`");
-    }
+    with_module("std/array.bl", |env| {
+        for f in [
+            "boxed-array-new",
+            "boxed-array-length",
+            "boxed-array-get",
+            "boxed-array-set",
+        ] {
+            assert!(env.global_term(f).is_some(), "std/array defines `{f}`");
+        }
+    });
 }
 
 /// Layer 1 of P2's four-layer TDD (roadmap Wave 10 / P2, docs/design-wave4-gobars.md §5): the
@@ -293,16 +312,17 @@ fn std_array_boxed_loads_in_isolation() {
 /// feature), so it runs unconditionally in every build.
 #[test]
 fn std_graphics_loads_in_isolation() {
-    let env = load_module("std/graphics.bl");
-    for f in [
-        "gfx-init-window",
-        "gfx-poll-input",
-        "gfx-clear",
-        "gfx-draw-rect",
-        "gfx-present",
-    ] {
-        assert!(env.global_term(f).is_some(), "std/graphics defines `{f}`");
-    }
+    with_module("std/graphics.bl", |env| {
+        for f in [
+            "gfx-init-window",
+            "gfx-poll-input",
+            "gfx-clear",
+            "gfx-draw-rect",
+            "gfx-present",
+        ] {
+            assert!(env.global_term(f).is_some(), "std/graphics defines `{f}`");
+        }
+    });
 }
 
 #[test]
@@ -311,10 +331,11 @@ fn std_time_loads_in_isolation() {
     // its `clock-now`/`elapsed-ms` wrappers — the smallest possible native-handler effect, splicing
     // in `std/int` for the `Int` timestamp type. Loading it cleanly is the surface-level proof the
     // effect is well-formed; `example_clock_scratch_builds_and_runs` runs it natively.
-    let env = load_module("std/time.bl");
-    for f in ["clock-now", "elapsed-ms"] {
-        assert!(env.global_term(f).is_some(), "std/time defines `{f}`");
-    }
+    with_module("std/time.bl", |env| {
+        for f in ["clock-now", "elapsed-ms"] {
+            assert!(env.global_term(f).is_some(), "std/time defines `{f}`");
+        }
+    });
 }
 
 #[test]
@@ -322,37 +343,38 @@ fn std_test_loads_in_isolation() {
     // `std/test.bl` is the Wave 2 in-language test framework: `deftest` + assert combinators, plus
     // `TestSuite` reporting. Entirely pure, so every wrapper must re-check (Declined would be a
     // regression — nothing here touches an out-of-fragment construct).
-    let env = load_module("std/test.bl");
-    for f in [
-        "deftest",
-        "assert-true",
-        "assert-false",
-        "assert-eq-bool",
-        "assert-eq-nat",
-        "assert-eq-string",
-        "suite-total",
-        "suite-passed",
-        "suite-all-passed",
-        "render-suite",
-    ] {
-        assert!(env.global_term(f).is_some(), "std/test defines `{f}`");
-    }
-    for f in ["deftest", "suite-all-passed"] {
-        let ty = env.global_type(f).expect("test member type").clone();
-        let term = env.global_term(f).expect("test member term").clone();
-        match blight_recheck::recheck_judgement(
-            env.signature(),
-            &blight_kernel::Judgement::HasType { term, ty },
-        ) {
-            Ok(()) => {}
-            Err(blight_recheck::RecheckError::Declined(m)) => {
-                panic!("std/test `{f}` is pure and should re-check, got Declined: {m}")
-            }
-            Err(blight_recheck::RecheckError::Rejected(m)) => {
-                panic!("re-checker REJECTED std/test `{f}` (soundness alarm): {m}")
+    with_module("std/test.bl", |env| {
+        for f in [
+            "deftest",
+            "assert-true",
+            "assert-false",
+            "assert-eq-bool",
+            "assert-eq-nat",
+            "assert-eq-string",
+            "suite-total",
+            "suite-passed",
+            "suite-all-passed",
+            "render-suite",
+        ] {
+            assert!(env.global_term(f).is_some(), "std/test defines `{f}`");
+        }
+        for f in ["deftest", "suite-all-passed"] {
+            let ty = env.global_type(f).expect("test member type").clone();
+            let term = env.global_term(f).expect("test member term").clone();
+            match blight_recheck::recheck_judgement(
+                env.signature(),
+                &blight_kernel::Judgement::HasType { term, ty },
+            ) {
+                Ok(()) => {}
+                Err(blight_recheck::RecheckError::Declined(m)) => {
+                    panic!("std/test `{f}` is pure and should re-check, got Declined: {m}")
+                }
+                Err(blight_recheck::RecheckError::Rejected(m)) => {
+                    panic!("re-checker REJECTED std/test `{f}` (soundness alarm): {m}")
+                }
             }
         }
-    }
+    });
 }
 
 #[test]
@@ -360,63 +382,65 @@ fn std_map_loads_in_isolation() {
     // `std/map.bl` is the Wave 2 ordered map/set: a `TreeMap` keyed by an explicit 3-way `compare`
     // (built on `std/ordering.bl`'s `Ordering`, not on `std/tree.bl`'s boolean-`cmp` `Tree` directly,
     // since a map needs to detect key equality to upsert). Entirely pure.
-    let env = load_module("std/map.bl");
-    assert!(
-        env.data_constructors("TreeMap").is_some(),
-        "TreeMap is declared"
-    );
-    for f in [
-        "map-empty",
-        "map-insert",
-        "map-lookup",
-        "map-member",
-        "map-to-list",
-        "map-size",
-        "map-from-list",
-        "nat-map-insert",
-        "nat-map-lookup",
-        "set-empty",
-        "set-insert",
-        "set-member",
-        "set-to-list",
-    ] {
-        assert!(env.global_term(f).is_some(), "std/map defines `{f}`");
-    }
-    let ty = env.global_type("nat-map-insert").expect("type").clone();
-    let term = env.global_term("nat-map-insert").expect("term").clone();
-    match blight_recheck::recheck_judgement(
-        env.signature(),
-        &blight_kernel::Judgement::HasType { term, ty },
-    ) {
-        Ok(()) => {}
-        Err(blight_recheck::RecheckError::Declined(m)) => {
-            panic!("std/map `nat-map-insert` is pure and should re-check, got Declined: {m}")
+    with_module("std/map.bl", |env| {
+        assert!(
+            env.data_constructors("TreeMap").is_some(),
+            "TreeMap is declared"
+        );
+        for f in [
+            "map-empty",
+            "map-insert",
+            "map-lookup",
+            "map-member",
+            "map-to-list",
+            "map-size",
+            "map-from-list",
+            "nat-map-insert",
+            "nat-map-lookup",
+            "set-empty",
+            "set-insert",
+            "set-member",
+            "set-to-list",
+        ] {
+            assert!(env.global_term(f).is_some(), "std/map defines `{f}`");
         }
-        Err(blight_recheck::RecheckError::Rejected(m)) => {
-            panic!("re-checker REJECTED std/map `nat-map-insert` (soundness alarm): {m}")
+        let ty = env.global_type("nat-map-insert").expect("type").clone();
+        let term = env.global_term("nat-map-insert").expect("term").clone();
+        match blight_recheck::recheck_judgement(
+            env.signature(),
+            &blight_kernel::Judgement::HasType { term, ty },
+        ) {
+            Ok(()) => {}
+            Err(blight_recheck::RecheckError::Declined(m)) => {
+                panic!("std/map `nat-map-insert` is pure and should re-check, got Declined: {m}")
+            }
+            Err(blight_recheck::RecheckError::Rejected(m)) => {
+                panic!("re-checker REJECTED std/map `nat-map-insert` (soundness alarm): {m}")
+            }
         }
-    }
+    });
 }
 
 #[test]
 fn std_json_loads_in_isolation() {
     // `std/json.bl` is the Wave 2 JSON value tree + total structural encoder (`BJson`, merged-spine
     // arrays/objects, a 3-member `(mutual …)` group for the encoder — see the module header for why).
-    let env = load_module("std/json.bl");
-    assert!(
-        env.data_constructors("BJson").is_some(),
-        "BJson is declared"
-    );
-    for f in [
-        "json-encode",
-        "json-array-rest",
-        "json-object-rest",
-        "j-arr",
-        "j-obj",
-        "nat-to-string",
-    ] {
-        assert!(env.global_term(f).is_some(), "std/json defines `{f}`");
-    }
+    with_module("std/json.bl", |env| {
+        assert!(
+            env.data_constructors("BJson").is_some(),
+            "BJson is declared"
+        );
+        for f in [
+            "json-encode",
+            "json-array-rest",
+            "json-object-rest",
+            "j-arr",
+            "j-obj",
+            "nat-to-string",
+        ] {
+            assert!(env.global_term(f).is_some(), "std/json defines `{f}`");
+        }
+    });
 }
 
 #[test]
@@ -424,87 +448,90 @@ fn std_regex_loads_in_isolation() {
     // `std/regex.bl` is the Wave 2 minimal regex engine: Brzozowski derivatives over a `Regex` AST,
     // a genuinely structural fit for this kernel's totality checker (see the module header). Entirely
     // pure, so the re-checker must accept (not decline) it.
-    let env = load_module("std/regex.bl");
-    assert!(
-        env.data_constructors("Regex").is_some(),
-        "Regex is declared"
-    );
-    for f in ["r-str", "nullable", "deriv", "regex-match"] {
-        assert!(env.global_term(f).is_some(), "std/regex defines `{f}`");
-    }
-    let ty = env.global_type("regex-match").expect("type").clone();
-    let term = env.global_term("regex-match").expect("term").clone();
-    match blight_recheck::recheck_judgement(
-        env.signature(),
-        &blight_kernel::Judgement::HasType { term, ty },
-    ) {
-        Ok(()) => {}
-        Err(blight_recheck::RecheckError::Declined(m)) => {
-            panic!("std/regex `regex-match` is pure and should re-check, got Declined: {m}")
+    with_module("std/regex.bl", |env| {
+        assert!(
+            env.data_constructors("Regex").is_some(),
+            "Regex is declared"
+        );
+        for f in ["r-str", "nullable", "deriv", "regex-match"] {
+            assert!(env.global_term(f).is_some(), "std/regex defines `{f}`");
         }
-        Err(blight_recheck::RecheckError::Rejected(m)) => {
-            panic!("re-checker REJECTED std/regex `regex-match` (soundness alarm): {m}")
+        let ty = env.global_type("regex-match").expect("type").clone();
+        let term = env.global_term("regex-match").expect("term").clone();
+        match blight_recheck::recheck_judgement(
+            env.signature(),
+            &blight_kernel::Judgement::HasType { term, ty },
+        ) {
+            Ok(()) => {}
+            Err(blight_recheck::RecheckError::Declined(m)) => {
+                panic!("std/regex `regex-match` is pure and should re-check, got Declined: {m}")
+            }
+            Err(blight_recheck::RecheckError::Rejected(m)) => {
+                panic!("re-checker REJECTED std/regex `regex-match` (soundness alarm): {m}")
+            }
         }
-    }
+    });
 }
 
 #[test]
 fn std_ordering_loads_in_isolation() {
-    let env = load_module("std/ordering.bl");
-    assert!(
-        env.data_constructors("Ordering").is_some(),
-        "Ordering is declared"
-    );
-    for f in ["nat-compare", "ordering-flip"] {
-        assert!(env.global_term(f).is_some(), "std/ordering defines `{f}`");
-    }
-    let ty = env
-        .global_type("nat-compare")
-        .expect("nat-compare type")
-        .clone();
-    let term = env
-        .global_term("nat-compare")
-        .expect("nat-compare term")
-        .clone();
-    match blight_recheck::recheck_judgement(
-        env.signature(),
-        &blight_kernel::Judgement::HasType { term, ty },
-    ) {
-        Ok(()) | Err(blight_recheck::RecheckError::Declined(_)) => {}
-        Err(blight_recheck::RecheckError::Rejected(m)) => {
-            panic!("re-checker REJECTED std/ordering `nat-compare` (soundness alarm): {m}")
+    with_module("std/ordering.bl", |env| {
+        assert!(
+            env.data_constructors("Ordering").is_some(),
+            "Ordering is declared"
+        );
+        for f in ["nat-compare", "ordering-flip"] {
+            assert!(env.global_term(f).is_some(), "std/ordering defines `{f}`");
         }
-    }
+        let ty = env
+            .global_type("nat-compare")
+            .expect("nat-compare type")
+            .clone();
+        let term = env
+            .global_term("nat-compare")
+            .expect("nat-compare term")
+            .clone();
+        match blight_recheck::recheck_judgement(
+            env.signature(),
+            &blight_kernel::Judgement::HasType { term, ty },
+        ) {
+            Ok(()) | Err(blight_recheck::RecheckError::Declined(_)) => {}
+            Err(blight_recheck::RecheckError::Rejected(m)) => {
+                panic!("re-checker REJECTED std/ordering `nat-compare` (soundness alarm): {m}")
+            }
+        }
+    });
 }
 
 #[test]
 fn std_vec_loads_in_isolation() {
     // `Vec a n` is an indexed family (one parameter + one `Nat` index).
-    let env = load_module("std/vec.bl");
-    assert!(env.data_constructors("Vec").is_some(), "Vec is declared");
-    assert!(
-        env.global_term("vec-length").is_some(),
-        "std/vec defines `vec-length`"
-    );
-    // Indexed-family re-check through the independent checker (Declined is acceptable for the
-    // out-of-fragment cubical machinery, but a Rejection would be a soundness alarm).
-    let ty = env
-        .global_type("vec-length")
-        .expect("vec-length type")
-        .clone();
-    let term = env
-        .global_term("vec-length")
-        .expect("vec-length term")
-        .clone();
-    match blight_recheck::recheck_judgement(
-        env.signature(),
-        &blight_kernel::Judgement::HasType { term, ty },
-    ) {
-        Ok(()) | Err(blight_recheck::RecheckError::Declined(_)) => {}
-        Err(blight_recheck::RecheckError::Rejected(m)) => {
-            panic!("re-checker REJECTED std/vec `vec-length` (soundness alarm): {m}")
+    with_module("std/vec.bl", |env| {
+        assert!(env.data_constructors("Vec").is_some(), "Vec is declared");
+        assert!(
+            env.global_term("vec-length").is_some(),
+            "std/vec defines `vec-length`"
+        );
+        // Indexed-family re-check through the independent checker (Declined is acceptable for the
+        // out-of-fragment cubical machinery, but a Rejection would be a soundness alarm).
+        let ty = env
+            .global_type("vec-length")
+            .expect("vec-length type")
+            .clone();
+        let term = env
+            .global_term("vec-length")
+            .expect("vec-length term")
+            .clone();
+        match blight_recheck::recheck_judgement(
+            env.signature(),
+            &blight_kernel::Judgement::HasType { term, ty },
+        ) {
+            Ok(()) | Err(blight_recheck::RecheckError::Declined(_)) => {}
+            Err(blight_recheck::RecheckError::Rejected(m)) => {
+                panic!("re-checker REJECTED std/vec `vec-length` (soundness alarm): {m}")
+            }
         }
-    }
+    });
 }
 
 /// `std/equiv.bl` defines the univalence-grade `Equiv A B` (contractible-fibres `is-equiv`) plus
@@ -514,30 +541,31 @@ fn std_vec_loads_in_isolation() {
 /// the out-of-fragment cubical machinery; a Rejection would be a soundness alarm).
 #[test]
 fn std_equiv_loads_in_isolation() {
-    let env = load_module("std/equiv.bl");
-    for f in [
-        "is-contr",
-        "fiber",
-        "is-equiv",
-        "Equiv",
-        "equiv-fun",
-        "id-equiv",
-    ] {
-        assert!(env.global_term(f).is_some(), "std/equiv defines `{f}`");
-    }
-    for f in ["id-equiv", "equiv-fun"] {
-        let ty = env.global_type(f).expect("equiv member type").clone();
-        let term = env.global_term(f).expect("equiv member term").clone();
-        match blight_recheck::recheck_judgement(
-            env.signature(),
-            &blight_kernel::Judgement::HasType { term, ty },
-        ) {
-            Ok(()) | Err(blight_recheck::RecheckError::Declined(_)) => {}
-            Err(blight_recheck::RecheckError::Rejected(m)) => {
-                panic!("re-checker REJECTED std/equiv `{f}` (soundness alarm): {m}")
+    with_module("std/equiv.bl", |env| {
+        for f in [
+            "is-contr",
+            "fiber",
+            "is-equiv",
+            "Equiv",
+            "equiv-fun",
+            "id-equiv",
+        ] {
+            assert!(env.global_term(f).is_some(), "std/equiv defines `{f}`");
+        }
+        for f in ["id-equiv", "equiv-fun"] {
+            let ty = env.global_type(f).expect("equiv member type").clone();
+            let term = env.global_term(f).expect("equiv member term").clone();
+            match blight_recheck::recheck_judgement(
+                env.signature(),
+                &blight_kernel::Judgement::HasType { term, ty },
+            ) {
+                Ok(()) | Err(blight_recheck::RecheckError::Declined(_)) => {}
+                Err(blight_recheck::RecheckError::Rejected(m)) => {
+                    panic!("re-checker REJECTED std/equiv `{f}` (soundness alarm): {m}")
+                }
             }
         }
-    }
+    });
 }
 
 /// `std/path.bl` defines `funext` (function extensionality, pure Path/plam) and `ua : Equiv A B ->
@@ -548,38 +576,40 @@ fn std_equiv_loads_in_isolation() {
 /// polymorphic Blight lemma — see `std/path.bl`/docs/metatheory.md.
 #[test]
 fn std_path_loads_in_isolation() {
-    let env = load_module("std/path.bl");
-    for f in ["funext", "ua"] {
-        assert!(env.global_term(f).is_some(), "std/path defines `{f}`");
-    }
-    for f in ["funext", "ua"] {
-        let ty = env.global_type(f).expect("path member type").clone();
-        let term = env.global_term(f).expect("path member term").clone();
-        match blight_recheck::recheck_judgement(
-            env.signature(),
-            &blight_kernel::Judgement::HasType { term, ty },
-        ) {
-            Ok(()) | Err(blight_recheck::RecheckError::Declined(_)) => {}
-            Err(blight_recheck::RecheckError::Rejected(m)) => {
-                panic!("re-checker REJECTED std/path `{f}` (soundness alarm): {m}")
+    with_module("std/path.bl", |env| {
+        for f in ["funext", "ua"] {
+            assert!(env.global_term(f).is_some(), "std/path defines `{f}`");
+        }
+        for f in ["funext", "ua"] {
+            let ty = env.global_type(f).expect("path member type").clone();
+            let term = env.global_term(f).expect("path member term").clone();
+            match blight_recheck::recheck_judgement(
+                env.signature(),
+                &blight_kernel::Judgement::HasType { term, ty },
+            ) {
+                Ok(()) | Err(blight_recheck::RecheckError::Declined(_)) => {}
+                Err(blight_recheck::RecheckError::Rejected(m)) => {
+                    panic!("re-checker REJECTED std/path `{f}` (soundness alarm): {m}")
+                }
             }
         }
-    }
+    });
 }
 
 #[test]
 fn std_tree_loads_in_isolation() {
-    let env = load_module("std/tree.bl");
-    assert!(env.data_constructors("Tree").is_some(), "Tree is declared");
-    for f in ["tree-if", "tree-insert", "RedBlackTree", "NatTree"] {
-        assert!(env.global_term(f).is_some(), "std/tree defines `{f}`");
-    }
-    // Re-check the functor application end-to-end through the spore.
-    let ty = env.global_type("NatTree").expect("NatTree type").clone();
-    let term = env.global_term("NatTree").expect("NatTree term").clone();
-    if let Err(e) = blight_kernel::check_top_with(env.signature().clone(), term, ty) {
-        panic!("std/tree NatTree re-check failed: {e:?}");
-    }
+    with_module("std/tree.bl", |env| {
+        assert!(env.data_constructors("Tree").is_some(), "Tree is declared");
+        for f in ["tree-if", "tree-insert", "RedBlackTree", "NatTree"] {
+            assert!(env.global_term(f).is_some(), "std/tree defines `{f}`");
+        }
+        // Re-check the functor application end-to-end through the spore.
+        let ty = env.global_type("NatTree").expect("NatTree type").clone();
+        let term = env.global_term("NatTree").expect("NatTree term").clone();
+        if let Err(e) = blight_kernel::check_top_with(env.signature().clone(), term, ty) {
+            panic!("std/tree NatTree re-check failed: {e:?}");
+        }
+    });
 }
 
 /// `std/int.bl` wraps the primitive machine-`Int` operations as named, first-class total functions.
@@ -588,38 +618,39 @@ fn std_tree_loads_in_isolation() {
 /// confirming the wrappers add no out-of-fragment surface.
 #[test]
 fn std_int_loads_in_isolation() {
-    let env = load_module("std/int.bl");
-    for f in [
-        "int-add",
-        "int-sub",
-        "int-mul",
-        "int-div",
-        "int-eq",
-        "int-lt",
-        "int-zero",
-        "int-one",
-        "int-double",
-        "int-succ",
-        "int-pred",
-    ] {
-        assert!(env.global_term(f).is_some(), "std/int defines `{f}`");
-    }
-    for f in ["int-add", "int-mul", "int-double", "int-succ"] {
-        let ty = env.global_type(f).expect("int member type").clone();
-        let term = env.global_term(f).expect("int member term").clone();
-        match blight_recheck::recheck_judgement(
-            env.signature(),
-            &blight_kernel::Judgement::HasType { term, ty },
-        ) {
-            Ok(()) => {}
-            Err(blight_recheck::RecheckError::Declined(m)) => {
-                panic!("std/int `{f}` should re-check (Int is in-fragment), got Declined: {m}")
-            }
-            Err(blight_recheck::RecheckError::Rejected(m)) => {
-                panic!("re-checker REJECTED std/int `{f}` (soundness alarm): {m}")
+    with_module("std/int.bl", |env| {
+        for f in [
+            "int-add",
+            "int-sub",
+            "int-mul",
+            "int-div",
+            "int-eq",
+            "int-lt",
+            "int-zero",
+            "int-one",
+            "int-double",
+            "int-succ",
+            "int-pred",
+        ] {
+            assert!(env.global_term(f).is_some(), "std/int defines `{f}`");
+        }
+        for f in ["int-add", "int-mul", "int-double", "int-succ"] {
+            let ty = env.global_type(f).expect("int member type").clone();
+            let term = env.global_term(f).expect("int member term").clone();
+            match blight_recheck::recheck_judgement(
+                env.signature(),
+                &blight_kernel::Judgement::HasType { term, ty },
+            ) {
+                Ok(()) => {}
+                Err(blight_recheck::RecheckError::Declined(m)) => {
+                    panic!("std/int `{f}` should re-check (Int is in-fragment), got Declined: {m}")
+                }
+                Err(blight_recheck::RecheckError::Rejected(m)) => {
+                    panic!("re-checker REJECTED std/int `{f}` (soundness alarm): {m}")
+                }
             }
         }
-    }
+    });
 }
 
 /// `std/float.bl` (M23) defines `Float` as an UNTRUSTED fixed-point rational over the trusted `Int`
@@ -628,46 +659,47 @@ fn std_int_loads_in_isolation() {
 /// wrappers (not decline like the cubical machinery), confirming `Float` adds no trusted surface.
 #[test]
 fn std_float_loads_in_isolation() {
-    let env = load_module("std/float.bl");
-    assert!(
-        env.data_constructors("Float").is_some(),
-        "Float is declared as ordinary data"
-    );
-    for f in [
-        "float-of-int",
-        "float-add",
-        "float-sub",
-        "float-mul",
-        "float-div",
-        "float-eq",
-        "float-lt",
-        "float-neg",
-        "float-double",
-        "float-zero",
-        "float-one",
-        "float-mantissa",
-        "float-scale",
-    ] {
-        assert!(env.global_term(f).is_some(), "std/float defines `{f}`");
-    }
-    for f in ["float-add", "float-mul", "float-of-int", "float-double"] {
-        let ty = env.global_type(f).expect("float member type").clone();
-        let term = env.global_term(f).expect("float member term").clone();
-        match blight_recheck::recheck_judgement(
-            env.signature(),
-            &blight_kernel::Judgement::HasType { term, ty },
-        ) {
-            Ok(()) => {}
-            Err(blight_recheck::RecheckError::Declined(m)) => {
-                panic!(
-                    "std/float `{f}` should re-check (Float is plain Int data), got Declined: {m}"
-                )
-            }
-            Err(blight_recheck::RecheckError::Rejected(m)) => {
-                panic!("re-checker REJECTED std/float `{f}` (soundness alarm): {m}")
+    with_module("std/float.bl", |env| {
+        assert!(
+            env.data_constructors("Float").is_some(),
+            "Float is declared as ordinary data"
+        );
+        for f in [
+            "float-of-int",
+            "float-add",
+            "float-sub",
+            "float-mul",
+            "float-div",
+            "float-eq",
+            "float-lt",
+            "float-neg",
+            "float-double",
+            "float-zero",
+            "float-one",
+            "float-mantissa",
+            "float-scale",
+        ] {
+            assert!(env.global_term(f).is_some(), "std/float defines `{f}`");
+        }
+        for f in ["float-add", "float-mul", "float-of-int", "float-double"] {
+            let ty = env.global_type(f).expect("float member type").clone();
+            let term = env.global_term(f).expect("float member term").clone();
+            match blight_recheck::recheck_judgement(
+                env.signature(),
+                &blight_kernel::Judgement::HasType { term, ty },
+            ) {
+                Ok(()) => {}
+                Err(blight_recheck::RecheckError::Declined(m)) => {
+                    panic!(
+                        "std/float `{f}` should re-check (Float is plain Int data), got Declined: {m}"
+                    )
+                }
+                Err(blight_recheck::RecheckError::Rejected(m)) => {
+                    panic!("re-checker REJECTED std/float `{f}` (soundness alarm): {m}")
+                }
             }
         }
-    }
+    });
 }
 
 /// `std/f64.bl` (Wave 2 / L2) defines `F64` as an UNVERIFIED `foreign` postulate over hardware
@@ -677,50 +709,51 @@ fn std_float_loads_in_isolation() {
 /// reject) any of its members, since each one's type mentions the `foreign` `F64`.
 #[test]
 fn std_f64_loads_in_isolation() {
-    let env = load_module("std/f64.bl");
-    assert!(
-        env.data_constructors("F64").is_none(),
-        "F64 is a `foreign` postulate, not ordinary `Data` (unlike Float)"
-    );
-    for f in [
-        "f64-of-int",
-        "f64-round",
-        "f64-add",
-        "f64-sub",
-        "f64-mul",
-        "f64-div",
-        "f64-neg",
-        "f64-lt",
-        "f64-eq",
-        "f64-plus",
-        "f64-minus",
-        "f64-times",
-        "f64-over",
-        "f64-less-than",
-        "f64-equal",
-        "f64-zero",
-        "f64-one",
-    ] {
-        assert!(env.global_term(f).is_some(), "std/f64 defines `{f}`");
-    }
-    // Every member's type mentions the `foreign` `F64`, so the independent re-checker must decline
-    // each one (an honest refusal, not a false accept and not a soundness rejection).
-    for f in ["f64-of-int", "f64-round", "f64-plus", "f64-zero"] {
-        let ty = env.global_type(f).expect("f64 member type").clone();
-        let term = env.global_term(f).expect("f64 member term").clone();
-        match blight_recheck::recheck_judgement(
-            env.signature(),
-            &blight_kernel::Judgement::HasType { term, ty },
-        ) {
-            Err(blight_recheck::RecheckError::Declined(msg)) => {
-                assert!(
-                    msg.contains("foreign"),
-                    "decline reason for `{f}` should name the foreign postulate, got: {msg}"
-                );
-            }
-            other => panic!("re-checker must DECLINE std/f64 `{f}` (foreign F64), got: {other:?}"),
+    with_module("std/f64.bl", |env| {
+        assert!(
+            env.data_constructors("F64").is_none(),
+            "F64 is a `foreign` postulate, not ordinary `Data` (unlike Float)"
+        );
+        for f in [
+            "f64-of-int",
+            "f64-round",
+            "f64-add",
+            "f64-sub",
+            "f64-mul",
+            "f64-div",
+            "f64-neg",
+            "f64-lt",
+            "f64-eq",
+            "f64-plus",
+            "f64-minus",
+            "f64-times",
+            "f64-over",
+            "f64-less-than",
+            "f64-equal",
+            "f64-zero",
+            "f64-one",
+        ] {
+            assert!(env.global_term(f).is_some(), "std/f64 defines `{f}`");
         }
-    }
+        // Every member's type mentions the `foreign` `F64`, so the independent re-checker must decline
+        // each one (an honest refusal, not a false accept and not a soundness rejection).
+        for f in ["f64-of-int", "f64-round", "f64-plus", "f64-zero"] {
+            let ty = env.global_type(f).expect("f64 member type").clone();
+            let term = env.global_term(f).expect("f64 member term").clone();
+            match blight_recheck::recheck_judgement(
+                env.signature(),
+                &blight_kernel::Judgement::HasType { term, ty },
+            ) {
+                Err(blight_recheck::RecheckError::Declined(msg)) => {
+                    assert!(
+                        msg.contains("foreign"),
+                        "decline reason for `{f}` should name the foreign postulate, got: {msg}"
+                    );
+                }
+                other => panic!("re-checker must DECLINE std/f64 `{f}` (foreign F64), got: {other:?}"),
+            }
+        }
+    });
 }
 
 /// `std/actor.bl` (M16) declares the actor/CSP concurrency surface as a graded `Actor` effect plus
@@ -732,10 +765,11 @@ fn std_f64_loads_in_isolation() {
 /// by the independent re-checker, not declined).
 #[test]
 fn std_actor_loads_in_isolation() {
-    let env = load_module("std/actor.bl");
-    for f in ["actor-spawn", "actor-send", "actor-receive", "actor-yield"] {
-        assert!(env.global_term(f).is_some(), "std/actor defines `{f}`");
-    }
+    with_module("std/actor.bl", |env| {
+        for f in ["actor-spawn", "actor-send", "actor-receive", "actor-yield"] {
+            assert!(env.global_term(f).is_some(), "std/actor defines `{f}`");
+        }
+    });
 }
 
 /// `examples/row_polymorphic_handler.bl` (Wave 7 / E1: row polymorphism, tower-first): a
@@ -779,7 +813,7 @@ fn row_polymorphic_handler_composes() {
                 matches!(*inner, blight_kernel::Term::Handle { .. }),
                 "the ascribed term is the Handle itself"
             );
-            match *ty {
+            match blight_kernel::unshare(ty) {
                 blight_kernel::Term::EffTy(row, _) => {
                     assert!(
                         row.contains(&blight_kernel::EffName::new("Extra1")),
@@ -808,32 +842,33 @@ fn row_polymorphic_handler_composes() {
 /// surface proof the self-hosted scanner is well-formed.
 #[test]
 fn std_lexer_loads_in_isolation() {
-    let env = load_module("std/lexer.bl");
-    for f in [
-        "is-space",
-        "is-digit",
-        "paren-step",
-        "scan-depth",
-        "string->bytes",
-        "max-paren-depth",
-    ] {
-        assert!(env.global_term(f).is_some(), "std/lexer defines `{f}`");
-    }
-    // The pure classifier must re-check (it never touches `Bytes`).
-    let ty = env.global_type("is-digit").expect("is-digit type").clone();
-    let term = env.global_term("is-digit").expect("is-digit term").clone();
-    match blight_recheck::recheck_judgement(
-        env.signature(),
-        &blight_kernel::Judgement::HasType { term, ty },
-    ) {
-        Ok(()) => {}
-        Err(blight_recheck::RecheckError::Declined(m)) => {
-            panic!("std/lexer `is-digit` is pure and should re-check, got Declined: {m}")
+    with_module("std/lexer.bl", |env| {
+        for f in [
+            "is-space",
+            "is-digit",
+            "paren-step",
+            "scan-depth",
+            "string->bytes",
+            "max-paren-depth",
+        ] {
+            assert!(env.global_term(f).is_some(), "std/lexer defines `{f}`");
         }
-        Err(blight_recheck::RecheckError::Rejected(m)) => {
-            panic!("re-checker REJECTED std/lexer `is-digit` (soundness alarm): {m}")
+        // The pure classifier must re-check (it never touches `Bytes`).
+        let ty = env.global_type("is-digit").expect("is-digit type").clone();
+        let term = env.global_term("is-digit").expect("is-digit term").clone();
+        match blight_recheck::recheck_judgement(
+            env.signature(),
+            &blight_kernel::Judgement::HasType { term, ty },
+        ) {
+            Ok(()) => {}
+            Err(blight_recheck::RecheckError::Declined(m)) => {
+                panic!("std/lexer `is-digit` is pure and should re-check, got Declined: {m}")
+            }
+            Err(blight_recheck::RecheckError::Rejected(m)) => {
+                panic!("re-checker REJECTED std/lexer `is-digit` (soundness alarm): {m}")
+            }
         }
-    }
+    });
 }
 
 /// `std/parser.bl` (SH1 self-hosting): a tokenizer + pure stack-machine s-expression parser written
@@ -843,38 +878,39 @@ fn std_lexer_loads_in_isolation() {
 /// the re-checker must *accept* on that basis as well — the self-hosting payoff.
 #[test]
 fn std_parser_loads_in_isolation() {
-    let env = load_module("std/parser.bl");
-    for f in [
-        "tokenize",
-        "parse-tokens",
-        "parse-string",
-        "count-atoms",
-        "sexp-atoms",
-        "next-state",
-    ] {
-        assert!(env.global_term(f).is_some(), "std/parser defines `{f}`");
-    }
-    // The pure parser core re-checks `Ok` (no `Bytes` effect anywhere in `parse-tokens`).
-    let ty = env
-        .global_type("parse-tokens")
-        .expect("parse-tokens type")
-        .clone();
-    let term = env
-        .global_term("parse-tokens")
-        .expect("parse-tokens term")
-        .clone();
-    match blight_recheck::recheck_judgement(
-        env.signature(),
-        &blight_kernel::Judgement::HasType { term, ty },
-    ) {
-        Ok(()) => {}
-        Err(blight_recheck::RecheckError::Declined(m)) => {
-            panic!("std/parser `parse-tokens` is a pure total stack machine and should re-check, got Declined: {m}")
+    with_module("std/parser.bl", |env| {
+        for f in [
+            "tokenize",
+            "parse-tokens",
+            "parse-string",
+            "count-atoms",
+            "sexp-atoms",
+            "next-state",
+        ] {
+            assert!(env.global_term(f).is_some(), "std/parser defines `{f}`");
         }
-        Err(blight_recheck::RecheckError::Rejected(m)) => {
-            panic!("re-checker REJECTED std/parser `parse-tokens` (soundness alarm): {m}")
+        // The pure parser core re-checks `Ok` (no `Bytes` effect anywhere in `parse-tokens`).
+        let ty = env
+            .global_type("parse-tokens")
+            .expect("parse-tokens type")
+            .clone();
+        let term = env
+            .global_term("parse-tokens")
+            .expect("parse-tokens term")
+            .clone();
+        match blight_recheck::recheck_judgement(
+            env.signature(),
+            &blight_kernel::Judgement::HasType { term, ty },
+        ) {
+            Ok(()) => {}
+            Err(blight_recheck::RecheckError::Declined(m)) => {
+                panic!("std/parser `parse-tokens` is a pure total stack machine and should re-check, got Declined: {m}")
+            }
+            Err(blight_recheck::RecheckError::Rejected(m)) => {
+                panic!("re-checker REJECTED std/parser `parse-tokens` (soundness alarm): {m}")
+            }
         }
-    }
+    });
 }
 
 /// Coverage guard: *every* `std/*.bl` module must load in isolation. The per-module tests above pin
@@ -937,7 +973,7 @@ fn every_std_module_loads_in_isolation() {
 
     for m in &modules {
         // Loading on the shared 8 MiB-stack worker; a parse/type error or panic fails the suite.
-        let _ = load_module(&format!("std/{m}"));
+        with_module(&format!("std/{m}"), |_| ());
         assert!(
             explicitly_tested.contains(&m.as_str()),
             "std/{m} has no dedicated `std_*_loads_in_isolation` test — add one (and list it in \
@@ -990,7 +1026,7 @@ fn generic_ref_effect_typechecks() {
     // some other type.
     let get_nat_ty = env.global_type("get-nat").expect("get-nat type").clone();
     match get_nat_ty {
-        blight_kernel::Term::Pi(_, _, body) => match *body {
+        blight_kernel::Term::Pi(_, _, body) => match blight_kernel::unshare(body) {
             blight_kernel::Term::EffTy(row, payload) => {
                 assert!(row.contains(&blight_kernel::EffName::new("Ref")));
                 assert!(
@@ -1007,7 +1043,7 @@ fn generic_ref_effect_typechecks() {
     // the same program: the whole point of E2 over a hardcoded single-instantiation effect.
     let put_bool_ty = env.global_type("put-bool").expect("put-bool type").clone();
     match put_bool_ty {
-        blight_kernel::Term::Pi(_, _, body) => match *body {
+        blight_kernel::Term::Pi(_, _, body) => match blight_kernel::unshare(body) {
             blight_kernel::Term::EffTy(row, payload) => {
                 assert!(row.contains(&blight_kernel::EffName::new("Ref")));
                 assert!(
@@ -1040,35 +1076,36 @@ fn generic_ref_effect_typechecks() {
 
 #[test]
 fn std_prelude_aggregates_everything() {
-    let env = load_module("std/prelude.bl");
-    for f in [
-        "plus",
-        "not",
-        "show",
-        "cmp",
-        "length",
-        "map",
-        "filter",
-        "reverse",
-        "append",
-        "tree-insert",
-        "NatTree",
-        "maybe",
-        "either",
-        "id",
-        "compose",
-        "nat-compare",
-        "min",
-        "max",
-    ] {
-        assert!(env.global_term(f).is_some(), "std/prelude re-exports `{f}`");
-    }
-    for d in [
-        "Nat", "Bool", "List", "Tree", "Maybe", "Either", "Pair", "Ordering",
-    ] {
-        assert!(
-            env.data_constructors(d).is_some(),
-            "std/prelude declares `{d}`"
-        );
-    }
+    with_module("std/prelude.bl", |env| {
+        for f in [
+            "plus",
+            "not",
+            "show",
+            "cmp",
+            "length",
+            "map",
+            "filter",
+            "reverse",
+            "append",
+            "tree-insert",
+            "NatTree",
+            "maybe",
+            "either",
+            "id",
+            "compose",
+            "nat-compare",
+            "min",
+            "max",
+        ] {
+            assert!(env.global_term(f).is_some(), "std/prelude re-exports `{f}`");
+        }
+        for d in [
+            "Nat", "Bool", "List", "Tree", "Maybe", "Either", "Pair", "Ordering",
+        ] {
+            assert!(
+                env.data_constructors(d).is_some(),
+                "std/prelude declares `{d}`"
+            );
+        }
+    });
 }

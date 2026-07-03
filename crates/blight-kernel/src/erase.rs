@@ -22,6 +22,7 @@
 
 use crate::semiring::{Grade, Semiring};
 use crate::term::Term;
+use std::rc::Rc;
 
 /// Erase grade-`0` content from `term`, whose type is `ty` (a core type term in the same scope).
 /// Returns a term in which all grade-`0` binders and arguments have been removed and the
@@ -64,7 +65,7 @@ fn go(term: &Term, ty: &Term, env: &mut Vec<bool>) -> Term {
                 let body2 = go(body, cod, env);
                 env.pop();
                 if keep {
-                    Term::Lam(Box::new(body2))
+                    Term::Lam(Rc::new(body2))
                 } else {
                     // The binder is gone; `body2` already has `x`'s slot removed via renumbering.
                     body2
@@ -74,7 +75,7 @@ fn go(term: &Term, ty: &Term, env: &mut Vec<bool>) -> Term {
                 env.push(true);
                 let body2 = go(body, ty, env);
                 env.pop();
-                Term::Lam(Box::new(body2))
+                Term::Lam(Rc::new(body2))
             }
         }
 
@@ -85,8 +86,8 @@ fn go(term: &Term, ty: &Term, env: &mut Vec<bool>) -> Term {
         // nested case we conservatively keep the argument, which is always sound — an unused
         // erased value is dead code the later backend passes remove.)
         Term::App(f, a) => Term::App(
-            Box::new(go(f, &Term::Erased, env)),
-            Box::new(go(a, &Term::Erased, env)),
+            Rc::new(go(f, &Term::Erased, env)),
+            Rc::new(go(a, &Term::Erased, env)),
         ),
 
         Term::Univ(_) | Term::Data(_, _, _) => term.clone(),
@@ -99,7 +100,7 @@ fn go(term: &Term, ty: &Term, env: &mut Vec<bool>) -> Term {
             env.push(true);
             let cod2 = go(cod, &Term::Erased, env);
             env.pop();
-            Term::Pi(*g, Box::new(dom2), Box::new(cod2))
+            Term::Pi(*g, Rc::new(dom2), Rc::new(cod2))
         }
 
         Term::Sigma(dom, cod) => {
@@ -107,21 +108,21 @@ fn go(term: &Term, ty: &Term, env: &mut Vec<bool>) -> Term {
             env.push(true);
             let cod2 = go(cod, &Term::Erased, env);
             env.pop();
-            Term::Sigma(Box::new(dom2), Box::new(cod2))
+            Term::Sigma(Rc::new(dom2), Rc::new(cod2))
         }
 
         Term::Pair(a, b) => Term::Pair(
-            Box::new(go(a, &Term::Erased, env)),
-            Box::new(go(b, &Term::Erased, env)),
+            Rc::new(go(a, &Term::Erased, env)),
+            Rc::new(go(b, &Term::Erased, env)),
         ),
-        Term::Fst(p) => Term::Fst(Box::new(go(p, &Term::Erased, env))),
-        Term::Snd(p) => Term::Snd(Box::new(go(p, &Term::Erased, env))),
+        Term::Fst(p) => Term::Fst(Rc::new(go(p, &Term::Erased, env))),
+        Term::Snd(p) => Term::Snd(Rc::new(go(p, &Term::Erased, env))),
 
         Term::Ann(t, ann_ty) => {
             // Re-thread the real type for the inner term.
             Term::Ann(
-                Box::new(go(t, ann_ty, env)),
-                Box::new(go(ann_ty, &Term::Erased, env)),
+                Rc::new(go(t, ann_ty, env)),
+                Rc::new(go(ann_ty, &Term::Erased, env)),
             )
         }
 
@@ -137,9 +138,9 @@ fn go(term: &Term, ty: &Term, env: &mut Vec<bool>) -> Term {
             scrutinee,
         } => Term::Elim {
             data: data.clone(),
-            motive: Box::new(go(motive, &Term::Erased, env)),
+            motive: Rc::new(go(motive, &Term::Erased, env)),
             methods: methods.iter().map(|t| go(t, &Term::Erased, env)).collect(),
-            scrutinee: Box::new(go(scrutinee, &Term::Erased, env)),
+            scrutinee: Rc::new(go(scrutinee, &Term::Erased, env)),
         },
 
         // `dim` carries no *term* variable content (dimensions live in a separate space); only
@@ -159,21 +160,21 @@ fn go(term: &Term, ty: &Term, env: &mut Vec<bool>) -> Term {
         // Cubical formers carry no *term* binders (dimensions live in a separate space) so the
         // term-variable environment is unchanged when descending.
         Term::PathP { family, lhs, rhs } => Term::PathP {
-            family: Box::new(go(family, &Term::Erased, env)),
-            lhs: Box::new(go(lhs, &Term::Erased, env)),
-            rhs: Box::new(go(rhs, &Term::Erased, env)),
+            family: Rc::new(go(family, &Term::Erased, env)),
+            lhs: Rc::new(go(lhs, &Term::Erased, env)),
+            rhs: Rc::new(go(rhs, &Term::Erased, env)),
         },
-        Term::PLam(body) => Term::PLam(Box::new(go(body, &Term::Erased, env))),
-        Term::PApp(p, r) => Term::PApp(Box::new(go(p, &Term::Erased, env)), r.clone()),
-        Term::Partial(c, a) => Term::Partial(c.clone(), Box::new(go(a, &Term::Erased, env))),
+        Term::PLam(body) => Term::PLam(Rc::new(go(body, &Term::Erased, env))),
+        Term::PApp(p, r) => Term::PApp(Rc::new(go(p, &Term::Erased, env)), r.clone()),
+        Term::Partial(c, a) => Term::Partial(c.clone(), Rc::new(go(a, &Term::Erased, env))),
         Term::Transp {
             family,
             cofib,
             base,
         } => Term::Transp {
-            family: Box::new(go(family, &Term::Erased, env)),
+            family: Rc::new(go(family, &Term::Erased, env)),
             cofib: cofib.clone(),
-            base: Box::new(go(base, &Term::Erased, env)),
+            base: Rc::new(go(base, &Term::Erased, env)),
         },
         Term::HComp {
             ty: t,
@@ -181,10 +182,10 @@ fn go(term: &Term, ty: &Term, env: &mut Vec<bool>) -> Term {
             tube,
             base,
         } => Term::HComp {
-            ty: Box::new(go(t, &Term::Erased, env)),
+            ty: Rc::new(go(t, &Term::Erased, env)),
             cofib: cofib.clone(),
-            tube: Box::new(go(tube, &Term::Erased, env)),
-            base: Box::new(go(base, &Term::Erased, env)),
+            tube: Rc::new(go(tube, &Term::Erased, env)),
+            base: Rc::new(go(base, &Term::Erased, env)),
         },
         Term::Comp {
             family,
@@ -192,10 +193,10 @@ fn go(term: &Term, ty: &Term, env: &mut Vec<bool>) -> Term {
             tube,
             base,
         } => Term::Comp {
-            family: Box::new(go(family, &Term::Erased, env)),
+            family: Rc::new(go(family, &Term::Erased, env)),
             cofib: cofib.clone(),
-            tube: Box::new(go(tube, &Term::Erased, env)),
-            base: Box::new(go(base, &Term::Erased, env)),
+            tube: Rc::new(go(tube, &Term::Erased, env)),
+            base: Rc::new(go(base, &Term::Erased, env)),
         },
         Term::Glue {
             base,
@@ -203,10 +204,10 @@ fn go(term: &Term, ty: &Term, env: &mut Vec<bool>) -> Term {
             ty: t,
             equiv,
         } => Term::Glue {
-            base: Box::new(go(base, &Term::Erased, env)),
+            base: Rc::new(go(base, &Term::Erased, env)),
             cofib: cofib.clone(),
-            ty: Box::new(go(t, &Term::Erased, env)),
-            equiv: Box::new(go(equiv, &Term::Erased, env)),
+            ty: Rc::new(go(t, &Term::Erased, env)),
+            equiv: Rc::new(go(equiv, &Term::Erased, env)),
         },
         Term::GlueTerm {
             cofib,
@@ -214,10 +215,10 @@ fn go(term: &Term, ty: &Term, env: &mut Vec<bool>) -> Term {
             base,
         } => Term::GlueTerm {
             cofib: cofib.clone(),
-            partial: Box::new(go(partial, &Term::Erased, env)),
-            base: Box::new(go(base, &Term::Erased, env)),
+            partial: Rc::new(go(partial, &Term::Erased, env)),
+            base: Rc::new(go(base, &Term::Erased, env)),
         },
-        Term::Unglue(g) => Term::Unglue(Box::new(go(g, &Term::Erased, env))),
+        Term::Unglue(g) => Term::Unglue(Rc::new(go(g, &Term::Erased, env))),
         // Effects are runtime-relevant (M2 does not erase effectful structure). Traverse
         // structurally, honoring the handler clause binders (return: 1; op clauses: 2).
         // The type-argument instantiation of a parameterized effect's operation is type-level
@@ -232,7 +233,7 @@ fn go(term: &Term, ty: &Term, env: &mut Vec<bool>) -> Term {
             effect: effect.clone(),
             op: op.clone(),
             type_args: type_args.clone(),
-            arg: Box::new(go(arg, &Term::Erased, env)),
+            arg: Rc::new(go(arg, &Term::Erased, env)),
         },
         Term::Handle {
             body,
@@ -251,20 +252,20 @@ fn go(term: &Term, ty: &Term, env: &mut Vec<bool>) -> Term {
                     let e2 = go(e, &Term::Erased, env);
                     env.pop();
                     env.pop();
-                    (name.clone(), Box::new(e2))
+                    (name.clone(), Rc::new(e2))
                 })
                 .collect();
             Term::Handle {
-                body: Box::new(body2),
-                return_clause: Box::new(ret2),
+                body: Rc::new(body2),
+                return_clause: Rc::new(ret2),
                 op_clauses: clauses2,
             }
         }
-        Term::EffTy(row, a) => Term::EffTy(row.clone(), Box::new(go(a, &Term::Erased, env))),
-        Term::Delay(a) => Term::Delay(Box::new(go(a, &Term::Erased, env))),
-        Term::Now(a) => Term::Now(Box::new(go(a, &Term::Erased, env))),
-        Term::Later(a) => Term::Later(Box::new(go(a, &Term::Erased, env))),
-        Term::Force(a) => Term::Force(Box::new(go(a, &Term::Erased, env))),
+        Term::EffTy(row, a) => Term::EffTy(row.clone(), Rc::new(go(a, &Term::Erased, env))),
+        Term::Delay(a) => Term::Delay(Rc::new(go(a, &Term::Erased, env))),
+        Term::Now(a) => Term::Now(Rc::new(go(a, &Term::Erased, env))),
+        Term::Later(a) => Term::Later(Rc::new(go(a, &Term::Erased, env))),
+        Term::Force(a) => Term::Force(Rc::new(go(a, &Term::Erased, env))),
         // A foreign postulate is runtime content (a C call); its type is irrelevant at runtime and
         // its symbol carries no de Bruijn indices, so it survives erasure unchanged.
         Term::Foreign { symbol, ty } => Term::Foreign {
@@ -276,8 +277,8 @@ fn go(term: &Term, ty: &Term, env: &mut Vec<bool>) -> Term {
         Term::IntTy | Term::IntLit(_) => term.clone(),
         Term::IntPrim { op, lhs, rhs } => Term::IntPrim {
             op: *op,
-            lhs: Box::new(go(lhs, &Term::Erased, env)),
-            rhs: Box::new(go(rhs, &Term::Erased, env)),
+            lhs: Rc::new(go(lhs, &Term::Erased, env)),
+            rhs: Rc::new(go(rhs, &Term::Erased, env)),
         },
         Term::System(_) | Term::Interval(_) | Term::Erased => term.clone(),
     }
@@ -376,8 +377,8 @@ mod tests {
     fn drops_zero_lambda() {
         // type: (x:^0 U0) -> U0   ; term: λ. <body referencing only outer scope = none here>
         // Use body = Var(0) would reference x; instead body = U0 (no var) to isolate the drop.
-        let ty = Term::Pi(Grade::Zero, Box::new(u0()), Box::new(u0()));
-        let term = Term::Lam(Box::new(u0()));
+        let ty = Term::Pi(Grade::Zero, Rc::new(u0()), Rc::new(u0()));
+        let term = Term::Lam(Rc::new(u0()));
         let erased = erase(&term, &ty);
         assert_eq!(erased, u0(), "the erased λ vanishes, leaving its body");
     }
@@ -385,12 +386,12 @@ mod tests {
     /// A relevant (ω) binder is kept.
     #[test]
     fn keeps_relevant() {
-        let ty = Term::Pi(Grade::Omega, Box::new(u0()), Box::new(u0()));
-        let term = Term::Lam(Box::new(Term::Var(0)));
+        let ty = Term::Pi(Grade::Omega, Rc::new(u0()), Rc::new(u0()));
+        let term = Term::Lam(Rc::new(Term::Var(0)));
         let erased = erase(&term, &ty);
         assert_eq!(
             erased,
-            Term::Lam(Box::new(Term::Var(0))),
+            Term::Lam(Rc::new(Term::Var(0))),
             "ω binder kept verbatim"
         );
     }
@@ -402,14 +403,14 @@ mod tests {
     fn renumbers_indices() {
         let ty = Term::Pi(
             Grade::Zero,
-            Box::new(u0()),
-            Box::new(Term::Pi(Grade::Omega, Box::new(u0()), Box::new(u0()))),
+            Rc::new(u0()),
+            Rc::new(Term::Pi(Grade::Omega, Rc::new(u0()), Rc::new(u0()))),
         );
-        let term = Term::Lam(Box::new(Term::Lam(Box::new(Term::Var(0)))));
+        let term = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Var(0)))));
         let erased = erase(&term, &ty);
         assert_eq!(
             erased,
-            Term::Lam(Box::new(Term::Var(0))),
+            Term::Lam(Rc::new(Term::Var(0))),
             "erasing the outer erased binder leaves λ b. b with b at index 0"
         );
     }
@@ -421,14 +422,14 @@ mod tests {
     fn renumbers_past_dropped_inner() {
         let ty = Term::Pi(
             Grade::Omega,
-            Box::new(u0()),
-            Box::new(Term::Pi(Grade::Zero, Box::new(u0()), Box::new(u0()))),
+            Rc::new(u0()),
+            Rc::new(Term::Pi(Grade::Zero, Rc::new(u0()), Rc::new(u0()))),
         );
-        let term = Term::Lam(Box::new(Term::Lam(Box::new(Term::Var(1)))));
+        let term = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Var(1)))));
         let erased = erase(&term, &ty);
         assert_eq!(
             erased,
-            Term::Lam(Box::new(Term::Var(0))),
+            Term::Lam(Rc::new(Term::Var(0))),
             "after dropping the inner erased b, the kept a moves from index 1 to 0"
         );
     }
@@ -437,8 +438,8 @@ mod tests {
     /// the erased binders gone) is a no-op.
     #[test]
     fn idempotent() {
-        let ty = Term::Pi(Grade::Omega, Box::new(u0()), Box::new(u0()));
-        let term = Term::Lam(Box::new(Term::Var(0)));
+        let ty = Term::Pi(Grade::Omega, Rc::new(u0()), Rc::new(u0()));
+        let term = Term::Lam(Rc::new(Term::Var(0)));
         let once = erase(&term, &ty);
         let twice = erase(&once, &ty);
         assert_eq!(once, twice, "erase ∘ erase = erase");
@@ -451,13 +452,13 @@ mod tests {
         assert!(!occurs(0, &Term::Var(1)));
         // Under a binder, the outer var's index increases: `occurs(1, λ. Var(2))` looks for
         // index 2 inside the body and finds it.
-        assert!(occurs(1, &Term::Lam(Box::new(Term::Var(2)))));
+        assert!(occurs(1, &Term::Lam(Rc::new(Term::Var(2)))));
         // ...but `occurs(1, λ. Var(1))` looks for index 2 and does not find Var(1).
-        assert!(!occurs(1, &Term::Lam(Box::new(Term::Var(1)))));
-        assert!(occurs(0, &Term::Lam(Box::new(Term::Var(1)))));
+        assert!(!occurs(1, &Term::Lam(Rc::new(Term::Var(1)))));
+        assert!(occurs(0, &Term::Lam(Rc::new(Term::Var(1)))));
         // The dropped lambda's body has no occurrence of the erased var.
-        let ty = Term::Pi(Grade::Zero, Box::new(u0()), Box::new(u0()));
-        let erased = erase(&Term::Lam(Box::new(u0())), &ty);
+        let ty = Term::Pi(Grade::Zero, Rc::new(u0()), Rc::new(u0()));
+        let erased = erase(&Term::Lam(Rc::new(u0())), &ty);
         assert!(!occurs(0, &erased));
     }
 }
