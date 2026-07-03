@@ -25,6 +25,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check -p blight-kernel -p blight-recheck --target wasm32-unknown-unknown
       - run: cargo check -p blight-elab --no-default-features --target wasm32-unknown-unknown
+      # R2: the playground checker builds and answers over the raw C ABI under node.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cargo build -p blight-playground --release --target wasm32-unknown-unknown
+        continue-on-error: true # red phase: required once R2 lands
+      - run: node playground/smoke.mjs
+        continue-on-error: true # red phase: required once R2 lands
 
   # Fast checks + the test suite that does not need the native backend.
   check:

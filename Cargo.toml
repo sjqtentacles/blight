@@ -9,6 +9,7 @@ members = [
     "crates/blight-repl",
     "crates/blight-lsp",
     "crates/blight-net",
+    "crates/blight-playground",
 ]
 # The cargo-fuzz crate is a separate, nightly-only package (libFuzzer); keep it out of the normal
 # `--workspace` build so `cargo build`/`cargo test` on stable never touch it.

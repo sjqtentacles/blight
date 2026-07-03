@@ -1,0 +1,15 @@
+[package]
+name = "blight-playground"
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "R2: the browser playground's wasm checker — a thin C-ABI export over the wasm-clean checking stack (R1). No wasm-bindgen, no JS toolchain: hand-rolled glue instantiates the cdylib directly."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+blight-elab = { path = "../blight-elab", default-features = false }
+blight-kernel = { path = "../blight-kernel" }
+blight-recheck = { path = "../blight-recheck" }
+blight-prelude-embed = { path = "../blight-prelude-embed" }
