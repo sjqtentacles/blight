@@ -668,3 +668,52 @@ fn bootstrap_self_host_loads() {
         );
     });
 }
+
+/// S2 (v0.1 roadmap): the proposer/disposer bridge printer (`spore_print.bl`) loads and type-checks,
+/// its entry points are present, and its pure structural printers are re-verified `Ok` by the
+/// independent re-checker (nothing `Rejected`). The end-to-end kernel re-check of the bridge's
+/// emitted payloads is the llvm-gated `example_selfhost_bridge…` test in `main.rs`.
+#[test]
+fn bridge_printer_loads() {
+    on_big_stack(|| {
+        let mut env = ElabEnv::new();
+        let outcomes = {
+            let mut prog = Program::with_resolver(&mut env, prelude_resolver);
+            prog.run("(load \"spore_print.bl\")")
+                .expect("spore_print.bl renders BSurf/BTy as surface text and type-checks")
+        };
+        assert!(
+            outcomes
+                .iter()
+                .all(|o| matches!(o, Outcome::Declared | Outcome::Checked(_))),
+            "every spore_print form is kernel-accepted: {outcomes:?}"
+        );
+        for fnsym in ["bty-print", "bsurf-print", "bridge-line"] {
+            assert!(
+                env.global_term(fnsym).is_some(),
+                "spore_print defines fn `{fnsym}`"
+            );
+        }
+        // The pure printers re-verify Ok; nothing is Rejected (a soundness alarm).
+        let sig = env.signature();
+        let mut printer_ok = false;
+        for (name, term, ty) in env.typed_globals() {
+            let j = blight_kernel::Judgement::HasType { term, ty };
+            match blight_recheck::recheck_judgement(sig, &j) {
+                Ok(()) => {
+                    if name == "bsurf-print" || name == "bty-print" {
+                        printer_ok = true;
+                    }
+                }
+                Err(blight_recheck::RecheckError::Declined(_)) => {}
+                Err(blight_recheck::RecheckError::Rejected(m)) => {
+                    panic!("independent re-checker REJECTED printer global `{name}`: {m}")
+                }
+            }
+        }
+        assert!(
+            printer_ok,
+            "the bridge printers are re-verified Ok by the independent re-checker"
+        );
+    });
+}

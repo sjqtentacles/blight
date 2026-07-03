@@ -145,8 +145,7 @@ fn measure_without_default_is_rejected() {
     let err = run(format!(
         "{NAT}(deftotal f (Pi ((n Nat)) Nat) (measure n) (lam (n) (f n)))"
     ))
-    .err()
-    .expect("measure without default is rejected");
+    .expect_err("measure without default is rejected");
     // The ordinary deftotal path errors on the unexpected arity.
     let (ElabError::BadForm(_) | ElabError::BadMatch(_)) = err else {
         panic!("expected a form error, got {err:?}")
@@ -159,8 +158,7 @@ fn measure_on_non_recursive_body_is_error() {
     let err = run(format!(
         "{NAT}(deftotal f (Pi ((n Nat)) Nat) (measure n) (default Zero) (lam (n) Zero))"
     ))
-    .err()
-    .expect("non-recursive measured def rejected");
+    .expect_err("non-recursive measured def rejected");
     let ElabError::BadForm(m) = err else {
         panic!("expected BadForm, got {err:?}")
     };

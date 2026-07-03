@@ -26,6 +26,14 @@ All notable changes to this project are documented here. The format is based on
   a *saturating* repeat (all-variable subpatterns), so nested refinements like `(just (nothing))`
   and `(just (just x))` pass. `list_sort.bl` rewritten in equation style; new `examples/equations.bl`.
   Zero kernel changes.
+- **v0.1 roadmap arc S, milestone S2 (proposer/disposer bridge):** the trusted kernel now
+  independently re-checks *terms* the Blight-written elaborator produces, not just booleans. New
+  `crates/blight-prelude/spore_print.bl` renders the elaborator's verdict for a toy-STLC term as
+  ordinary Blight surface text (`ACCEPT (the ⟦a⟧ ⟦s⟧)` embedding the object arrow as a real `Pi`, or
+  `REJECT`); `examples/selfhost_bridge.bl` prints one line per corpus entry, and a Rust test rebuilds
+  the payloads through the unmodified reader→elaborator→kernel and demands `Checked` — a forged
+  ill-typed payload is rejected (the disposer has teeth). The printers are plain non-dependent
+  recursions, re-verified `Ok` by the independent re-checker. Zero kernel changes.
 - **v0.1 roadmap arc S, milestone S1 (end-to-end self-host demo):** `examples/selfhost_check.bl` —
   the first program that runs Blight's own `.bl`-written front end (reader → transcoder →
   proof-carrying elaborator → ANF compiler) over source it reads back from disk. `main : (! (Console

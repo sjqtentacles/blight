@@ -78,8 +78,7 @@ fn defn_wrong_arity_clause_is_clear_error() {
     let err = run(format!(
         "{NAT}(defn f (Pi ((a Nat) (b Nat)) Nat) [((Zero)) Zero])"
     ))
-    .err()
-    .expect("wrong pattern count rejected");
+    .expect_err("wrong pattern count rejected");
     let ElabError::BadForm(m) = err else {
         panic!("expected BadForm, got {err:?}")
     };
@@ -113,8 +112,7 @@ fn defn_with_measure_clause_composes() {
 #[test]
 fn defn_non_exhaustive_reports_missing_case() {
     let err = run(format!("{NAT}(defn f (Pi ((n Nat)) Nat) [((Zero)) Zero])"))
-        .err()
-        .expect("non-exhaustive defn rejected");
+        .expect_err("non-exhaustive defn rejected");
     let (ElabError::BadMatch(m) | ElabError::BadForm(m)) = err else {
         panic!("expected a match error, got {err:?}")
     };

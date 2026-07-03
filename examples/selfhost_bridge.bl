@@ -1,0 +1,58 @@
+; selfhost_bridge.bl — the proposer/disposer bridge (S2, v0.1 roadmap arc S).
+;
+; The Blight-written elaborator (spore_elab.bl, `belaborate`) PROPOSES a typing for each object-
+; language term in the corpus below; spore_print.bl renders that verdict as ordinary Blight surface
+; text — `ACCEPT (the ⟦a⟧ ⟦s⟧)` for a term it types at `a`, or `REJECT`. The accompanying Rust test
+; (`crates/blight-repl/src/main.rs`, `example_selfhost_bridge…`) then has the *real* kernel
+; independently re-check each `ACCEPT` payload (DISPOSE): a well-typed embedding must check, and a
+; forged/ill-typed one must be rejected. So the front end's verdict is verified against the trusted
+; kernel, never trusted — the first time the kernel re-checks a *term* the Blight front end produced,
+; not just a boolean.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/selfhost_bridge.bl -o selfhost_bridge
+;   ./selfhost_bridge
+;   # BRIDGE 0 ACCEPT (the (Pi ((v Base)) Base) (lam (v0) v0))
+;   # BRIDGE 1 ACCEPT (the (Pi ((v (Pi ((v Base)) Base))) (Pi ((v Base)) Base)) (lam (v0) v0))
+;   # …
+;   # BRIDGE 4 REJECT
+;   # …
+;
+; The object language is the modelled toy STLC: `su-var i` (de Bruijn), `su-lam dom body`,
+; `su-app fn arg`. Pure except for the `Console` prints; effects re-checked at the type level.
+
+(load "spore_print.bl")  ; bridge-line, and transitively belaborate + BSurf/BTy
+(load "std/io.bl")       ; Console (put-str)
+
+(define nl String "\n")
+
+; ── The corpus: object-language terms, well-typed and ill-typed ──────────────────────────────────────
+; 0. λx:Base. x                         : Base → Base                       (identity — ACCEPT)
+(define c0 BSurf (su-lam Base (su-var Zero)))
+; 1. λx:(Base→Base). x                  : (Base→Base) → (Base→Base)         (higher-order id — ACCEPT)
+(define c1 BSurf (su-lam (Arr Base Base) (su-var Zero)))
+; 2. λf:(Base→Base). λx:Base. f x       : (Base→Base) → Base → Base         (application — ACCEPT)
+(define c2 BSurf
+  (su-lam (Arr Base Base) (su-lam Base (su-app (su-var (Succ Zero)) (su-var Zero)))))
+; 3. λx:Base. λy:Base. x                : Base → Base → Base                (const / shadowing — ACCEPT)
+(define c3 BSurf (su-lam Base (su-lam Base (su-var (Succ Zero)))))
+; 4. λx:Base. (x x)                     : —  (a Base applied as a function) (self-app — REJECT)
+(define c4 BSurf (su-lam Base (su-app (su-var Zero) (su-var Zero))))
+; 5. #0 in the empty context           : —  (an unbound variable)          (out of scope — REJECT)
+(define c5 BSurf (su-var Zero))
+; 6. λf:(Base→Base). λx:Base. λy:Base. ((f x) y)  : —  (f x : Base applied to y) (domain mismatch — REJECT)
+(define c6 BSurf
+  (su-lam (Arr Base Base)
+    (su-lam Base (su-lam Base (su-app (su-app (su-var (Succ (Succ Zero))) (su-var (Succ Zero))) (su-var Zero))))))
+
+; Print one `BRIDGE <idx> <verdict>` line, then a newline, sequencing under `Console`.
+(deftotal emit (Pi ((idx Nat) (s BSurf)) (! Console Unit))
+  (lam (idx s) (put-str (string-append (bridge-line idx s) nl))))
+
+(define main (! Console Unit)
+  (let ((u0 (emit 0 c0)))
+    (let ((u1 (emit 1 c1)))
+      (let ((u2 (emit 2 c2)))
+        (let ((u3 (emit 3 c3)))
+          (let ((u4 (emit 4 c4)))
+            (let ((u5 (emit 5 c5)))
+              (emit 6 c6))))))))

@@ -1,0 +1,89 @@
+; spore_print.bl — the proposer/disposer bridge printer (Grand Arc / v0.1 roadmap S2).
+;
+; UNTRUSTED tower code, written entirely in Blight. This is the half of the self-hosting story that
+; closes the loop with the trusted kernel: the Blight-written elaborator (spore_elab.bl, `belaborate`)
+; PROPOSES a typing — for a surface term `s` it returns `just (bsig a tm)`, meaning "s : a" (and the
+; acceptance is itself a typing proof in the object core). This file renders that verdict as ORDINARY
+; BLIGHT SURFACE TEXT that the *real* Rust kernel can then independently re-check (DISPOSE): the
+; embedding
+;
+;     ⟦Base⟧      = Base                       (a real one-constructor datatype, declared by the host)
+;     ⟦Arr a b⟧   = (Pi ((v ⟦a⟧)) ⟦b⟧)         (the object arrow is a real non-dependent Pi)
+;     ⟦su-var i⟧  = v<name>                     (de Bruijn i under depth d ↦ the name `v(d-1-i)`)
+;     ⟦su-lam a t⟧= (lam (v<d>) ⟦t⟧)            (checked against the enclosing Pi — see below)
+;     ⟦su-app f x⟧= (⟦f⟧ ⟦x⟧)
+;
+; maps the object simply-typed λ-calculus into the host's real dependent core, type-preservingly. The
+; printer renders the *source* `BSurf` (which already carries each lambda's domain) at the type the
+; elaborator inferred, wrapped in a single top-level `(the ⟦a⟧ …)`. That top-level ascription puts the
+; whole term in checking mode, so the inner lambdas need no annotation of their own — the corpus is
+; redex-free (no application whose head is a lambda), which is what makes checking-mode propagation
+; sufficient; a redex would need per-node annotation and hence printing from the intrinsic `BTm`
+; (a documented follow-up). If `belaborate` ever WRONGLY accepted an ill-typed term, its embedding
+; would fail the host kernel's check — so the bridge catches a proposer bug rather than trusting it.
+;
+; Everything here is a plain, non-dependent structural recursion (over `BTy`/`BSurf`), producing a
+; `String`. Zero kernel growth.
+
+(load "spore_elab.bl")  ; BSurf, BSig, BTy (Base/Arr), belaborate, CNil
+(load "std/json.bl")    ; nat-to-string (decimal rendering; over the collapsed single `Nat` tower)
+(load "std/string_extra.bl")  ; string-concat over a List String (string-append transitively)
+
+; Fold a list of strings into one (a thin alias so the printer reads as concatenation).
+(deftotal cat (Pi ((parts (List String))) String) (lam (parts) (string-concat parts)))
+
+; ── Type embedding: ⟦BTy⟧ as real Blight surface text ────────────────────────────────────────────────
+; `Base` is a host datatype the bridge program declares; `Arr d c` is a non-dependent `Pi`. The Pi
+; binder name is irrelevant (the object language is simply typed, so `c` never mentions it) — a fixed
+; `v` is fine, even when nested arrows shadow it.
+(deftotal bty-print (Pi ((a BTy)) String)
+  (lam (a)
+    (match a
+      [(Base) "Base"]
+      [(Arr d c) (cat (cons "(Pi ((v " (cons (bty-print d)
+                        (cons ")) " (cons (bty-print c) (cons ")" nil))))))])))
+
+; ── Term embedding: ⟦BSurf⟧ at binding depth `d` ─────────────────────────────────────────────────────
+; A `su-lam` at depth `d` binds the name `v<d>` and recurses at depth `d+1`; a `su-var i` at depth `d`
+; is the name `v<d-1-i>` — so the innermost binder (`i = 0`) resolves to `v<d-1>`, exactly the most
+; recent `su-lam`'s `v<d-1>`. `sub` is truncating, and every well-scoped term has `i < d`, so the
+; index never underflows.
+(deftotal var-name (Pi ((d Nat) (i Nat)) String)
+  (lam (d i) (cat (cons "v" (cons (nat-to-string (sub (sub d 1) i)) nil)))))
+
+(deftotal binder-name (Pi ((d Nat)) String)
+  (lam (d) (cat (cons "v" (cons (nat-to-string d) nil)))))
+
+; The scrutinee `s` is the FIRST parameter and the depth `d` a TRAILING accumulator: structural
+; recursion fixes the leading parameters at their outer values but lets trailing ones vary through
+; the induction hypothesis, so `d` can increment under a binder (the `std/lexer.bl` `scan-depth` shape).
+(define-rec bsurf-print (Pi ((s BSurf) (d Nat)) String)
+  (lam (s d)
+    (match s
+      [(su-var i) (var-name d i)]
+      [(su-lam dom body)
+        (cat (cons "(lam (" (cons (binder-name d)
+              (cons ") " (cons (bsurf-print body (Succ d)) (cons ")" nil))))))]
+      [(su-app fn arg)
+        (cat (cons "(" (cons (bsurf-print fn d)
+              (cons " " (cons (bsurf-print arg d) (cons ")" nil))))))])))
+
+; ── The bridge payload for one source term ───────────────────────────────────────────────────────────
+; The elaborator's verdict rendered as a checkable line: `ACCEPT (the ⟦a⟧ ⟦s⟧)` on success, `REJECT`
+; on failure. `sig-payload` matches the `just` case's `bsig` (its `tm` is unused here — we render the
+; *source* `s` at the inferred type `a`, which is structurally the same term the elaborator built).
+(deftotal sig-payload (Pi ((s BSurf) (sig (BSig CNil))) String)
+  (lam (s sig)
+    (match sig
+      [(bsig a tm)
+        (cat (cons "ACCEPT (the " (cons (bty-print a)
+              (cons " " (cons (bsurf-print s Zero) (cons ")" nil))))))])))
+
+(deftotal verdict-of (Pi ((s BSurf) (m (Maybe (BSig CNil)))) String)
+  (lam (s m) (match m [(nothing) "REJECT"] [(just sig) (sig-payload s sig)])))
+
+; `bridge-line idx s`: the full `BRIDGE <idx> <verdict>` line for source term `s`.
+(deftotal bridge-line (Pi ((idx Nat) (s BSurf)) String)
+  (lam (idx s)
+    (cat (cons "BRIDGE " (cons (nat-to-string idx)
+          (cons " " (cons (verdict-of s (belaborate CNil s)) nil)))))))

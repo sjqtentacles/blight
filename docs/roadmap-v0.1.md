@@ -280,7 +280,7 @@ pattern of std/io.bl).
 - **Red test** (llvm-gated, main.rs test module): builds + runs it on a good and a bad input
   file, asserting the two verdict lines.
 
-### [ ] S2 — Proposer/disposer bridge (the kernel re-checks the Blight front end's output)
+### [x] S2 — Proposer/disposer bridge (the kernel re-checks the Blight front end's output)
 
 **Marshalling:** canonical Blight *surface text* on stdout, sentinel-prefixed
 (`BRIDGE <i> ACCEPT (the ⟦a⟧ ⟦tm⟧)` / `BRIDGE <i> REJECT`), printed by a new
@@ -314,6 +314,25 @@ Rust side, no reuse of the existing door); evaluating the pipeline in the Rust N
 - **Files:** new spore_print.bl; new examples/selfhost_bridge.bl; spore.rs; the main.rs test
   module (generalize `build_and_run_example_opts` to return stdout); fix the stale D10 doc note
   about the string front end.
+
+**As-built notes (deviation from the plan):**
+- *Print the source `BSurf`, not the intrinsic `BTm`.* The plan called for a dependent
+  `btm-print`/`bsig-print` over the intrinsic `BTm`, fully annotating every lam. That is a large,
+  dependent-match-heavy pretty-printer. The as-built printer is much simpler and equally faithful:
+  since `belaborate` is structure-preserving and the *source* `BSurf` already carries each lam's
+  domain, `spore_print.bl` renders the source at the elaborator-inferred type `a`, wrapped in a
+  single top-level `(the ⟦a⟧ …)`. That top-level ascription puts the whole term in checking mode,
+  so inner lams need no annotation — the corpus is redex-free (no application whose head is a lam),
+  which makes checking-mode propagation sufficient. `bty-print`/`bsurf-print` are plain,
+  non-dependent structural recursions (re-verified `Ok` by the independent re-checker). Printing
+  from `BTm` to also cover beta-redexes (per-node annotation) is a documented follow-up.
+- *Hand-built `BSurf` corpus, not the string reader.* The corpus is 7 hand-built `BSurf` values
+  (id, higher-order id, application, const/shadowing — ACCEPT; self-application, unbound variable,
+  domain mismatch — REJECT), keeping the bridge program pure (`Console` only, no `Bytes`). The
+  string front end (reader → parser) is separately exercised end-to-end by S1's `selfhost_check.bl`;
+  the novel thing S2 adds is the kernel re-checking a *term* the elaborator produced, which this
+  fully delivers. The `bridge_printer_output_checks_for_demo_id` refl-at-scale test is deferred to
+  S3 (the in-kernel `refl` over the printed pipeline needs the Box→Rc perf fix).
 
 ### [ ] S3 — Term representation: Box→Rc (refl-at-scale; TCB-adjacent)
 

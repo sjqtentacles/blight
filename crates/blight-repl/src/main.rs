@@ -2967,6 +2967,113 @@ mod tests {
         );
     }
 
+    /// `selfhost_bridge.bl` (S2, v0.1 roadmap arc S): the proposer/disposer bridge. The Blight-written
+    /// elaborator PROPOSES a typing for each corpus term and prints it as Blight surface text
+    /// (`ACCEPT (the ⟦a⟧ ⟦s⟧)` / `REJECT`); the real Rust kernel here independently re-checks each
+    /// `ACCEPT` payload (DISPOSE). Both must agree: a well-typed embedding checks, the corpus's known
+    /// verdicts match, and the corpus exercises both `ACCEPT` and `REJECT`. This is the first time the
+    /// trusted kernel re-checks a *term* the Blight front end produced, not just a boolean.
+    #[cfg(feature = "llvm")]
+    #[test]
+    fn example_selfhost_bridge_builds_and_runs_and_kernel_rechecks() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let example = repo.join("examples").join("selfhost_bridge.bl");
+        let dir =
+            std::env::temp_dir().join(format!("blight_selfhost_bridge_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("out");
+        let build_args = vec![
+            example.to_string_lossy().to_string(),
+            "-o".to_string(),
+            bin.to_string_lossy().to_string(),
+        ];
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                run_build(&build_args).unwrap_or_else(|e| panic!("selfhost_bridge.bl builds: {e}"));
+            })
+            .expect("spawn build thread")
+            .join()
+            .expect("build thread completes");
+        let run = std::process::Command::new(&bin)
+            .output()
+            .unwrap_or_else(|e| panic!("run selfhost_bridge: {e}"));
+        assert!(run.status.success(), "selfhost_bridge runs successfully");
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+
+        // Expected verdict per corpus index (the Case table): the Rust side's independent record of
+        // which toy terms are well-typed. The Blight front end's verdicts must match these, AND each
+        // accepted payload must survive the trusted kernel's re-check.
+        let expected_accept = [true, true, true, true, false, false, false];
+        let mut seen_accept = false;
+        let mut seen_reject = false;
+        for line in stdout.lines() {
+            let rest = line.strip_prefix("BRIDGE ").unwrap_or_else(|| {
+                panic!("unexpected bridge output line: {line:?}");
+            });
+            let (idx_str, verdict) = rest.split_once(' ').expect("BRIDGE <idx> <verdict>");
+            let idx: usize = idx_str.parse().expect("numeric bridge index");
+            let is_accept = verdict.starts_with("ACCEPT ");
+            assert_eq!(
+                is_accept, expected_accept[idx],
+                "front-end verdict for corpus {idx} disagrees with the expected typing: {line:?}"
+            );
+            if is_accept {
+                seen_accept = true;
+                let payload = verdict.strip_prefix("ACCEPT ").unwrap();
+                // Disposer: the trusted kernel independently re-checks the embedded judgement.
+                let src = format!("(defdata Base () (b0))\n{payload}");
+                let mut env = ElabEnv::new();
+                let mut prog = Program::new(&mut env);
+                let outcomes = prog.run(&src).unwrap_or_else(|e| {
+                    panic!(
+                        "kernel REJECTED an ACCEPT payload from the Blight elaborator \
+                            (proposer/disposer disagreement) for corpus {idx}: {e:?}\n  {payload}"
+                    )
+                });
+                assert!(
+                    matches!(outcomes.last(), Some(Outcome::Checked(_))),
+                    "corpus {idx}'s ACCEPT payload did not kernel-check: {payload}"
+                );
+            } else {
+                assert_eq!(
+                    verdict, "REJECT",
+                    "a non-ACCEPT verdict must be REJECT: {line:?}"
+                );
+                seen_reject = true;
+            }
+        }
+        assert!(
+            seen_accept && seen_reject,
+            "the bridge corpus must exercise both ACCEPT and REJECT"
+        );
+    }
+
+    /// The disposer has teeth: a forged `(the T tm)` payload whose term does *not* inhabit `T` must be
+    /// REJECTED by the kernel — so the acceptance in the bridge test above is non-vacuous.
+    #[test]
+    fn bridge_kernel_rejects_tampered_payload() {
+        for forged in [
+            // A `Base` self-applied as a function.
+            "(the (Pi ((v Base)) Base) (lam (v0) (v0 v0)))",
+            // A `Base → Base → Base` term ascribed the wrong (`Base → Base`) type.
+            "(the (Pi ((v Base)) Base) (lam (v0) (lam (v1) v0)))",
+        ] {
+            let src = format!("(defdata Base () (b0))\n{forged}");
+            let mut env = ElabEnv::new();
+            let mut prog = Program::new(&mut env);
+            assert!(
+                prog.run(&src).is_err(),
+                "the kernel must reject the forged ill-typed payload: {forged}"
+            );
+        }
+    }
+
     /// `bytes_scratch.bl` (C2): the smallest `Bytes`-effect program. `main : (! Bytes Nat)` allocates
     /// a 4-byte runtime-backed buffer, writes byte 7 at index 2 via `set-byte`, reads it back with
     /// `get-byte`, and returns it — proving the mutable round-trip through the C-side buffer table

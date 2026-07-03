@@ -240,7 +240,7 @@ fn ua_compute_example_loads() {
 /// kernel's generalized `transp`-over-`Glue` rule, Wave 7/E3) to `true`, so the reflexivity proof
 /// `ua-computes-bool-reverse` type-checks. This is the end-to-end (`sym` + `ua` + `Glue` formation
 /// + `transp`) counterpart to the kernel white-box test
-/// `kan.rs::transp_ua_glue_line_negated_dim_reverse_face_applies_inverse_map`.
+///   `kan.rs::transp_ua_glue_line_negated_dim_reverse_face_applies_inverse_map`.
 #[test]
 fn ua_compute_reverse_example_loads() {
     assert_example_loads("ua_compute_reverse.bl");
