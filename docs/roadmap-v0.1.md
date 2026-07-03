@@ -334,7 +334,7 @@ Rust side, no reuse of the existing door); evaluating the pipeline in the Rust N
   fully delivers. The `bridge_printer_output_checks_for_demo_id` refl-at-scale test is deferred to
   S3 (the in-kernel `refl` over the printed pipeline needs the Box→Rc perf fix).
 
-### [ ] S3 — Term representation: Box→Rc (refl-at-scale; TCB-adjacent)
+### [~] S3 — Term representation: Box→Rc (refl-at-scale; TCB-adjacent)
 
 Sequenced **after** S2 — the bridge doesn't need it (the proposer runs natively compiled; the
 kernel checks only the small emitted judgement). Payoff: the deferred `reader-demo-refl`

@@ -234,3 +234,10 @@
   (s-cons (s-atom kw-lam)
     (s-cons (s-cons (s-atom (cons ?x nil)) (s-cons (s-atom kw-base) s-nil))
       (s-cons (s-atom (cons ?x nil)) s-nil))))
+
+; S3: pending — the go-bar refl itself (docs/roadmap-v0.1.md §S3). Commented until `Term: Box → Rc`
+; lands and the re-measure shows it runs in test-suite time; the green commit uncomments it and
+; deletes the blocker NOTE above.
+; (define-by reader-demo-refl
+;   (Path (Maybe BSurf) (bsexp->bsurf reader-demo-sexp) (just demo-id))
+;   refl)
