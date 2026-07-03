@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **v0.1 roadmap arc S, milestone S1 (end-to-end self-host demo):** `examples/selfhost_check.bl` —
+  the first program that runs Blight's own `.bl`-written front end (reader → transcoder →
+  proof-carrying elaborator → ANF compiler) over source it reads back from disk. `main : (! (Console
+  FileIO Bytes) Unit)` writes a toy-STLC source, reads it via FileIO, checks it with `bcheck-string`,
+  and prints the verdict — `OK size=6` for the well-typed `(lam (x Base) x)`, `REJECT` for the
+  ill-typed `(lam (x Base) (x x))`. Adds `spore_reader.bl` to the embedded prelude bundle so
+  `blight build` can load it. Zero kernel changes.
 - **v0.1 roadmap arc E, milestone E3 (match coverage diagnostics):** a coverage pre-pass over a
   `match`'s first-column patterns now reports a clear up-front diagnostic — every missing
   constructor listed at once (`non-exhaustive match on Ordering: missing case eq`), plus duplicate

@@ -2904,6 +2904,60 @@ mod tests {
         build_and_run_example_opts("file_roundtrip.bl", "hello from blight FileIO", false);
     }
 
+    /// `selfhost_check.bl` (S1, v0.1 roadmap arc S): the Blight-written front end checking source it
+    /// reads back from disk. `main : (! (Console FileIO Bytes) Unit)` writes a well-typed toy source
+    /// `(lam (x Base) x)` and an ill-typed `(lam (x Base) (x x))` to a scratch file, reads each back
+    /// (`FileIO`), runs it through the self-hosted reader → transcoder → proof-carrying elaborator →
+    /// ANF compiler (`Bytes`, all `.bl`), and prints the verdict (`Console`). The good source
+    /// elaborates (acceptance is a typing proof) and lowers to a size-6 ANF; the ill-typed one has no
+    /// typed elaboration, so the front end returns `nothing` → `REJECT`. This is the first end-to-end
+    /// run of Blight's own front end over on-disk source. Run in a throwaway working directory so the
+    /// scratch file the demo writes never lands in the repo. Built without `--recheck` to keep it a
+    /// lean runtime-execution test (the effectful string front end is honestly *Declined*, not
+    /// rejected, by the independent re-checker; the definitions still re-check via the load corpus).
+    #[cfg(feature = "llvm")]
+    #[test]
+    fn example_selfhost_check_builds_and_runs() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let example = repo.join("examples").join("selfhost_check.bl");
+        let dir =
+            std::env::temp_dir().join(format!("blight_selfhost_check_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("out");
+        let build_args = vec![
+            example.to_string_lossy().to_string(),
+            "-o".to_string(),
+            bin.to_string_lossy().to_string(),
+        ];
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                run_build(&build_args).unwrap_or_else(|e| panic!("selfhost_check.bl builds: {e}"));
+            })
+            .expect("spawn build thread")
+            .join()
+            .expect("build thread completes");
+        assert!(bin.exists(), "selfhost_check.bl produced a binary");
+
+        // Run in the throwaway dir so `selfhost_scratch.bl` is written there, not in the repo.
+        let run = std::process::Command::new(&bin)
+            .current_dir(&dir)
+            .output()
+            .unwrap_or_else(|e| panic!("run selfhost_check: {e}"));
+        assert!(run.status.success(), "selfhost_check runs successfully");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "OK size=6\nREJECT\n",
+            "the Blight-written front end accepts the well-typed toy source (size-6 ANF) and \
+             rejects the ill-typed one"
+        );
+    }
+
     /// `bytes_scratch.bl` (C2): the smallest `Bytes`-effect program. `main : (! Bytes Nat)` allocates
     /// a 4-byte runtime-backed buffer, writes byte 7 at index 2 via `set-byte`, reads it back with
     /// `get-byte`, and returns it — proving the mutable round-trip through the C-side buffer table

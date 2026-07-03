@@ -243,7 +243,7 @@ std/parser), with the pure parts re-verified `Ok` by the independent re-checker,
 in-process verdict-level differential (D10) already green. What Stage-1 adds: a compiled native
 proposer, the string front end under test, and the kernel re-checking *terms*, not booleans.
 
-### [ ] S1 — End-to-end self-host demo
+### [x] S1 — End-to-end self-host demo
 
 A ~30–50 line buildable `examples/selfhost_check.bl`: `read-file` (C1) → `bcheck-string` →
 print verdict + ANF size fingerprint, with `main : (! ⟨Console Bytes⟩ Unit)` (the combined-row

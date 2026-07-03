@@ -71,6 +71,7 @@ pub fn embedded(name: &str) -> Option<&'static str> {
         "spore_compile.bl" => p!("spore_compile.bl"),
         "spore_pipeline.bl" => p!("spore_pipeline.bl"),
         "spore_codegen_meta.bl" => p!("spore_codegen_meta.bl"),
+        "spore_reader.bl" => p!("spore_reader.bl"),
         _ => return None,
     })
 }

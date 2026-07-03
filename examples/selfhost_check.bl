@@ -1,0 +1,61 @@
+; selfhost_check.bl — the Blight-written front end checking source it reads from disk (S1, v0.1
+; roadmap arc S: end-to-end self-host demo).
+;
+; This is the first program that runs Blight's OWN typed front end — the reader, transcoder,
+; proof-carrying elaborator, and ANF compiler, all written in `.bl` (spore_reader.bl and the
+; spore_* pipeline it loads) — over source text that arrives through the C1 `FileIO` substrate
+; rather than as an in-program literal. The object language is the modelled toy STLC the self-host
+; pipeline covers: a variable `x`, a lambda `(lam (x TY) BODY)` with `TY` a `Base` or `(Arr T1 T2)`,
+; and an application `(FN ARG)`.
+;
+; `main : (! (Console FileIO Bytes) Unit)` sequences three effects — writing each source string to a
+; scratch file (`FileIO`), reading it back (`FileIO`), checking it with `bcheck-string` (`Bytes`,
+; the runtime byte-buffer the self-hosted reader scans), and printing the verdict (`Console`). All
+; three effects are folded by the same native top-level handler the other effect examples use, and
+; the effect subsumption at each `let` widens a single-effect computation into the combined row.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/selfhost_check.bl -o selfhost_check
+;   ./selfhost_check
+;   # OK size=6
+;   # REJECT
+;
+; The well-typed `(lam (x Base) x)` elaborates (acceptance is a typing proof `BTm CNil (Arr Base
+; Base)`) and lowers to a size-6 ANF term. The ill-typed `(lam (x Base) (x x))` — a self-application
+; of a `Base` where a function is required — has no typed elaboration, so the front end returns
+; `nothing` and the verdict is `REJECT`. Effectful and modelled at the type level by the independent
+; re-checker (not declined); it compiles and runs natively.
+
+(load "spore_reader.bl")  ; bcheck-string, maybe-anf-size, banf-size, CNil, and the whole pipeline
+(load "std/io.bl")        ; Console (print/read) + FileIO (read-file/write-file)
+(load "std/json.bl")      ; nat-to-string (decimal rendering; over the collapsed single `Nat` tower)
+
+; The scratch path the demo writes each source to and reads back — kept relative so the run leaves
+; no absolute-path assumption; the S1 test runs the binary in a throwaway working directory.
+(define scratch String "selfhost_scratch.bl")
+
+; A human verdict for one check result: the accepted ANF's size, or a rejection.
+(deftotal verdict (Pi ((m (Maybe BAnf))) String)
+  (lam (m)
+    (match m
+      [(nothing) "REJECT"]
+      [(just e) (string-append "OK size=" (nat-to-string (banf-size e)))])))
+
+; Write `src` to the scratch file, read it back, run it through the Blight-written front end, and
+; return the verdict string. `(! (FileIO Bytes) String)`; the caller prints it under `Console`.
+(deftotal check-source (Pi ((src String)) (! (FileIO Bytes) String))
+  (lam (src)
+    (let ((u (write-file-str scratch src)))
+      (let ((back (read-file-str scratch)))
+        (let ((result (bcheck-string CNil back)))
+          (verdict result))))))
+
+(define good String "(lam (x Base) x)")
+(define bad String "(lam (x Base) (x x))")
+
+(define nl String "\n")
+
+(define main (! (Console FileIO Bytes) Unit)
+  (let ((v-good (check-source good)))
+    (let ((u1 (put-str (string-append v-good nl))))
+      (let ((v-bad (check-source bad)))
+        (put-str (string-append v-bad nl))))))

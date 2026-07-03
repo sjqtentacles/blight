@@ -15,3 +15,6 @@ Cargo.lock
 # cargo-mutants output
 /mutants.out/
 /mutants.out.old/
+
+# Scratch file the S1 self-host demo (examples/selfhost_check.bl) writes when run from the repo root
+/selfhost_scratch.bl
