@@ -681,7 +681,7 @@ The two registry HTTP branches are cfg-gated with clear no-`net` diagnostics; th
 required. Suite 858/858 (one perf-guard failure during the sweep was the wall-clock instrument,
 not the change — both N1 guards are now machine-independent ratios, landed separately).
 
-### [ ] R2 — Browser playground
+### [x] R2 — Browser playground
 
 A static page (GitHub Pages) embedding the checker compiled to wasm (R1) via wasm-bindgen or a
 thin C-ABI export: source in, elaborate + kernel-check + re-check verdicts out (the type of
@@ -690,6 +690,19 @@ Console/GC — documented out of scope). Examples dropdown seeded from examples/
 
 - **Red tests:** a headless smoke test (wasmtime or node) invoking the wasm checker export on
   hello_nat.bl source and asserting the checked type; the page CI-built and link-checked.
+
+**As-built notes (2026-07-03):** `crates/blight-playground` exports the checker over a thin
+C ABI (`bp_alloc`/`bp_check`/`bp_free_*`, length-prefixed UTF-8 reports) — **no wasm-bindgen, no
+bundler, no npm**: the page's Web Worker instantiates the raw cdylib. The report is the full
+two-checker story: form/proof counts, `main`'s re-sugared type, and the independent re-checker's
+verified/declined/rejected tally (a rejection renders as a SOUNDNESS ALARM, first). Checker
+panics are caught, never abort the instance; the page runs checks in a killable worker with a
+20 s watchdog, so divergent input cannot wedge the tab. `playground/build.sh` bakes a curated
+pure-checkable examples dropdown into `dist/`; CI builds the wasm, runs the node smoke
+(hello_nat: `main : Nat`, 17 globals re-verified), assembles the page, and link-checks every
+asset. Deployment is a deliberate act: `pages.yml` is workflow_dispatch-only until the project
+wants every merge live. Deferred per spec: running compiled programs (wasm_rt has no Console/GC
+in v0.1).
 
 ### [ ] R3 — Release engineering
 

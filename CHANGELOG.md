@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **v0.1 roadmap arc R, milestone R2 (browser playground):** a static page where the whole trust
+  story runs client-side — paste Blight source, get the kernel's verdict, `main`'s type, and the
+  independent re-checker's verified/declined/rejected tally, with caret diagnostics on errors.
+  `crates/blight-playground` exports the checker over a thin C ABI (no wasm-bindgen/bundler/npm);
+  the page's killable Web Worker instantiates the raw cdylib, so divergent input cannot wedge the
+  tab. Node smoke test + page assembly + asset link-check are required CI; Pages deployment is a
+  deliberate workflow_dispatch.
 - **v0.1 roadmap arc R, milestone R1 (wasm-clean checker):** the whole checking stack —
   blight-kernel, blight-recheck, and blight-elab with `--no-default-features` — now compiles for
   `wasm32-unknown-unknown`, with a required CI row pinning it. The registry's HTTP transport

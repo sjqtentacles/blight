@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blight playground</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+  header { padding: .6rem 1rem; display: flex; gap: 1rem; align-items: baseline; border-bottom: 1px solid #8884; flex-wrap: wrap; }
+  header h1 { font-size: 1rem; margin: 0; }
+  header .sub { opacity: .7; font-size: .8rem; }
+  main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
+  textarea { border: 0; padding: 1rem; font: inherit; resize: none; outline: none; background: transparent; }
+  #out { margin: 0; padding: 1rem; overflow: auto; border-left: 1px solid #8884; white-space: pre-wrap; }
+  #out.err { color: #c0392b; }
+  select, button { font: inherit; }
+  @media (max-width: 700px) { main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } #out { border-left: 0; border-top: 1px solid #8884; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Blight playground</h1>
+  <span class="sub">kernel-checked, independently re-checked — in your tab</span>
+  <select id="examples"><option value="">examples…</option></select>
+  <button id="check">Check (⌘⏎)</button>
+  <span class="sub" id="status">loading checker…</span>
+</header>
+<main>
+  <textarea id="src" spellcheck="false">(load "std/nat.bl")
+
+(define main Nat (plus 3 4))
+</textarea>
+  <pre id="out">…</pre>
+</main>
+<script type="module" src="./playground.js"></script>
+</body>
+</html>

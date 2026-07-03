@@ -30,9 +30,18 @@ jobs:
         with:
           node-version: 22
       - run: cargo build -p blight-playground --release --target wasm32-unknown-unknown
-        continue-on-error: true # red phase: required once R2 lands
       - run: node playground/smoke.mjs
-        continue-on-error: true # red phase: required once R2 lands
+      # R2: the static page assembles and every referenced asset exists in dist/.
+      - run: ./playground/build.sh
+      - run: |
+          set -e
+          for f in index.html playground.js worker.js examples.js blight_playground.wasm; do
+            test -f "playground/dist/$f"
+          done
+          grep -q 'playground.js' playground/dist/index.html
+          grep -q 'examples.js' playground/dist/playground.js
+          grep -q 'worker.js' playground/dist/playground.js
+          grep -q 'blight_playground.wasm' playground/dist/worker.js
 
   # Fast checks + the test suite that does not need the native backend.
   check:

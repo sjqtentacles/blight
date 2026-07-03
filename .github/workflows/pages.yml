@@ -1,0 +1,30 @@
+# R2: deploy the playground to GitHub Pages. Manually triggered (workflow_dispatch) so enabling
+# publication is a deliberate act — flip to `push: branches: [main]` when the project wants every
+# merge live.
+name: playground-pages
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: ./playground/build.sh
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: playground/dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
