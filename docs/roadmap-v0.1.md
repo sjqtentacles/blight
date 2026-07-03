@@ -542,7 +542,11 @@ Only what the post-N5 ladder still needs, in measured order of leverage:
   (PathP eager endpoint eval + PLam boundary + define-by re-check); measured target ~3-10×
   constant on refl-heavy goldens.
 
-### [ ] N7 — Decision checkpoint (fires only on N5 fork)
+### [x] N7 — Decision checkpoint (fires only on N5 fork) — closed without firing
+
+N5 cleared every gate and the full ladder on 2026-07-03, so the fork (policy-alignment fallback)
+never triggered. Recorded as closed rather than deleted so the pre-registration stays auditable.
+The original trigger text follows for the record.
 
 Trigger (named, P4-style): the N5 fix family fails the S3 gate protocol, or fails to flip the
 rung-0 slope + RECHECK_SKIP rungs, within two milestone-sessions of effort. Then: adopt the
@@ -644,13 +648,27 @@ tag `v0.1.0`.
 
 ## Cross-arc ordering (recommended for a single stream)
 
-E1 → E2 → E3 → S1 → E5 → E6 → S2 → S3 → **N5 → N6 → N7** → E4 → E7 → E8 → S4 → P1 → R1 → R2 →
-P2 → S5 → P3 → R3 → P4 → R4
+E1 → E2 → E3 → S1 → E5 → E6 → S2 → S3 → N5 ✓ → **E4 → E7 → E9 → R1 → R2** → N6 → E8 → S4 →
+P1 → P2 → S5 → R3 → P3 → P4 → R4
 
-(Arc N inserted post-S3: N5/N6 sit directly in S4/S5's critical path — growing the self-hosted
-fragment is pointless while its certification mechanism is over a performance cliff — and the two
-re-checker false-`Rejected` fixes discovered by the S3 harness run as independent parallel work,
-tracked outside this ordering.)
+(Re-sequenced 2026-07-03 after N5, adopting the panel review's release-first correction: the
+project's biggest deficit is that nobody outside can try it, and N5 removed the blocker that
+made a playground irresponsible — so R1/R2 move directly behind the diagnostics pass (E7) and
+the new E9 first-session bundle, with N6 now measured-in *behind* them (the ~30 s json/regex
+re-checks justify its Value-sharing item but nothing user-facing blocks on it) and E8/S4/P*/R3
+following. The two re-checker false-`Rejected` fixes, the ground-value-gate fix, and the
+do_handle/metatheory reconciliation run as independent parallel sessions outside this ordering.)
+
+### [ ] E9 — First-session bundle (pre-playground; all tower, zero TCB)
+
+The four verified first-ten-minutes bounce points from the 2026-07-03 panel review, fixed
+together before anything is public: (1) `(do …)` sequencing sugar (kills effectful let-chain
+soup); (2) the REPL prints *values* (`5`, not a core elim term) — re-sugared via the existing
+pretty-printer; (3) typed holes: `?name` elaborates to a hole that reports its expected type and
+context instead of an unsolved-meta error; (4) a stdlib self-consistency sweep (E1/E2 completion:
+decimals and implicits everywhere the stdlib still contradicts its own shipped features, plus a
+`Show`-to-`String` bridge). Each item is elaborator/REPL-level; red tests per item; oracle-corpus
+additions per the oracle rule.
 
 Rationale: E1–E3 are small and every later arc's code and docs benefit; S1 is tiny and proves
 the substrate early; E6 lands before S2 because spore_print is the measure clause's natural
