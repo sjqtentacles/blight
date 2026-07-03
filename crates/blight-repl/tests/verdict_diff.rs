@@ -124,27 +124,14 @@ fn cached_verdict(
     verdict
 }
 
-/// Units whose *own* globals cannot be re-checked in feasible time (measured:
-/// `examples/json_scratch.bl` ran >68 min in release without completing; the other three were
-/// found by the `BL_VERDICT_DISCOVER` watchdog at a 60 s/unit budget — even 5-char
-/// `palindrome.bl` exceeds it, and still exceeds 120 s post-S3). For these units the harness
-/// reports the cached verdict where a closure global was already re-checked via another unit,
-/// and `Skipped` for the unit's unique globals.
-///
-/// Mechanism (identified by the post-S3 review; docs/roadmap-v0.1.md arc N): `do_elim` eagerly
-/// computes *discarded* induction hypotheses, so `nat-eq` costs ~2^min(codepoints) eliminator
-/// steps — these runs sit at 0% progress on their first character comparison; they are
-/// effectively non-terminating, not slow. Both engines share the defect at parity (±15%): the
-/// "kernel checks these in milliseconds" appearance is the elaborator's *gate* deliberately
-/// skipping ground-value conclusions (`gate_routes_through_kernel`), a policy the ungated
-/// re-check pass lacks. Empty this list (and re-bless) when arc N's N5 fix lands — or, on N5's
-/// pre-registered fork, convert it to the same documented gate policy.
-const RECHECK_SKIP: &[&str] = &[
-    "examples/json_scratch.bl",
-    "examples/map_scratch.bl",
-    "examples/palindrome.bl",
-    "examples/regex_scratch.bl",
-];
+/// Units whose *own* globals cannot be re-checked in feasible time. **Empty since arc N / N5**
+/// (the dead-IH fix): the four units this list carried through S3 — pinned then at
+/// `json_scratch` >68 min, `palindrome` >120 s — re-check in 0.1–31 s now that `do_elim` skips
+/// induction hypotheses the receiving method provably discards (the ~2^codepoint eager-IH cliff,
+/// identified by the post-S3 review; docs/roadmap-v0.1.md arc N). The skip machinery stays: any
+/// future over-cliff unit found by the `BL_VERDICT_DISCOVER` watchdog can be parked here with a
+/// measurement while its mechanism gets the same treatment.
+const RECHECK_SKIP: &[&str] = &[];
 
 /// Load one unit of the corpus in a fresh env and render its verdict block. `label` names the unit
 /// in the report; `source` is the program text to run (a `(load …)` form for prelude modules, the

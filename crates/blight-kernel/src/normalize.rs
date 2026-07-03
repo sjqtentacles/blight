@@ -39,9 +39,12 @@ std::thread_local! {
     /// Arc N / N5 instrumentation: how many induction hypotheses `do_elim` has computed on this
     /// thread. Same design as `BUDGET`/`tick()`: an always-on thread-local `Cell` bump (one add
     /// per *recursive constructor argument*, dwarfed by the `do_elim` call it sits in), read and
-    /// reset only by the N5 scaling tests. Pre-N5 this counts every IH unconditionally; the N5
-    /// fix will split it into computed-because-used vs discarded.
+    /// reset only by the N5 scaling tests.
     static IH_COMPUTED: std::cell::Cell<u64> = std::cell::Cell::new(0);
+
+    /// Arc N / N5: how many induction hypotheses `do_elim` *skipped* because the receiving
+    /// method provably discards its IH binder (see [`uses_binder`]) — the N5 payoff, observable.
+    static IH_DISCARDED: std::cell::Cell<u64> = std::cell::Cell::new(0);
 }
 
 /// Read and reset this thread's [`IH_COMPUTED`] counter (arc N / N5 instrumentation). The rung-0
@@ -49,6 +52,18 @@ std::thread_local! {
 /// stand-in for wall-clock slope (counters cannot be flaky).
 pub fn take_ih_computed() -> u64 {
     IH_COMPUTED.replace(0)
+}
+
+/// Read and reset this thread's [`IH_DISCARDED`] counter (arc N / N5 instrumentation).
+pub fn take_ih_discarded() -> u64 {
+    IH_DISCARDED.replace(0)
+}
+
+/// `BL_NO_DEAD_IH=1` disables the N5 dead-IH skip (arc N law: every fix stays A/B-able). Read
+/// once per process; the hot path pays one relaxed atomic load.
+fn dead_ih_disabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISABLED.get_or_init(|| std::env::var("BL_NO_DEAD_IH").is_ok_and(|v| v == "1"))
 }
 
 /// The typed panic payload for budget exhaustion (crate-private, never constructed elsewhere) —
@@ -778,10 +793,106 @@ fn resolve_interval(env: &Env, r: &Interval) -> Interval {
     }
 }
 
+/// Whether `t` references the de Bruijn *term* variable that sits `depth` term-binders above it
+/// (arc N / N5). The binder map mirrors [`crate::check`]'s `shift` exactly — the authoritative
+/// enumeration of which constructs bind a *term* variable (`Lam`, `Pi`'s codomain, `Sigma`'s
+/// second component, `Handle`'s return clause (+1) and op clauses (+2)); dimension binders
+/// (`PLam`, the `family`/`tube` lines) live in a separate index space and do not shift. The one
+/// asymmetry: `shift` scopes `System` branches out entirely, so this check treats any `System`
+/// as *using* the binder — over-approximating "used" only ever costs an unnecessary IH
+/// computation (the pre-N5 behavior); under-approximating would be unsound.
+fn uses_binder(t: &Term, depth: usize) -> bool {
+    match t {
+        Term::Var(i) => *i == depth,
+        Term::Univ(_)
+        | Term::Interval(_)
+        | Term::Erased
+        | Term::IntTy
+        | Term::IntLit(_) => false,
+        Term::System(_) => true, // conservative; see the doc-comment
+        Term::Pi(_, a, b) => uses_binder(a, depth) || uses_binder(b, depth + 1),
+        Term::Lam(b) => uses_binder(b, depth + 1),
+        Term::Sigma(a, b) => uses_binder(a, depth) || uses_binder(b, depth + 1),
+        Term::App(f, a) | Term::Pair(f, a) | Term::Ann(f, a) => {
+            uses_binder(f, depth) || uses_binder(a, depth)
+        }
+        Term::Fst(p) | Term::Snd(p) | Term::PLam(p) | Term::PApp(p, _) | Term::Partial(_, p) => {
+            uses_binder(p, depth)
+        }
+        Term::Data(_, ps, is) => {
+            ps.iter().any(|t| uses_binder(t, depth)) || is.iter().any(|t| uses_binder(t, depth))
+        }
+        Term::Con(_, args) | Term::PCon { args, .. } => {
+            args.iter().any(|t| uses_binder(t, depth))
+        }
+        Term::Elim {
+            motive,
+            methods,
+            scrutinee,
+            ..
+        } => {
+            uses_binder(motive, depth)
+                || methods.iter().any(|t| uses_binder(t, depth))
+                || uses_binder(scrutinee, depth)
+        }
+        Term::PathP { family, lhs, rhs } => {
+            uses_binder(family, depth) || uses_binder(lhs, depth) || uses_binder(rhs, depth)
+        }
+        Term::Transp { family, base, .. } => {
+            uses_binder(family, depth) || uses_binder(base, depth)
+        }
+        Term::HComp {
+            ty, tube, base, ..
+        } => uses_binder(ty, depth) || uses_binder(tube, depth) || uses_binder(base, depth),
+        Term::Comp {
+            family,
+            tube,
+            base,
+            ..
+        } => uses_binder(family, depth) || uses_binder(tube, depth) || uses_binder(base, depth),
+        Term::Glue {
+            base, ty, equiv, ..
+        } => uses_binder(base, depth) || uses_binder(ty, depth) || uses_binder(equiv, depth),
+        Term::GlueTerm { partial, base, .. } => {
+            uses_binder(partial, depth) || uses_binder(base, depth)
+        }
+        Term::Unglue(p) => uses_binder(p, depth),
+        Term::Op { type_args, arg, .. } => {
+            type_args.iter().any(|t| uses_binder(t, depth)) || uses_binder(arg, depth)
+        }
+        Term::Handle {
+            body,
+            return_clause,
+            op_clauses,
+        } => {
+            uses_binder(body, depth)
+                || uses_binder(return_clause, depth + 1)
+                || op_clauses.iter().any(|(_, e)| uses_binder(e, depth + 2))
+        }
+        Term::EffTy(_, a)
+        | Term::Delay(a)
+        | Term::Now(a)
+        | Term::Later(a)
+        | Term::Force(a)
+        | Term::Foreign { ty: a, .. } => uses_binder(a, depth),
+        Term::IntPrim { lhs, rhs, .. } => uses_binder(lhs, depth) || uses_binder(rhs, depth),
+    }
+}
+
 /// Run the dependent eliminator (spec §2.7). On a constructor `Con c args`, perform ι-reduction:
 /// select the method for `c` and apply it to the constructor's arguments, inserting an induction
 /// hypothesis (a recursive `Elim` over the same motive/methods) immediately after each recursive
 /// argument. On a neutral scrutinee, build a stuck neutral `Elim`.
+///
+/// N5 (arc N): the IH is computed **only if the receiving method can observe it**. At the IH
+/// application point `result` is the method's remaining `Value::Lam` whose parameter *is* the
+/// IH; if [`uses_binder`] shows the closure body never references that binder, the eager
+/// recursive `do_elim` — the ~2^codepoint cliff on IH-discarding matches like `nat-eq`'s inner
+/// match — is skipped and a sentinel stuck variable is bound instead. The sentinel is
+/// unreachable when the occurs-check is correct (the check is exact on the value's only access
+/// path); `usize::MAX` is not a valid de Bruijn level, so if a bug ever surfaced it, conversion
+/// against any real value fails loudly rather than equating. `BL_NO_DEAD_IH=1` restores the
+/// pre-N5 eager behavior for A/B measurement.
 fn do_elim(env: &Env, data: &DataName, motive: Value, methods: Vec<Value>, scrut: Value) -> Value {
     tick();
     match scrut {
@@ -807,9 +918,22 @@ fn do_elim(env: &Env, data: &DataName, motive: Value, methods: Vec<Value>, scrut
             for (arg, arg_shape) in args.iter().zip(ctor.args.iter()) {
                 result = apply(result, arg.clone());
                 if matches!(arg_shape, crate::signature::Arg::Rec(_)) {
-                    IH_COMPUTED.set(IH_COMPUTED.get() + 1);
-                    let ih = do_elim(env, data, motive.clone(), methods.clone(), arg.clone());
-                    result = apply(result, ih);
+                    let ih_dead = !dead_ih_disabled()
+                        && matches!(&result,
+                            Value::Lam(clos) if !uses_binder(&clos.body, 0));
+                    if ih_dead {
+                        IH_DISCARDED.set(IH_DISCARDED.get() + 1);
+                        // Bind the dead IH slot to a sentinel stuck variable (see the fn doc).
+                        result = apply(
+                            result,
+                            Value::Neutral(crate::value::Neutral::Var(usize::MAX)),
+                        );
+                    } else {
+                        IH_COMPUTED.set(IH_COMPUTED.get() + 1);
+                        let ih =
+                            do_elim(env, data, motive.clone(), methods.clone(), arg.clone());
+                        result = apply(result, ih);
+                    }
                 }
             }
             result
@@ -1776,18 +1900,15 @@ mod tests {
     // that O(n) cost once per level — an O(depth × env-size) compounding that `ValueChain` (an
     // O(1)-clone persistent chain) closes.
     //
-    // Residual (updated after S3 + the arc-N review, docs/roadmap-v0.1.md): the O(width²)
-    // first-evaluation clone cost this paragraph blamed on `Box<Term>` was *fixed* — `Term`'s
-    // recursive fields are `Rc<Term>` since S3, so the `Lam`/`Pi`/`Sigma`/`PLam` arms' `.clone()`
-    // into each new `Closure` is a shallow per-node refcount bump — and it was **not** the
-    // dominant cost at self-host scale. That cost is now identified and code-cited: `do_elim`
-    // eagerly computes *discarded* induction hypotheses (the unconditional `ih = do_elim(...)`
-    // per recursive constructor argument below), so a single `nat-eq` over character codepoints
-    // costs ~2^min(codepoints) eliminator steps — measured slope ×~2.0 per +1 codepoint on
-    // match-forced `nat-eq k k`, identical (±15%) in blight-recheck. Every known "cliff"
-    // reproducer (RECHECK_SKIP, reader-demo-refl) is this one defect at 0% progress on its first
-    // character comparison. Fix tracked as arc N / N5 (dead-IH detection / lazy IH / IH-free case trees); the
-    // secondary Θ(k)-per-level `Value` deep-clone multiplier is N3.
+    // Residual (updated through arc N / N5, docs/roadmap-v0.1.md): the O(width²) clone cost this
+    // paragraph once blamed on `Box<Term>` was fixed by S3 (`Rc<Term>` children), and the
+    // *actual* self-host-scale dominator — `do_elim` eagerly computing *discarded* induction
+    // hypotheses, ~2^codepoint eliminator steps per `nat-eq` (measured slope ×~2.0 per +1
+    // codepoint, identical ±15% in blight-recheck) — was fixed by N5's dead-IH skip (see
+    // `uses_binder`/`do_elim` above; the nbe_scaling pins hold both engines to the linear law).
+    // The remaining known multiplier, polynomial not exponential: `Value` trees have no
+    // structural sharing, so each iota level deep-clones constructor arguments — Θ(k) per level
+    // on Peano data. That is N6, measured-in only if the post-N5 ladder needs it.
 
     use crate::signature::{Arg, Constructor, DataDecl, Signature};
     use crate::term::{ConName, DataName};

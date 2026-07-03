@@ -717,3 +717,47 @@ fn bridge_printer_loads() {
         );
     });
 }
+
+/// The S2-deferred refl-at-scale pin, live since arc N / N5 (the dead-IH fix): the kernel
+/// certifies **by definitional computation** that the bridge printer's full output line for the
+/// demo term — `belaborate` (the self-hosted elaborator) ▷ `verdict-of` ▷ `bty-print`/
+/// `bsurf-print` ▷ string concatenation — equals the expected `BRIDGE 0 ACCEPT …` string. This
+/// is the strongest form of the S2 guarantee: not "the payload re-checks" (the llvm-gated
+/// differential already pins that) but "the kernel can *run* the whole proposer pipeline inside
+/// conversion checking and pin its exact output". Pre-N5 this was infeasible (the eager-IH
+/// cliff made the first character comparison ~2^codepoint steps).
+#[test]
+fn bridge_printer_output_checks_for_demo_id() {
+    // The whole-pipeline refl recurses deeper than the shared 8 MiB helper allows in a debug
+    // build (evaluating `belaborate` + both printers inside conversion); give it the same
+    // 64 MiB the driver/bench big-stack paths use.
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(|| {
+        let mut env = ElabEnv::new();
+        let outcomes = {
+            let mut prog = Program::with_resolver(&mut env, prelude_resolver);
+            prog.run(
+                "(load \"spore_print.bl\")\n\
+                 (define-by bridge-demo-refl\n\
+                   (Path String (bridge-line Zero demo-id)\n\
+                     \"BRIDGE 0 ACCEPT (the (Pi ((v Base)) Base) (lam (v0) v0))\")\n\
+                   refl)",
+            )
+            .expect("the bridge line for demo-id computes to its expected text by refl")
+        };
+        assert!(
+            outcomes
+                .iter()
+                .all(|o| matches!(o, Outcome::Declared | Outcome::Checked(_))),
+            "the refl goal kernel-checks: {outcomes:?}"
+        );
+        assert!(
+            env.global_term("bridge-demo-refl").is_some(),
+            "the refl-at-scale pin is a named, kernel-checked global"
+        );
+        })
+        .expect("spawn bridge-refl thread")
+        .join()
+        .expect("bridge-refl thread panicked (see message above)");
+}

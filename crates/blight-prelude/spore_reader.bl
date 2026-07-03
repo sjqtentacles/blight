@@ -192,59 +192,19 @@
 ; ── Pure demo ────────────────────────────────────────────────────────────────────────────────────────
 ; The hand-built `BSexp` for the literal source text `(lam (x Base) x)` — the same program as
 ; spore_elab.bl's `demo-id = (su-lam Base (su-var Zero))`.
-;
-; NOTE on why there is still no `(define-by ... refl)` certifying `bsexp->bsurf reader-demo-sexp =
-; just demo-id` here (unlike `spore_pipeline.bl`'s `pipe-id-anf`/`ci-demo-id-size-6`) — updated after
-; Wave 5/N1's investigation:
-;
-; N1 fixed one real, confirmed source of superlinear blowup: `resolve-ty-fuel`/`resolve-term-fuel`'s
-; fuel-recursive `do_elim`s used to *re-clone* the entire captured environment once per recursion
-; level with no sharing across reduction steps (`Env`'s `Vec<Value>` representation made every
-; `Env::extend`/closure-clone an O(environment-size) copy). `ValueChain` (an O(1)-clone persistent
-; environment, mirrored in both `blight-kernel` and `blight-recheck`; see `value.rs` in each crate,
-; and `crates/blight-kernel/src/normalize.rs`'s `deep_elim_conv_is_bounded_under_wide_ambient_env`
-; test) closes that specific gap — confirmed by direct measurement, not just a compile-and-hope.
-;
-; Measuring *this exact* `refl` goal after N1 landed, it is still not fast enough to run in a normal
-; test suite: reintroducing it as a temporary experiment and running the host test both in `cargo
-; test` (debug) and `cargo test --release` still leaves it running (not crashed, not swapping) past
-; 7 minutes of sustained ~98% CPU in `--release` before being killed — ruling out "just debug-build
-; overhead" as the explanation. RSS stays in the single-digit MB the whole time (unlike the pre-N1
-; multi-GB symptom), so this is a genuinely *different*, second bottleneck, not a regression of the
-; first. The cause:
-; `eval`'s `Term::Lam`/`Pi`/`Sigma`/`PLam` arms still deep-`clone()` the *remaining* `Box<Term>`
-; subtree into every new `Closure` — a *one-time* construction cost paid once per AST node on a
-; single evaluation pass, not a repeated-reduction cost `ValueChain` addresses. Evaluating this
-; whole self-hosted pipeline (every `load`ed file's definitions sit in scope as one giant nested
-; `let`-chain) means walking many thousands of such nodes, each paying a clone proportional to the
-; size of everything still to come — an inherent O(program size²) one-time cost with the current
-; representation.
-;
-; Closing this needs `Term`'s own recursive fields to move from `Box<Term>` to `Rc<Term>` (so a
-; closure can cheaply share a pointer into the original tree instead of cloning a subtree) — a
-; representation change touching every crate in the pipeline (elab/kernel/recheck/codegen), too
-; large and too TCB-adjacent to take speculatively alongside N1's `Env` fix. This is the sharpened
-; go-bar for actually adding this `refl`: land `Term: Box -> Rc` (tracked as a Wave 6+ follow-on),
-; re-measure, then add `reader-demo-refl` here. Until then, `reader_self_host_loads` (below, and in
-; `crates/blight-repl/tests/spore.rs`) certifies correctness the same way `parser_self_host_loads`
-; certifies `std/parser.bl`: every form type-checks, and the independent re-checker re-verifies the
-; pure core — a normalizer *performance* gap, not a correctness question the type checker leaves
-; open.
 (define reader-demo-sexp BSexp
   (s-cons (s-atom kw-lam)
     (s-cons (s-cons (s-atom (cons ?x nil)) (s-cons (s-atom kw-base) s-nil))
       (s-cons (s-atom (cons ?x nil)) s-nil))))
 
-; S3 re-measure (2026-07-03, post `Term: Box → Rc`): STILL over the cliff — and the review that
-; followed identified why (docs/roadmap-v0.1.md arc N). The refl was re-enabled and killed after
-; ~15 CPU-min in `--release`; both kill timings (pre-S3 ~7 min, post-S3 ~15) are censored
-; observations of a ~2^100+-step computation at 0% progress, so neither says anything about the
-; clone fix. The actual mechanism: `do_elim` eagerly computes *discarded* induction hypotheses,
-; making `nat-eq` cost ~2^min(codepoints) steps — this refl dies inside `is-lam-kw`'s first
-; character comparison, `nat-eq(108,108)` (`'l'` vs `'l'`), ~2^108 steps. Fuel is innocent
-; (bsexp-size fuel here is 11). The fix is arc N's N5 (dead-IH detection in do_elim, both engines);
-; until it lands, the refl stays commented and `reader_self_host_loads` remains the
-; certification story, exactly as before:
-; (define-by reader-demo-refl
-;   (Path (Maybe BSurf) (bsexp->bsurf reader-demo-sexp) (just demo-id))
-;   refl)
+; The go-bar refl, live at last (arc N / N5, 2026-07-03): the kernel certifies, by definitional
+; computation, that running the self-hosted reader on the hand-built s-expression for
+; `(lam (x Base) x)` yields exactly `demo-id` — closing the reader stage into the same end-to-end
+; refl story `spore_pipeline.bl` pins for the elaborator/compiler stages. History, for the record:
+; N1 (ValueChain) and S3 (`Term: Box → Rc`) both predicted this would open and both missed — the
+; actual blocker was `do_elim` eagerly computing *discarded* induction hypotheses (~2^codepoint
+; steps per `nat-eq`; this refl used to die inside `is-lam-kw`'s first character comparison,
+; `nat-eq(108,108)`). N5's dead-IH skip removed it; fuel was innocent all along (fuel = 11 here).
+(define-by reader-demo-refl
+  (Path (Maybe BSurf) (bsexp->bsurf reader-demo-sexp) (just demo-id))
+  refl)

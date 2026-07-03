@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **Roadmap arc N, milestone N5 (the eliminator cliff):** both evaluators — the trusted kernel's
+  and the independent re-checker's, each via its own implementation — now skip computing an
+  induction hypothesis when the receiving match method provably discards its IH binder (a
+  shifted occurs-check mirroring each engine's own `shift`; dead binders get a stuck sentinel;
+  `BL_NO_DEAD_IH=1` restores eager behavior for A/B). This removes the ~2^codepoint blow-up that
+  made every string-comparing judgement effectively non-terminating at check/re-check time:
+  `nat-eq k k` IH counts drop from ×2-per-codepoint to +1-per-codepoint (pinned by deterministic
+  counter-slope tests in `crates/blight-repl/tests/nbe_scaling.rs`); the four formerly
+  un-re-checkable examples now re-check in 0.1–31 s (json_scratch was >68 min); the verdict
+  golden's skip-list is empty. Two long-deferred certifications went live: `reader-demo-refl`
+  (spore_reader.bl — the kernel computes the self-hosted *reader* end-to-end inside conversion
+  and certifies its output by refl; 5.96 s in a debug build, previously killed at 15+ release
+  CPU-minutes) and `bridge_printer_output_checks_for_demo_id` (the S2 bridge's whole proposer
+  pipeline — belaborate, verdict, printers, string concatenation — computed inside the kernel
+  and refl-pinned to its exact output line).
+
 ### Changed
 
 - **v0.1 roadmap arc S, milestone S3 (kernel `Term` representation: `Box` → `Rc`):** the kernel

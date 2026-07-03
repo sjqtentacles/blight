@@ -62,7 +62,7 @@ mod typecheck;
 mod value;
 
 /// Arc N / N5 instrumentation (this engine's IH counter) — see the doc on the definition.
-pub use normalize::take_ih_computed;
+pub use normalize::{take_ih_computed, take_ih_discarded};
 
 pub use term::{RGrade, RRow, RTerm};
 

@@ -13,12 +13,92 @@ std::thread_local! {
     /// discipline applies to instrumentation too): how many induction hypotheses this engine's
     /// `do_elim` has computed on this thread. Read/reset only by the N5 scaling tests.
     static IH_COMPUTED: std::cell::Cell<u64> = std::cell::Cell::new(0);
+
+    /// Arc N / N5: IHs *skipped* because the receiving method provably discards its binder.
+    static IH_DISCARDED: std::cell::Cell<u64> = std::cell::Cell::new(0);
 }
 
 /// Read and reset this thread's IH counter (arc N / N5; see the kernel twin
 /// `blight_kernel::normalize::take_ih_computed`).
 pub fn take_ih_computed() -> u64 {
     IH_COMPUTED.replace(0)
+}
+
+/// Read and reset this thread's discarded-IH counter (arc N / N5).
+pub fn take_ih_discarded() -> u64 {
+    IH_DISCARDED.replace(0)
+}
+
+/// `BL_NO_DEAD_IH=1` disables the N5 dead-IH skip in this engine too (one flag, two independent
+/// implementations — the A/B toggle must flip both or the differential harnesses would disagree
+/// with themselves).
+fn dead_ih_disabled() -> bool {
+    static DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *DISABLED.get_or_init(|| std::env::var("BL_NO_DEAD_IH").is_ok_and(|v| v == "1"))
+}
+
+/// Whether `t` references the de Bruijn *term* variable `depth` term-binders above (arc N / N5).
+/// The binder map mirrors this crate's `shift_free_cut` exactly (its own authoritative
+/// enumeration, independent of the kernel's): `Lam`/`Pi`-codomain/`Sigma`-second bind one,
+/// `Handle`'s return clause binds one and each op clause two; dimension binders (`PLam`,
+/// `family`/`tube` lines) live in a separate index space. Over-approximating "used" is safe
+/// (costs an unnecessary IH); RTerm has no `System`/`Partial`/`Glue` (declined at translation).
+fn uses_binder(t: &RTerm, depth: usize) -> bool {
+    match t {
+        RTerm::Var(i) => *i == depth,
+        RTerm::Univ(_) | RTerm::Interval(_) | RTerm::IntTy | RTerm::IntLit(_) => false,
+        RTerm::Pi(_, a, b) => uses_binder(a, depth) || uses_binder(b, depth + 1),
+        RTerm::Lam(b) => uses_binder(b, depth + 1),
+        RTerm::Sigma(a, b) => uses_binder(a, depth) || uses_binder(b, depth + 1),
+        RTerm::App(f, a) | RTerm::Pair(f, a) | RTerm::Ann(f, a) => {
+            uses_binder(f, depth) || uses_binder(a, depth)
+        }
+        RTerm::Fst(p) | RTerm::Snd(p) | RTerm::PLam(p) | RTerm::PApp(p, _) => {
+            uses_binder(p, depth)
+        }
+        RTerm::Data(_, ps, is) => {
+            ps.iter().any(|t| uses_binder(t, depth)) || is.iter().any(|t| uses_binder(t, depth))
+        }
+        RTerm::Con(_, args) => args.iter().any(|t| uses_binder(t, depth)),
+        RTerm::Elim {
+            motive,
+            methods,
+            scrutinee,
+            ..
+        } => {
+            uses_binder(motive, depth)
+                || methods.iter().any(|t| uses_binder(t, depth))
+                || uses_binder(scrutinee, depth)
+        }
+        RTerm::PathP { family, lhs, rhs } => {
+            uses_binder(family, depth) || uses_binder(lhs, depth) || uses_binder(rhs, depth)
+        }
+        RTerm::Transp { family, base, .. } => {
+            uses_binder(family, depth) || uses_binder(base, depth)
+        }
+        RTerm::HComp { ty, tube, base, .. } => {
+            uses_binder(ty, depth) || uses_binder(tube, depth) || uses_binder(base, depth)
+        }
+        RTerm::Comp {
+            family, tube, base, ..
+        } => uses_binder(family, depth) || uses_binder(tube, depth) || uses_binder(base, depth),
+        RTerm::Delay(a) | RTerm::Now(a) | RTerm::Later(a) | RTerm::Force(a) | RTerm::EffTy(a) => {
+            uses_binder(a, depth)
+        }
+        RTerm::Op { type_args, arg, .. } => {
+            type_args.iter().any(|t| uses_binder(t, depth)) || uses_binder(arg, depth)
+        }
+        RTerm::Handle {
+            body,
+            return_clause,
+            op_clauses,
+        } => {
+            uses_binder(body, depth)
+                || uses_binder(return_clause, depth + 1)
+                || op_clauses.iter().any(|(_, e)| uses_binder(e, depth + 2))
+        }
+        RTerm::IntPrim { lhs, rhs, .. } => uses_binder(lhs, depth) || uses_binder(rhs, depth),
+    }
 }
 
 impl Closure {
@@ -338,9 +418,21 @@ pub fn do_elim(
             for (arg, shape) in args.iter().zip(ctor.args.iter()) {
                 result = apply(sig, result, arg.clone());
                 if matches!(shape, Arg::Rec(_)) {
-                    IH_COMPUTED.set(IH_COMPUTED.get() + 1);
-                    let ih = do_elim(sig, data, motive.clone(), methods.clone(), arg.clone());
-                    result = apply(sig, result, ih);
+                    // N5: skip the eager IH when the method provably discards its IH binder —
+                    // same idea as the kernel's do_elim, independently implemented (see the
+                    // kernel twin's doc-comment for the sentinel/soundness argument).
+                    let ih_dead = !dead_ih_disabled()
+                        && matches!(&result,
+                            RValue::Lam(clos) if !uses_binder(&clos.body, 0));
+                    if ih_dead {
+                        IH_DISCARDED.set(IH_DISCARDED.get() + 1);
+                        result = apply(sig, result, RValue::Neutral(Neutral::Var(usize::MAX)));
+                    } else {
+                        IH_COMPUTED.set(IH_COMPUTED.get() + 1);
+                        let ih =
+                            do_elim(sig, data, motive.clone(), methods.clone(), arg.clone());
+                        result = apply(sig, result, ih);
+                    }
                 }
             }
             result

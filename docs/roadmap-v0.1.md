@@ -471,7 +471,7 @@ Method rules (amended by the review):
 - **Independence constraint (hard):** blight-recheck may copy the *idea* of a fix, never kernel
   code.
 
-### [ ] N5 — Eliminate eager discarded induction hypotheses (both engines; TCB-touching)
+### [x] N5 — Eliminate eager discarded induction hypotheses (both engines; TCB-touching)
 
 The mechanism-fix milestone. **Opens with a half-day design spike** (a lesson bought twice on
 2026-07-03: optimistic labels don't get to sit in documents): the panel's "IH-free case trees
@@ -506,6 +506,30 @@ DIFF_CORPUS; evaluator-only changes are gated by the byte-identical verdict gold
   *policy alignment* — gate ground-value judgements in `recheck_before_emit` exactly as the
   elaborator gates the kernel, making RECHECK_SKIP a documented policy rather than a bug — and
   N7 fires.
+
+**As-built notes (2026-07-03):**
+- *The spike picked candidate (1) and it sufficed alone.* `uses_binder` (a shifted occurs-check
+  whose binder map mirrors each engine's own `shift` exactly — the kernel's in `check.rs`, the
+  re-checker's `shift_free_cut`; `System` treated conservatively as "used" since kernel `shift`
+  scopes it out) + a stuck sentinel `Neutral::Var(usize::MAX)` for dead binders, behind
+  `BL_NO_DEAD_IH=1`. ~Dozen live lines per engine, independently implemented. Lazy-IH thunks and
+  kernel `Case` trees were never needed.
+- *The ladder fell end to end.* Rung 0: kernel IH counts on match-forced `nat-eq k k` went from
+  [361, 618, 1131, 2156, 4205] (×~2.0/step) to [7..11] over baseline (+1/step, exactly linear);
+  recheck [8..12], same law, independently counted — the flipped nbe_scaling pins now hold both
+  engines to it. The RECHECK_SKIP corpus: palindrome >120 s → **0.1 s**, map_scratch >60 s →
+  2.5 s, json_scratch >68 min → **26.5 s**, regex_scratch >60 s → 30.8 s; the list is now empty
+  and the verdict golden re-blessed (89 `Skipped → Ok`; the two pinned false-`Rejected` lines
+  deliberately unchanged — separate fixes in flight). `reader-demo-refl` — the go-bar N1 and S3
+  both predicted and missed — is **live and green in 5.96 s in a debug build** (was 29 debug-min
+  / 15+ release-CPU-min, killed); the 40-line spore_reader blocker NOTE is deleted. The
+  S2-deferred `bridge_printer_output_checks_for_demo_id` refl-at-scale pin is authored and live:
+  the kernel runs the whole self-hosted proposer pipeline (belaborate ▷ verdict ▷ printers ▷
+  string concat) inside conversion and pins its exact output string (needed the 64 MiB-stack
+  treatment in debug builds).
+- *json/regex at ~30 s are the N6 signal:* feasible but slow — consistent with the predicted
+  Θ(k)-per-level `Value` deep-clone polynomial multiplier. N6's value-sharing item has its
+  measured justification; the other two N6 items still await theirs.
 
 ### [ ] N6 — Constant-factor hygiene (post-N5, measured-in, each optional)
 
