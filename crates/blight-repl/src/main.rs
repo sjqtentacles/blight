@@ -763,6 +763,16 @@ fn repl() -> io::Result<()> {
                     println!("{m}");
                 }
             }
+            // E9: a bare expression is the first thing every newcomer types. Instead of the
+            // driver's "must be ascribed" refusal, evaluate it and print the re-sugared value
+            // (`5`, not a core elim tree). Only this exact refusal falls through — every other
+            // error (including from genuinely malformed input) renders as before.
+            Err(rendered) if rendered.contains("a bare term must be ascribed") => {
+                match blight_elab::eval_value_str(&env, input.trim()) {
+                    Ok(v) => println!("{v}"),
+                    Err(e) => println!("{e}"),
+                }
+            }
             Err(rendered) => println!("{rendered}"),
         }
     }

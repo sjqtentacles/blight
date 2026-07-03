@@ -978,6 +978,37 @@ fn parse_list(items: &[Sexpr]) -> Result<Surface, ElabError> {
                 let body = parse_surface(&items[2])?;
                 return Ok(Surface::Region(r, Box::new(body)));
             }
+            "do" => {
+                // (do step … last) — sequencing sugar (E9). A step `(<- x e)` binds `x` over the
+                // rest; any other step is sequenced for effect (bound to a fresh throwaway).
+                // Desugars to the right-nested `let` chain the corpus writes by hand:
+                //   (do (<- x e1) e2 e3)  ⇒  (let ((x e1)) (let ((%do e2)) e3))
+                if items.len() < 3 {
+                    return Err(ElabError::BadForm(
+                        "(do step … last): at least one step before the final expression".into(),
+                    ));
+                }
+                let last = parse_surface(items.last().expect("len >= 3"))?;
+                return items[1..items.len() - 1].iter().enumerate().rev().try_fold(
+                    last,
+                    |acc, (i, step)| {
+                        let (name, e) = match step {
+                            Sexpr::List(p)
+                                if p.len() == 3
+                                    && matches!(&p[0], Sexpr::Atom(a) if a == "<-") =>
+                            {
+                                (sym(&p[1])?, parse_surface(&p[2])?)
+                            }
+                            _ => {
+                                // A fresh, unmentionable name per step (`%` is not readable as a
+                                // user identifier), so unbound steps never shadow anything.
+                                (format!("%do{i}"), parse_surface(step)?)
+                            }
+                        };
+                        Ok(Surface::Let(name, Box::new(e), Box::new(acc)))
+                    },
+                );
+            }
             _ => {}
         }
     }
@@ -1846,6 +1877,40 @@ fn elab(
             elab(env, scope, &nat_to_surface(*n), expected)
         }
         Surface::Var(name) => {
+            // Typed holes (E9): a `?name` with two or more characters after the `?` (a single
+            // character is the char-literal sugar, desugared long before this point) is a goal
+            // marker, never a value — report the expected type and the local context. `?` alone
+            // is also a hole.
+            if name.starts_with('?') && name.chars().count() != 2 {
+                let goal = match expected {
+                    Some(ty) => format!(
+                        "\n  expected type: `{}`",
+                        crate::pretty::pretty_term(ty)
+                    ),
+                    None => "\n  expected type: (not determined — inference position)".into(),
+                };
+                let mut ctx_lines = String::new();
+                for (v, ty) in scope.vars.iter().zip(scope.var_types.iter()).rev() {
+                    if v.starts_with('%') {
+                        continue; // internal/fresh binders are not part of the user's goal
+                    }
+                    match ty {
+                        Some(t) => ctx_lines.push_str(&format!(
+                            "\n  {v} : {}",
+                            crate::pretty::pretty_term(t)
+                        )),
+                        None => ctx_lines.push_str(&format!("\n  {v} : _")),
+                    }
+                }
+                let ctx = if ctx_lines.is_empty() {
+                    "\n  (empty context)".to_string()
+                } else {
+                    ctx_lines
+                };
+                return Err(ElabError::BadForm(format!(
+                    "hole `{name}`:{goal}\n  context:{ctx}"
+                )));
+            }
             // 1) a bound term variable (exact match — hygiene marks are significant for locals).
             if let Some(i) = scope.var_index(name) {
                 return Ok(Term::Var(i));
@@ -1973,9 +2038,41 @@ fn elab(
             if let Some(t) = elab_app_head(env, scope, f, args)? {
                 return Ok(t);
             }
+            // E9 (display-only): when an argument is syntactically a typed hole and the head is
+            // a typed global, hand the hole the head's Pi domain for that position as its
+            // expected type — so `(plus n ?goal)` reports `Nat`, not "inference position".
+            // Non-hole arguments are untouched (still elaborated with no expectation), and
+            // dependent domains render unsubstituted (a goal display, not a checking judgement).
+            let arg_doms: Vec<Option<Term>> = {
+                let head_ty = match f.as_ref() {
+                    Surface::Var(g) if scope.var_index(g).is_none() => {
+                        env.globals.get(g).and_then(|(_, ty)| ty.clone())
+                    }
+                    _ => None,
+                };
+                let mut doms = Vec::with_capacity(args.len());
+                let mut cur = head_ty;
+                for _ in 0..args.len() {
+                    match cur {
+                        Some(Term::Pi(_, dom, cod)) => {
+                            doms.push(Some((*dom).clone()));
+                            cur = Some((*cod).clone());
+                        }
+                        _ => {
+                            doms.push(None);
+                            cur = None;
+                        }
+                    }
+                }
+                doms
+            };
+            let is_hole = |s: &Surface| {
+                matches!(s, Surface::Var(n) if n.starts_with('?') && n.chars().count() != 2)
+            };
             let mut head = elab(env, scope, f, None)?;
-            for a in args {
-                head = Term::App(Rc::new(head), Rc::new(elab(env, scope, a, None)?));
+            for (a, dom) in args.iter().zip(arg_doms) {
+                let expected_for_arg = if is_hole(a) { dom.as_ref() } else { None };
+                head = Term::App(Rc::new(head), Rc::new(elab(env, scope, a, expected_for_arg)?));
             }
             Ok(head)
         }

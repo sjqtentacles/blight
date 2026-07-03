@@ -28,7 +28,6 @@ const NAT: &str = "(defdata Nat () (Zero) (Succ (n Nat)))\n\
 /// `(do (<- x e) … e_last)` sequences: binds flow into later steps, the last form is the result,
 /// and the whole desugaring is meaning-preserving (pinned by refl).
 #[test]
-#[ignore = "E9: pending"]
 fn do_sugar_sequences_and_computes() {
     run_with(
         format!(
@@ -51,7 +50,6 @@ fn do_sugar_sequences_and_computes() {
 /// A `(do …)` step without a binder is sequenced for effect (bound to nothing): the effectful
 /// let-chain soup `(let ((_ e1)) e2)` becomes `(do e1 e2)`.
 #[test]
-#[ignore = "E9: pending"]
 fn do_sugar_allows_unbound_steps() {
     run_with(
         format!(
@@ -76,7 +74,6 @@ fn do_sugar_allows_unbound_steps() {
 /// `blight_elab::eval_value_str` — the REPL's bare-expression path: elaborate, infer, evaluate
 /// (metered), and print the re-sugared value. `(plus 2 3)` is `5`, not an `Elim` tree.
 #[test]
-#[ignore = "E9: pending"]
 fn bare_expression_evaluates_to_resugared_value() {
     let out = std::thread::Builder::new()
         .stack_size(16 * 1024 * 1024)
@@ -97,7 +94,6 @@ fn bare_expression_evaluates_to_resugared_value() {
 /// A typed hole `?goal` reports the expected type and the local context — a goal display, not a
 /// bare unbound-name error.
 #[test]
-#[ignore = "E9: pending"]
 fn hole_reports_expected_type_and_context() {
     run_with(
         format!("{NAT}(define f (Pi ((n Nat)) Nat) (lam (n) (plus n ?goal)))"),

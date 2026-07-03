@@ -30,15 +30,15 @@
 ; single non-delimiter character (parens/whitespace can't be written `?(`), so we build the codes
 ; arithmetically from small `Succ`-chains via std/nat's `plus`/`mult` — still ordinary, total `Nat`s.
 
-(define n5 Nat (Succ (Succ (Succ (Succ (Succ Zero))))))
-(define n8 Nat (Succ (Succ (Succ n5))))
+(define n5 Nat 5)
+(define n8 Nat 8)
 (define n9 Nat (Succ n8))
 (define n10 Nat (Succ n9))
 
 (define byte-tab Nat n9)  ; '\t' = 9
 (define byte-lf Nat n10)  ; '\n' = 10
-(define byte-cr Nat (Succ (Succ (Succ n10))))  ; '\r' = 13
-(define byte-space Nat (mult n8 (Succ (Succ (Succ (Succ Zero))))))  ; ' ' = 32 = 8*4
+(define byte-cr Nat 13)  ; '\r'
+(define byte-space Nat 32)  ; ' '
 (define byte-lparen Nat (plus byte-space n8))  ; '(' = 40 = 32+8
 (define byte-rparen Nat (Succ byte-lparen))  ; ')' = 41
 (define byte-d0 Nat (plus byte-lparen n8))  ; '0' = 48 = 40+8

@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **v0.1 roadmap arc E, milestone E9 (first-session bundle):** the four first-ten-minutes fixes.
+  `(do step … last)` sequencing sugar with `(<- x e)` binders (right-nested `let` desugaring,
+  refl- and oracle-pinned); the REPL evaluates bare expressions and prints re-sugared values
+  (`(plus 2 3)` ⇒ `5`, metered so divergence reports instead of hanging); typed holes — `?name`
+  reports the expected type (including applied-argument positions of typed globals) and the
+  local context, with single-char `?x` char literals boundary-pinned; and a stdlib decimals
+  sweep (21 Peano chains across five modules) that left the verdict golden byte-identical —
+  E1's identical-terms guarantee confirmed at stdlib scale. Zero kernel changes.
 - **v0.1 roadmap arc E, milestone E7 (diagnostics quality):** the four headline error shapes now
   render for humans — unbound names one edit from a known name get a "did you mean" (Levenshtein
   over locals/constructors/datatypes/globals, LSP span narrowing preserved); a lambda binding

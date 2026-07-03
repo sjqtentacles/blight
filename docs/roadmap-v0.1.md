@@ -715,7 +715,7 @@ re-checks justify its Value-sharing item but nothing user-facing blocks on it) a
 following. The two re-checker false-`Rejected` fixes, the ground-value-gate fix, and the
 do_handle/metatheory reconciliation run as independent parallel sessions outside this ordering.)
 
-### [ ] E9 — First-session bundle (pre-playground; all tower, zero TCB)
+### [x] E9 — First-session bundle (pre-playground; all tower, zero TCB)
 
 The four verified first-ten-minutes bounce points from the 2026-07-03 panel review, fixed
 together before anything is public: (1) `(do …)` sequencing sugar (kills effectful let-chain
@@ -725,6 +725,28 @@ context instead of an unsolved-meta error; (4) a stdlib self-consistency sweep (
 decimals and implicits everywhere the stdlib still contradicts its own shipped features, plus a
 `Show`-to-`String` bridge). Each item is elaborator/REPL-level; red tests per item; oracle-corpus
 additions per the oracle rule.
+
+**As-built notes (2026-07-03):**
+- *(do …) sugar:* `(do step … last)` with `(<- x e)` binders desugars in `parse_surface` to the
+  right-nested `let` chain the corpus writes by hand; unbound steps bind unmentionable `%doN`
+  names. Meaning refl-pinned in tests and oracle-pinned (`kernel_normal_form_matches_intended_value`
+  gains an inline do case).
+- *REPL values:* a bare expression at the prompt evaluates and prints re-sugared
+  (`(plus 2 3)` ⇒ `5`) via new `blight_elab::eval_value_str` — infer first (never evaluate
+  ill-typed input), evaluate under the N2 metering budget (divergence reports instead of
+  hanging), pretty-print the quoted normal form. Only the driver's exact "bare term must be
+  ascribed" refusal falls through to this path; files stay strict.
+- *Typed holes:* `?` or `?name` (≥2 chars — single-char stays the char literal, boundary pinned
+  by an unguarded test) reports the hole's expected type and the local context. Display-only
+  domain threading: when an argument of a typed global is syntactically a hole, the head's Pi
+  domain for that position is handed to the hole (dependent domains render unsubstituted);
+  non-hole arguments elaborate exactly as before.
+- *Stdlib sweep:* all 21 Peano `Succ`-chain value definitions across std/{nat,char,test,json,
+  lexer}.bl replaced with decimals; the verdict golden is **byte-identical** after the sweep —
+  the empirical confirmation of E1's identical-elaborated-terms guarantee at stdlib scale.
+  Deferred, named honestly: a further implicits sweep beyond E2's (no contradictions surfaced by
+  the suite) and the `Show`-to-`String` REPL bridge (belongs with R-era polish; `show` exists in
+  std/order and the value printer now covers the common case).
 
 Rationale: E1–E3 are small and every later arc's code and docs benefit; S1 is tiny and proves
 the substrate early; E6 lands before S2 because spore_print is the measure clause's natural

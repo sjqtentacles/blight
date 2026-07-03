@@ -54,6 +54,21 @@ mod tests {
 /// (a divergent expression reports an error instead of hanging the REPL), and pretty-prints the
 /// quoted normal form.
 pub fn eval_value_str(env: &ElabEnv, expr_src: &str) -> Result<String, String> {
-    let _ = (env, expr_src);
-    Err("E9: pending".into())
+    let (sexpr, _rest) = read_one(expr_src).map_err(|e| format!("{e:?}"))?;
+    let surface = crate::elab::parse_surface(&sexpr).map_err(|e| format!("{e}"))?;
+    let term = crate::elab::elaborate(env, &surface).map_err(|e| format!("{e}"))?;
+    // Type-check by inference first (never evaluate an ill-typed term), then evaluate under the
+    // metering budget so a divergent expression reports cleanly instead of hanging the REPL.
+    let checker = blight_kernel::Checker::new(std::rc::Rc::new(env.signature().clone()));
+    let ctx = blight_kernel::Context::empty();
+    checker
+        .infer(&ctx, &term)
+        .map_err(|e| format!("cannot infer a type: {e}"))?;
+    let sig = std::rc::Rc::new(env.signature().clone());
+    let nf = blight_kernel::normalize::run_metered(crate::stepper::DEFAULT_STEP_BUDGET, || {
+        let value = blight_kernel::normalize::eval(&blight_kernel::value::Env::with_sig(sig), &term);
+        blight_kernel::normalize::quote(0, &value)
+    })
+    .map_err(|_| "evaluation exceeded the step budget (possibly divergent)".to_string())?;
+    Ok(crate::pretty::pretty_term(&nf))
 }

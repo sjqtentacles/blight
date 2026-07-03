@@ -222,6 +222,15 @@ fn kernel_normal_form_matches_intended_value() {
         // the oracle pins that the whole generated kit preserves meaning: `manhattan (Point-with
         // (mk-Point 3 4) (y 5)) = 8`.
         ("records_demo.bl", example("records_demo.bl"), "8".into()),
+        // E9: `(do …)` sequencing sugar desugars to the same let-chain the corpus writes by
+        // hand — binds flow, unbound steps sequence, the last form is the value.
+        (
+            "do-sugar (inline)",
+            "(load \"std/nat.bl\")\n\
+             (define main Nat (do (<- x 2) (plus 0 0) (<- y 3) (plus x y)))"
+                .to_string(),
+            "5".into(),
+        ),
     ];
     // The corrected structural `fib` benchmark (the program whose nested-match miscompile motivated
     // this oracle): `fib 32 = 2178309`.

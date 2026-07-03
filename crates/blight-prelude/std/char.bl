@@ -15,9 +15,9 @@
 (import "std/order.bl")
 
 ; Small building-block numerals.
-(define char-two Nat (Succ (Succ Zero)))
-(define char-eight Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))
-(define char-ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+(define char-two Nat 2)
+(define char-eight Nat 8)
+(define char-ten Nat 10)
 
 ; ---- named ASCII codepoints ----
 ; newline = 10.

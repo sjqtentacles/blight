@@ -64,14 +64,14 @@
 ; enough that `compute`'s extra, independent elaborate+evaluate pass measurably doubles an already
 ; expensive check for no behavioural benefit).
 (define-by plus-two-three-is-five
-  (Path Nat (plus (Succ (Succ Zero)) (Succ (Succ (Succ Zero))))
-    (Succ (Succ (Succ (Succ (Succ Zero))))))
+  (Path Nat (plus 2 3)
+    5)
   compute)
 
 (define-by mult-two-three-is-six
-  (Path Nat (mult (Succ (Succ Zero)) (Succ (Succ (Succ Zero))))
-    (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))
+  (Path Nat (mult 2 3)
+    6)
   compute)
 
 ; `decide`: the "is this decidable proposition true" idiom `Path Bool e true` — four is even.
-(define-by four-is-even (Path Bool (even (Succ (Succ (Succ (Succ Zero))))) true) decide)
+(define-by four-is-even (Path Bool (even 4) true) decide)

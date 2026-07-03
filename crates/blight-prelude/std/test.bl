@@ -28,9 +28,9 @@
 ; …)` a second time (see the note above) and fail as an overlapping-instance error. `char.bl`'s
 ; `is-lower`/`is-upper` (the only things it actually needs `order.bl` for) are not needed here, so
 ; this just inlines the couple of constants that are, computed identically to `std/char.bl`.
-(define char-two Nat (Succ (Succ Zero)))
-(define char-eight Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))
-(define char-ten Nat (Succ (Succ char-eight)))
+(define char-two Nat 2)
+(define char-eight Nat 8)
+(define char-ten Nat 10)
 (define char-newline Nat char-ten)
 (define char-space Nat (mult char-eight (plus char-two char-two)))
 (deftotal digit-char (Pi ((n Nat)) Nat)

@@ -44,9 +44,9 @@
 (load "std/list.bl")
 (load "std/pair.bl")
 
-(define char-two Nat (Succ (Succ Zero)))
-(define char-eight Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))
-(define char-ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
+(define char-two Nat 2)
+(define char-eight Nat 8)
+(define char-ten Nat 10)
 (define char-space Nat (mult char-eight (plus char-two char-two)))
 (define char-A Nat (Succ (mult char-eight char-eight)))
 (define char-Z Nat (plus char-A (plus char-ten (plus char-ten (plus char-two char-two)))))
@@ -61,7 +61,7 @@
 ; digit list once per `Succ` keeps every step structural, at the honest cost of an O(n) counter
 ; rather than O(log n) — the same "unary Peano is slow but structurally certified" tradeoff every
 ; other std/nat.bl function already makes.
-(define nine Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero))))))))))  ; 9
+(define nine Nat 9)
 
 (deftotal inc-digits (Pi ((ds (List Nat))) (List Nat))
   (lam (ds)
@@ -104,8 +104,8 @@
       [(cons p rest) (match p [(mk-pair k v) (j-obj-cons k v (j-obj rest))])])))
 
 ; `"` = 34 = 32 ('space') + 2; `\` = 92 = 90 ('Z') + 2.
-(define char-quote-code Nat (Succ (Succ char-space)))
-(define char-backslash-code Nat (Succ (Succ char-Z)))
+(define char-quote-code Nat 34)  ; '\"'
+(define char-backslash-code Nat 92)  ; '\\'
 
 ; Escape `"` and `\` for a JSON string body; every other codepoint passes through unchanged (see the
 ; header's escaping-scope note).
