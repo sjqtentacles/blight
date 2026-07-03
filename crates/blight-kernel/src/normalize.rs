@@ -2061,4 +2061,232 @@ mod tests {
             );
         });
     }
+
+    /// N5: `uses_binder` is load-bearing for soundness (a "used" binder misjudged as dead lets
+    /// the sentinel escape into values), and the mutation sweep showed the integration suite
+    /// exercises it only indirectly — every `||` and every `depth+1`/`+2` was mutable unnoticed.
+    /// This table pins each arm directly: for every multi-field arm a probe where exactly ONE
+    /// field uses the binder (kills each `||`→`&&`), and for every binder-shifting arm probes at
+    /// depth 1 whose shifted target distinguishes `+1` from `-1` and `×1` (kills the arithmetic
+    /// mutants). Dimension binders (`PLam`) are pinned NOT to shift the term-variable space.
+    #[test]
+    fn uses_binder_pins_every_arm_and_shift() {
+        use crate::row::EffName;
+        use crate::semiring::Grade;
+        use crate::term::{Cofib, IntPrimOp, Interval, Level};
+        let z = || Rc::new(Term::Univ(Level::Zero)); // never uses any binder
+        let v = |i: usize| Rc::new(Term::Var(i));
+        let d = 1usize; // probe depth: +1 → 2, -1 → 0, ×1 → 1 are pairwise distinct
+
+        // Leaf: Var uses exactly its own index.
+        assert!(uses_binder(&Term::Var(1), d));
+        assert!(!uses_binder(&Term::Var(0), d));
+        assert!(!uses_binder(&Term::Var(2), d));
+
+        // Binder-shifting arms: the shifted position must be found at depth+1 (or +2), and the
+        // UNshifted index must NOT be found there (kills ×1), nor depth-1 (kills -1).
+        for (label, shifted_uses, shifted_not) in [
+            (
+                "Pi cod",
+                Term::Pi(Grade::Omega, z(), v(2)),
+                Term::Pi(Grade::Omega, z(), v(1)),
+            ),
+            ("Lam body", Term::Lam(v(2)), Term::Lam(v(1))),
+            ("Sigma snd", Term::Sigma(z(), v(2)), Term::Sigma(z(), v(1))),
+        ] {
+            assert!(
+                uses_binder(&shifted_uses, d),
+                "{label}: Var(d+1) under the binder is the probe"
+            );
+            assert!(
+                !uses_binder(&shifted_not, d),
+                "{label}: Var(d) under the binder is a DIFFERENT variable"
+            );
+        }
+        // Pi/Sigma first components are NOT under the binder.
+        assert!(
+            uses_binder(&Term::Pi(Grade::Omega, v(1), z()), d),
+            "Pi dom unshifted"
+        );
+        assert!(uses_binder(&Term::Sigma(v(1), z()), d), "Sigma fst unshifted");
+
+        // Handle: return clause +1, op clauses +2, body unshifted — one probe per field.
+        let handle = |body: Rc<Term>, ret: Rc<Term>, cl: Rc<Term>| Term::Handle {
+            body,
+            return_clause: ret,
+            op_clauses: vec![("op".to_string(), cl)],
+        };
+        assert!(uses_binder(&handle(v(1), z(), z()), d), "Handle body unshifted");
+        assert!(uses_binder(&handle(z(), v(2), z()), d), "Handle return +1");
+        assert!(uses_binder(&handle(z(), z(), v(3)), d), "Handle op clause +2");
+        assert!(
+            !uses_binder(&handle(z(), v(1), z()), d),
+            "Handle return: Var(d) under one binder is a different variable"
+        );
+        assert!(
+            !uses_binder(&handle(z(), z(), v(2)), d),
+            "Handle clause: Var(d+1) under two binders is a different variable"
+        );
+
+        // Dimension binders do NOT shift the term space.
+        assert!(
+            uses_binder(&Term::PLam(v(1)), d),
+            "PLam binds a dimension, not a term var"
+        );
+
+        // ||-chains: exactly one field uses the binder, every other field inert — one probe per
+        // field of every multi-field arm kills each `||`→`&&` mutant in its chain.
+        let dn = DataName("D".into());
+        let cn = ConName("c".into());
+        let probes: Vec<(&str, Term)> = vec![
+            ("App lhs", Term::App(v(1), z())),
+            ("App rhs", Term::App(z(), v(1))),
+            ("Pair lhs", Term::Pair(v(1), z())),
+            ("Pair rhs", Term::Pair(z(), v(1))),
+            ("Ann lhs", Term::Ann(v(1), z())),
+            ("Ann rhs", Term::Ann(z(), v(1))),
+            ("Fst", Term::Fst(v(1))),
+            ("Snd", Term::Snd(v(1))),
+            ("PApp", Term::PApp(v(1), Interval::I0)),
+            ("Partial", Term::Partial(Cofib::Top, v(1))),
+            ("Unglue", Term::Unglue(v(1))),
+            ("Data params", Term::Data(dn.clone(), vec![Term::Var(1)], vec![])),
+            ("Data indices", Term::Data(dn.clone(), vec![], vec![Term::Var(1)])),
+            ("Con args", Term::Con(cn.clone(), vec![Term::Var(1)])),
+            (
+                "PCon args",
+                Term::PCon {
+                    data: dn.clone(),
+                    name: cn.clone(),
+                    args: vec![Term::Var(1)],
+                    dim: Interval::I0,
+                },
+            ),
+            (
+                "Elim motive",
+                Term::Elim {
+                    data: dn.clone(),
+                    motive: v(1),
+                    methods: vec![],
+                    scrutinee: z(),
+                },
+            ),
+            (
+                "Elim methods",
+                Term::Elim {
+                    data: dn.clone(),
+                    motive: z(),
+                    methods: vec![Term::Var(1)],
+                    scrutinee: z(),
+                },
+            ),
+            (
+                "Elim scrutinee",
+                Term::Elim {
+                    data: dn.clone(),
+                    motive: z(),
+                    methods: vec![],
+                    scrutinee: v(1),
+                },
+            ),
+            ("PathP family", Term::PathP { family: v(1), lhs: z(), rhs: z() }),
+            ("PathP lhs", Term::PathP { family: z(), lhs: v(1), rhs: z() }),
+            ("PathP rhs", Term::PathP { family: z(), lhs: z(), rhs: v(1) }),
+            (
+                "Transp family",
+                Term::Transp { family: v(1), cofib: Cofib::Top, base: z() },
+            ),
+            (
+                "Transp base",
+                Term::Transp { family: z(), cofib: Cofib::Top, base: v(1) },
+            ),
+            (
+                "HComp ty",
+                Term::HComp { ty: v(1), cofib: Cofib::Top, tube: z(), base: z() },
+            ),
+            (
+                "HComp tube",
+                Term::HComp { ty: z(), cofib: Cofib::Top, tube: v(1), base: z() },
+            ),
+            (
+                "HComp base",
+                Term::HComp { ty: z(), cofib: Cofib::Top, tube: z(), base: v(1) },
+            ),
+            (
+                "Comp family",
+                Term::Comp { family: v(1), cofib: Cofib::Top, tube: z(), base: z() },
+            ),
+            (
+                "Comp tube",
+                Term::Comp { family: z(), cofib: Cofib::Top, tube: v(1), base: z() },
+            ),
+            (
+                "Comp base",
+                Term::Comp { family: z(), cofib: Cofib::Top, tube: z(), base: v(1) },
+            ),
+            (
+                "Glue base",
+                Term::Glue { base: v(1), cofib: Cofib::Top, ty: z(), equiv: z() },
+            ),
+            (
+                "Glue ty",
+                Term::Glue { base: z(), cofib: Cofib::Top, ty: v(1), equiv: z() },
+            ),
+            (
+                "Glue equiv",
+                Term::Glue { base: z(), cofib: Cofib::Top, ty: z(), equiv: v(1) },
+            ),
+            (
+                "GlueTerm partial",
+                Term::GlueTerm { cofib: Cofib::Top, partial: v(1), base: z() },
+            ),
+            (
+                "GlueTerm base",
+                Term::GlueTerm { cofib: Cofib::Top, partial: z(), base: v(1) },
+            ),
+            (
+                "Op type_args",
+                Term::Op {
+                    effect: EffName::new("E"),
+                    op: "o".to_string(),
+                    type_args: vec![Term::Var(1)],
+                    arg: z(),
+                },
+            ),
+            (
+                "Op arg",
+                Term::Op {
+                    effect: EffName::new("E"),
+                    op: "o".to_string(),
+                    type_args: vec![],
+                    arg: v(1),
+                },
+            ),
+            ("EffTy", Term::EffTy(crate::row::Row::empty(), v(1))),
+            ("Delay", Term::Delay(v(1))),
+            ("Now", Term::Now(v(1))),
+            ("Later", Term::Later(v(1))),
+            ("Force", Term::Force(v(1))),
+            ("Foreign ty", Term::Foreign { symbol: "s".into(), ty: v(1) }),
+            (
+                "IntPrim lhs",
+                Term::IntPrim { op: IntPrimOp::Add, lhs: v(1), rhs: z() },
+            ),
+            (
+                "IntPrim rhs",
+                Term::IntPrim { op: IntPrimOp::Add, lhs: z(), rhs: v(1) },
+            ),
+        ];
+        for (label, t) in &probes {
+            assert!(uses_binder(t, d), "{label}: the single using field must be found");
+        }
+        // Inert leaves and the conservative System arm.
+        assert!(!uses_binder(&Term::Univ(Level::Zero), d));
+        assert!(!uses_binder(&Term::IntTy, d));
+        assert!(!uses_binder(&Term::Erased, d));
+        assert!(
+            uses_binder(&Term::System(vec![]), d),
+            "System is conservatively 'used'"
+        );
+    }
 }

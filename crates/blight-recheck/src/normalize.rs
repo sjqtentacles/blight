@@ -651,3 +651,162 @@ fn quote_interval(dlvl: usize, r: &RInterval) -> RInterval {
         RInterval::Neg(a) => RInterval::Neg(Box::new(quote_interval(dlvl, &a))),
     }
 }
+
+#[cfg(test)]
+mod n5_tests {
+    use super::*;
+    use crate::term::{RCofib, RGrade, RInterval};
+
+    /// N5: the independent engine's `uses_binder` mirror, pinned arm-by-arm exactly like the
+    /// kernel twin (`blight_kernel::normalize::tests::uses_binder_pins_every_arm_and_shift`) —
+    /// the mutation sweep showed every `||` and `+1`/`+2` here was mutable unnoticed too. One
+    /// probe per field of every multi-field arm (kills `||`→`&&`), shift probes at depth 1
+    /// distinguishing `+1` from `-1`/`×1`, and the dimension-binder no-shift pin.
+    #[test]
+    fn uses_binder_pins_every_arm_and_shift() {
+        let z = || Box::new(RTerm::Univ(0));
+        let v = |i: usize| Box::new(RTerm::Var(i));
+        let d = 1usize;
+
+        assert!(uses_binder(&RTerm::Var(1), d));
+        assert!(!uses_binder(&RTerm::Var(0), d));
+        assert!(!uses_binder(&RTerm::Var(2), d));
+
+        for (label, shifted_uses, shifted_not) in [
+            (
+                "Pi cod",
+                RTerm::Pi(RGrade::Omega, z(), v(2)),
+                RTerm::Pi(RGrade::Omega, z(), v(1)),
+            ),
+            ("Lam body", RTerm::Lam(v(2)), RTerm::Lam(v(1))),
+            ("Sigma snd", RTerm::Sigma(z(), v(2)), RTerm::Sigma(z(), v(1))),
+        ] {
+            assert!(uses_binder(&shifted_uses, d), "{label}: Var(d+1) under the binder");
+            assert!(!uses_binder(&shifted_not, d), "{label}: Var(d) under the binder differs");
+        }
+        assert!(uses_binder(&RTerm::Pi(RGrade::Omega, v(1), z()), d), "Pi dom unshifted");
+        assert!(uses_binder(&RTerm::Sigma(v(1), z()), d), "Sigma fst unshifted");
+
+        let handle = |body: Box<RTerm>, ret: Box<RTerm>, cl: Box<RTerm>| RTerm::Handle {
+            body,
+            return_clause: ret,
+            op_clauses: vec![("op".to_string(), cl)],
+        };
+        assert!(uses_binder(&handle(v(1), z(), z()), d), "Handle body unshifted");
+        assert!(uses_binder(&handle(z(), v(2), z()), d), "Handle return +1");
+        assert!(uses_binder(&handle(z(), z(), v(3)), d), "Handle op clause +2");
+        assert!(!uses_binder(&handle(z(), v(1), z()), d), "Handle return: Var(d) differs");
+        assert!(!uses_binder(&handle(z(), z(), v(2)), d), "Handle clause: Var(d+1) differs");
+
+        assert!(uses_binder(&RTerm::PLam(v(1)), d), "PLam binds a dimension, not a term var");
+
+        let probes: Vec<(&str, RTerm)> = vec![
+            ("App lhs", RTerm::App(v(1), z())),
+            ("App rhs", RTerm::App(z(), v(1))),
+            ("Pair lhs", RTerm::Pair(v(1), z())),
+            ("Pair rhs", RTerm::Pair(z(), v(1))),
+            ("Ann lhs", RTerm::Ann(v(1), z())),
+            ("Ann rhs", RTerm::Ann(z(), v(1))),
+            ("Fst", RTerm::Fst(v(1))),
+            ("Snd", RTerm::Snd(v(1))),
+            ("PApp", RTerm::PApp(v(1), RInterval::I0)),
+            (
+                "Data params",
+                RTerm::Data(blight_kernel::DataName("D".to_string()), vec![RTerm::Var(1)], vec![]),
+            ),
+            (
+                "Data indices",
+                RTerm::Data(blight_kernel::DataName("D".to_string()), vec![], vec![RTerm::Var(1)]),
+            ),
+            ("Con args", RTerm::Con(blight_kernel::ConName("c".to_string()), vec![RTerm::Var(1)])),
+            (
+                "Elim motive",
+                RTerm::Elim { data: blight_kernel::DataName("D".to_string()), motive: v(1), methods: vec![], scrutinee: z() },
+            ),
+            (
+                "Elim methods",
+                RTerm::Elim {
+                    data: blight_kernel::DataName("D".to_string()),
+                    motive: z(),
+                    methods: vec![RTerm::Var(1)],
+                    scrutinee: z(),
+                },
+            ),
+            (
+                "Elim scrutinee",
+                RTerm::Elim { data: blight_kernel::DataName("D".to_string()), motive: z(), methods: vec![], scrutinee: v(1) },
+            ),
+            ("PathP family", RTerm::PathP { family: v(1), lhs: z(), rhs: z() }),
+            ("PathP lhs", RTerm::PathP { family: z(), lhs: v(1), rhs: z() }),
+            ("PathP rhs", RTerm::PathP { family: z(), lhs: z(), rhs: v(1) }),
+            (
+                "Transp family",
+                RTerm::Transp { family: v(1), cofib: RCofib::Top, base: z() },
+            ),
+            (
+                "Transp base",
+                RTerm::Transp { family: z(), cofib: RCofib::Top, base: v(1) },
+            ),
+            (
+                "HComp ty",
+                RTerm::HComp { ty: v(1), cofib: RCofib::Top, tube: z(), base: z() },
+            ),
+            (
+                "HComp tube",
+                RTerm::HComp { ty: z(), cofib: RCofib::Top, tube: v(1), base: z() },
+            ),
+            (
+                "HComp base",
+                RTerm::HComp { ty: z(), cofib: RCofib::Top, tube: z(), base: v(1) },
+            ),
+            (
+                "Comp family",
+                RTerm::Comp { family: v(1), cofib: RCofib::Top, tube: z(), base: z() },
+            ),
+            (
+                "Comp tube",
+                RTerm::Comp { family: z(), cofib: RCofib::Top, tube: v(1), base: z() },
+            ),
+            (
+                "Comp base",
+                RTerm::Comp { family: z(), cofib: RCofib::Top, tube: z(), base: v(1) },
+            ),
+            (
+                "Op type_args",
+                RTerm::Op {
+                    effect: blight_kernel::row::EffName::new("E"),
+                    op: "o".to_string(),
+                    type_args: vec![RTerm::Var(1)],
+                    arg: z(),
+                },
+            ),
+            (
+                "Op arg",
+                RTerm::Op {
+                    effect: blight_kernel::row::EffName::new("E"),
+                    op: "o".to_string(),
+                    type_args: vec![],
+                    arg: v(1),
+                },
+            ),
+            ("EffTy", RTerm::EffTy(v(1))),
+            ("Delay", RTerm::Delay(v(1))),
+            ("Now", RTerm::Now(v(1))),
+            ("Later", RTerm::Later(v(1))),
+            ("Force", RTerm::Force(v(1))),
+            (
+                "IntPrim lhs",
+                RTerm::IntPrim { op: blight_kernel::IntPrimOp::Add, lhs: v(1), rhs: z() },
+            ),
+            (
+                "IntPrim rhs",
+                RTerm::IntPrim { op: blight_kernel::IntPrimOp::Add, lhs: z(), rhs: v(1) },
+            ),
+        ];
+        for (label, t) in &probes {
+            assert!(uses_binder(t, d), "{label}: the single using field must be found");
+        }
+        assert!(!uses_binder(&RTerm::Univ(0), d));
+        assert!(!uses_binder(&RTerm::IntTy, d));
+    }
+}
