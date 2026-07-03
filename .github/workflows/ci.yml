@@ -10,6 +10,23 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  # R1 (v0.1 roadmap): the checker compiles for wasm32-unknown-unknown with the `net` feature
+  # off — the compile-only gate the browser playground (R2) builds on. Kernel + re-checker are
+  # unconditionally wasm-clean; blight-elab drops its ureq/registry HTTP path via
+  # --no-default-features.
+  wasm-check:
+    name: wasm32 checker (no net)
+    runs-on: ubuntu-latest
+    continue-on-error: true # red phase: allowed to fail until the `net` gate lands (R1 green)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check -p blight-kernel -p blight-recheck --target wasm32-unknown-unknown
+      - run: cargo check -p blight-elab --no-default-features --target wasm32-unknown-unknown
+
   # Fast checks + the test suite that does not need the native backend.
   check:
     name: fmt + clippy + test (no llvm)
