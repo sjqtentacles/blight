@@ -1,31 +1,24 @@
-; gcd.bl — greatest common divisor by the subtractive Euclidean algorithm, made structural with a
-; `fuel` argument: subtractive GCD is not structurally recursive in `a`/`b`, so we recurse on a
-; `Nat` fuel (an upper bound on the number of steps; `a + b` always suffices). `gcd 12 8 = 4`.
-;
-; Each function recurses (via the threaded `fuel`) only on `fuel`'s immediate sub-term, and every
-; `match` is on a plain variable — the structural-recursion fragment the kernel and native backend
-; handle directly (see docs/roadmap.md). Subtractive steps and the comparison live in small helpers.
+; gcd.bl — greatest common divisor by the subtractive Euclidean algorithm, made total by a
+; `(measure …)` clause (E6). Subtractive GCD is not structurally recursive in `a`/`b`: each step
+; replaces the larger by their difference, which is not an immediate sub-term. The measure `a + b`
+; strictly decreases at every step (a positive number is subtracted), so it bounds the recursion —
+; `(measure (plus a b))` declares that, `(default a)` is the value if the bound is ever wrong, and
+; the elaborator synthesizes the fuel plumbing so the kernel certifies a structural `Elim`.
+; `gcd 12 8 = 4`.
 ;
 ;   cargo run -p blight-repl --features llvm -- build examples/gcd.bl -o gcd && ./gcd  # => 4
 
 (load "std/nat.bl")
 (load "std/order.bl")
 
-; One subtractive step on two positive numbers, choosing which to reduce by the comparison.
-(deftotal gcd-reduce (Pi ((rec (Pi ((a Nat) (b Nat)) Nat)) (a Nat) (b Nat)) Nat)
-  (lam (rec a b) (match (nat-le a b) [(true) (rec a (sub b a))] [(false) (rec (sub a b) b)])))
+; Subtractive Euclid: when `b` is zero, `a` is the gcd; otherwise reduce the larger of `a`/`b` by
+; the smaller and recurse. Both recursive calls shrink `a + b`, the declared measure.
+(deftotal gcd (Pi ((a Nat) (b Nat)) Nat)
+  (measure (plus a b))
+  (default a)
+  (lam (a b)
+    (match b [(Zero) a]
+      [(Succ b1)
+        (match (nat-le a b) [(true) (gcd a (sub b a))] [(false) (gcd (sub a b) b)])])))
 
-; Dispatch on `b`: if zero, `a` is the gcd; else take a subtractive step via `cont`.
-(deftotal gcd-on-b (Pi ((cont (Pi ((a Nat) (b Nat)) Nat)) (a Nat) (b Nat)) Nat)
-  (lam (cont a b) (match b [(Zero) a] [(Succ b1) (gcd-reduce cont a b)])))
-
-; `gcd-step fuel a b`: structural recursion on `fuel`; one `match` here, the rest in helpers.
-(deftotal gcd-step (Pi ((fuel Nat) (a Nat) (b Nat)) Nat)
-  (lam (fuel a b) (match fuel [(Zero) a] [(Succ f) (gcd-on-b (lam (a2 b2) (gcd-step f a2 b2)) a b)])))
-
-(define twelve Nat
-  (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))))
-(define eight Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))
-(define twenty Nat (plus twelve eight))
-
-(define main Nat (gcd-step twenty twelve eight))
+(define main Nat (gcd 12 8))

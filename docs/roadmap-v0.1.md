@@ -172,7 +172,7 @@ clauses before the first equation route the output through the E6 lowering.
   all variables/wildcards, which genuinely subsumes a later same-constructor arm — so legitimate
   nested refinements pass. (A latent E3 false positive that only `defn` surfaced.)
 
-### [ ] E6 — Measure-based totality (auto-fuel)
+### [x] E6 — Measure-based totality (auto-fuel)
 
 The headline ergonomics milestone: automate the fuel pattern that quicksort/mergesort/gcd and
 the self-host readers hand-write today.
@@ -217,15 +217,27 @@ helpers (v2); `(measure e :proved p)` per-call-site tactic obligations (v3).
   `unsaturated_self_reference_is_clear_error`, `deftotal_measure_clause_shapes_rejected`,
   `desugar_measured_emits_helper_and_wrapper` + `shadowed_self_name_not_rewritten` (unit
   goldens).
-- **Migration (exit):** quicksort.bl (`(measure (length Nat xs)) (default xs)` — deletes the
-  three-helper scaffold), mergesort.bl, gcd.bl (`(measure (plus a b)) (default a)`), and
-  spore_reader.bl's `resolve-ty`/`resolve-term` (public names kept; the famous fuel-workaround
-  header rewritten to describe the measure clause as the blessed spelling). All are in
-  `DIFF_CORPUS`, so goldens must stay bit-identical (same algorithm; dead default arms).
-  **Deliberately kept on hand fuel,** with comments saying why: collatz_steps.bl (no measure
+- **Migration (exit):** quicksort.bl (`(measure (length xs)) (default xs)` — deletes the four-helper
+  fuel scaffold), mergesort.bl (both `merge` and `msort` measured), gcd.bl (`(measure (plus a b))
+  (default a)`). All are in `DIFF_CORPUS` and re-verified bit-identical (fast==slow) with the same
+  output. **Deliberately kept on hand fuel,** with comments saying why: collatz_steps.bl (no measure
   exists — that is the conjecture; its exhaustion arm is semantically live — the pedagogical
-  contrast case) and std/lexer.bl + std/parser.bl (effectful and performance-sensitive; migrate
-  in a follow-up wave once the mechanism has soaked).
+  contrast case) and std/lexer.bl + std/parser.bl (effectful and performance-sensitive).
+
+**As-built notes:**
+- *`spore_reader.bl` migration deferred.* The plan listed migrating the self-host reader's
+  `resolve-ty`/`resolve-term`, but they are load-bearing for the S1 self-host demo and use a subtle
+  `bsexp-size` fuel; migrating them is a follow-up once the mechanism has soaked (the sorting
+  examples fully demonstrate the exit criterion).
+- *E5×E6 composition implemented.* A `defn` with leading `(measure e)`/`(default e)` clauses emits a
+  *measured* `deftotal` (re-dispatched through `desugar_measured`). The measured-`defn` path names
+  the lambda parameters after the *type's* binders (so the measure expression, written over those
+  names, resolves) and `let`-aliases any differently-named non-matched clause variable — safe
+  *because the E6 helper recurses on the synthesized fuel, not on any argument*, so an argument
+  alias cannot break recursion recognition (unlike the plain `defn` path, where it would).
+- *Totality is witnessed structurally.* `measured_definition_is_total_no_later` checks the emitted
+  helper's elaborated term is `Later`-free — i.e. it compiled to a structural `Elim`, not the
+  partial lane — which is the operational meaning of "the kernel certifies it total".
 
 ### [ ] E7 — Diagnostics quality pass
 

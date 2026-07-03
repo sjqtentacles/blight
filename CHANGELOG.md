@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **v0.1 roadmap arc E, milestone E6 (measure-based totality / auto-fuel):** a `deftotal` with a
+  `(measure e)`/`(default e)` clause auto-synthesizes the fuel plumbing that quicksort/mergesort/gcd
+  used to hand-write — the elaborator (`crates/blight-elab/src/measure.rs`) emits a helper that
+  recurses structurally on a `Nat` fuel (seeded at `(Succ e)`) plus a seeding wrapper, so the kernel
+  still certifies a plain `Elim`. The honest contract: totality is certified unconditionally, but
+  measure *adequacy* is not — a wrong measure yields "total but returns the default", never
+  unsoundness. Composes with E5 (`defn` with a measure clause). quicksort/mergesort/gcd rewritten
+  (four-plus helper functions each collapse to one measured definition, output unchanged,
+  DIFF_CORPUS bit-identical). Zero kernel changes.
 - **v0.1 roadmap arc E, milestone E5 (equation-style definitions):** `(defn name T [(patterns)
   body] …)` writes a recursive function as pattern equations instead of a `lam` + `match`. Desugars
   (sexpr→sexpr, `crates/blight-elab/src/defn.rs`) to a `define-rec` with a single-scrutinee `match`

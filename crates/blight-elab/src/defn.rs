@@ -61,9 +61,9 @@ fn bad(msg: impl Into<String>) -> ElabError {
     ElabError::BadForm(msg.into())
 }
 
-/// The number of explicit binders in a `(Pi (BINDERS) R)` type, erroring on a non-`Pi` type or an
+/// The explicit binder names of a `(Pi (BINDERS) R)` type, erroring on a non-`Pi` type or an
 /// implicit `{…}` binder (read by the reader as a `(brace …)`-headed list).
-fn pi_arity(ty: &Sexpr) -> Result<usize, ElabError> {
+fn pi_binder_names(ty: &Sexpr) -> Result<Vec<String>, ElabError> {
     let items = match ty {
         Sexpr::List(items) => items,
         _ => {
@@ -82,18 +82,25 @@ fn pi_arity(ty: &Sexpr) -> Result<usize, ElabError> {
         Sexpr::List(bs) => bs,
         _ => return Err(bad("(defn …): the `Pi` binder list must be a list")),
     };
+    let mut names = Vec::with_capacity(binders.len());
     for b in binders {
-        // An implicit binder `{x A}` is read as `(brace x A …)`.
-        if let Sexpr::List(parts) = b {
-            if matches!(parts.first(), Some(Sexpr::Atom(a)) if a == "brace") {
+        match b {
+            // An implicit binder `{x A}` is read as `(brace x A …)`.
+            Sexpr::List(parts) if matches!(parts.first(), Some(Sexpr::Atom(a)) if a == "brace") => {
                 return Err(bad(
                     "(defn …) does not yet support implicit `{…}` binders in its type; write the \
                      definition with `define-rec` + `match` explicitly, or make the binder explicit",
-                ));
+                ))
             }
+            // An explicit binder `(x T)` / `(x T ρ)`.
+            Sexpr::List(parts) if !parts.is_empty() => match &parts[0] {
+                Sexpr::Atom(n) => names.push(n.clone()),
+                _ => return Err(bad("(defn …): each `Pi` binder must start with a name")),
+            },
+            _ => return Err(bad("(defn …): each `Pi` binder must be `(name T)`")),
         }
     }
-    Ok(binders.len())
+    Ok(names)
 }
 
 /// Is this pattern sexp a plain variable/wildcard (a bare atom, e.g. `x` or `_`) rather than a
@@ -122,16 +129,47 @@ pub fn desugar_defn(items: &[Sexpr]) -> Result<Vec<Sexpr>, ElabError> {
         _ => return Err(bad("(defn name T …): name must be a symbol")),
     };
     let ty = &items[2];
-    let arity = pi_arity(ty)?;
+    let binder_names = pi_binder_names(ty)?;
+    let arity = binder_names.len();
     if arity == 0 {
         return Err(bad(
             "(defn …): a nullary type has no arguments to match on — use `(define name T body)`",
         ));
     }
 
+    // Optional leading `(measure e)`/`(default e)` clauses (E5×E6): when present, the equations are
+    // lowered as usual but wrapped as a *measured* `deftotal` — re-dispatched through the E6 measure
+    // lowering (`is_measured`/`desugar_measured` via `run_form`) so the recursion is made total by
+    // the declared measure instead of `define-rec`'s partial fallback. A `(measure …)` requires a
+    // following `(default …)`.
+    let has_measure = items
+        .get(3)
+        .and_then(|s| match s {
+            Sexpr::List(l) => l.first().and_then(|h| match h {
+                Sexpr::Atom(a) => Some(a == "measure"),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .unwrap_or(false);
+    let (measure_default, clauses_start) = if has_measure {
+        let default_ok = items
+            .get(4)
+            .map(|s| matches!(s, Sexpr::List(l) if l.first() == Some(&atom("default"))))
+            .unwrap_or(false);
+        if !default_ok {
+            return Err(bad(format!(
+                "(defn {name}): a `(measure e)` clause requires a following `(default e)` clause"
+            )));
+        }
+        (Some((items[3].clone(), items[4].clone())), 5)
+    } else {
+        (None, 3)
+    };
+
     // Parse + validate every clause is `[(p1 … pn) body]` with exactly `arity` patterns.
-    let mut clauses: Vec<DefnClause> = Vec::with_capacity(items.len() - 3);
-    for (i, c) in items[3..].iter().enumerate() {
+    let mut clauses: Vec<DefnClause> = Vec::with_capacity(items.len() - clauses_start);
+    for (i, c) in items[clauses_start..].iter().enumerate() {
         let parts = match c {
             Sexpr::List(parts) if parts.len() == 2 => parts,
             _ => {
@@ -223,28 +261,71 @@ pub fn desugar_defn(items: &[Sexpr]) -> Result<Vec<Sexpr>, ElabError> {
         params.push(chosen.unwrap_or_else(|| format!("defn_arg{j}")));
     }
 
-    // Build the single-scrutinee match arms: each clause's k-th pattern is the arm pattern; the body
-    // is used verbatim (the non-matched columns are already bound as the lambda's own parameters).
-    let mut arms: Vec<Sexpr> = Vec::with_capacity(clauses.len());
-    for c in &clauses {
-        arms.push(list(vec![c.pats[k].clone(), c.body.clone()]));
+    match measure_default {
+        // Measured: emit `(deftotal NAME T (measure e) (default e) (lam …))` — `run_form`
+        // re-dispatches it through the E6 measure lowering. Here the lambda MUST bind the *type's*
+        // binder names (so the `(measure …)` expression, written over those names, refers to real
+        // parameters), and non-matched columns whose clause variable differs from the binder name
+        // are bound with a `let`. That `let` is safe *only* because E6's helper recurses on the
+        // synthesized fuel, not on any argument — so aliasing an argument cannot break recursion
+        // recognition (unlike the plain path below, where the recursion *is* on the argument).
+        Some((measure, default)) => {
+            let mut arms: Vec<Sexpr> = Vec::with_capacity(clauses.len());
+            for c in &clauses {
+                let mut body = c.body.clone();
+                for (j, p) in c.pats.iter().enumerate() {
+                    if j == k {
+                        continue;
+                    }
+                    if let Sexpr::Atom(v) = p {
+                        if v != "_" && v != &binder_names[j] {
+                            body = list(vec![
+                                atom("let"),
+                                list(vec![list(vec![
+                                    atom(v.clone()),
+                                    atom(binder_names[j].clone()),
+                                ])]),
+                                body,
+                            ]);
+                        }
+                    }
+                }
+                arms.push(list(vec![c.pats[k].clone(), body]));
+            }
+            let mut match_form = vec![atom("match"), atom(binder_names[k].clone())];
+            match_form.extend(arms);
+            let param_atoms: Vec<Sexpr> = binder_names.iter().map(|p| atom(p.clone())).collect();
+            let lam = list(vec![atom("lam"), list(param_atoms), list(match_form)]);
+            Ok(vec![list(vec![
+                atom("deftotal"),
+                atom(name),
+                ty.clone(),
+                measure,
+                default,
+                lam,
+            ])])
+        }
+        // Plain: `(define-rec NAME T (lam …))`. The lambda binds the matched column with a fresh
+        // scrutinee name and the non-matched columns under their (consistent) user variable names —
+        // no `let` alias, because the recursion here IS on the argument and an alias would break
+        // recognition (the E2/E5 lesson).
+        None => {
+            let mut arms: Vec<Sexpr> = Vec::with_capacity(clauses.len());
+            for c in &clauses {
+                arms.push(list(vec![c.pats[k].clone(), c.body.clone()]));
+            }
+            let mut match_form = vec![atom("match"), atom(params[k].clone())];
+            match_form.extend(arms);
+            let param_atoms: Vec<Sexpr> = params.iter().map(|p| atom(p.clone())).collect();
+            let lam = list(vec![atom("lam"), list(param_atoms), list(match_form)]);
+            Ok(vec![list(vec![
+                atom("define-rec"),
+                atom(name),
+                ty.clone(),
+                lam,
+            ])])
+        }
     }
-
-    // (match defn_arg{k} arm0 arm1 …)
-    let mut match_form = vec![atom("match"), atom(params[k].clone())];
-    match_form.extend(arms);
-
-    // (lam (params…) (match …))
-    let param_atoms: Vec<Sexpr> = params.iter().map(|p| atom(p.clone())).collect();
-    let lam = list(vec![atom("lam"), list(param_atoms), list(match_form)]);
-
-    // (define-rec NAME T (lam …))
-    Ok(vec![list(vec![
-        atom("define-rec"),
-        atom(name),
-        ty.clone(),
-        lam,
-    ])])
 }
 
 #[cfg(test)]

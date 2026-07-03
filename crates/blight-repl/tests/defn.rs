@@ -89,15 +89,24 @@ fn defn_wrong_arity_clause_is_clear_error() {
     );
 }
 
-/// E5×E6 composition: a `defn` with a leading `(measure e)`/`(default e)` clause should route
-/// through the measure-based totality lowering (auto-fuel) instead of plain `define-rec`. Lands
-/// ignored until E6 designs the measure clause; un-ignore and flesh out then.
+/// E5×E6 composition: a `defn` with leading `(measure e)`/`(default e)` clauses routes through the
+/// E6 measure lowering (auto-fuel), so a non-structural equation set is made total. `count-down`
+/// recurses on `(pred (Succ k))` (non-structural), measured by `n`; `count-down 2 = Zero` holds
+/// definitionally because the measure is adequate.
 #[test]
-#[ignore = "E5×E6: measure-clause composition lands with E6 (measure-based totality)"]
 fn defn_with_measure_clause_composes() {
-    // Placeholder: the concrete form (a non-structural `defn` made total by a measure) is defined
-    // by E6. Kept as a named, ignored slot so the composition point is not forgotten.
-    unimplemented!("fill in once E6's (measure …)/(default …) clause syntax exists");
+    let outcomes = run(format!(
+        "{NAT}\
+         (define-rec pred (Pi ((n Nat)) Nat) (lam (n) (match n [(Zero) Zero] [(Succ k) k])))\n\
+         (defn count-down (Pi ((n Nat)) Nat)\n\
+           (measure n)\n\
+           (default Zero)\n\
+           [((Zero)) Zero]\n\
+           [((Succ k)) (count-down (pred (Succ k)))])\n\
+         (the (Path Nat (count-down (Succ (Succ Zero))) Zero) (plam (i) Zero))"
+    ))
+    .expect("a measured `defn` is made total and computes correctly");
+    assert!(matches!(outcomes.last(), Some(Outcome::Checked(_))));
 }
 
 /// A non-exhaustive `defn` is caught by the E3 coverage pass on the generated `match`.

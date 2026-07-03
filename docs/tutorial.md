@@ -149,6 +149,30 @@ need not be the first: `(defn len (Pi ((A (Type 0)) (xs (List A))) Nat) [(A (nil
 rest)) (Succ (len A rest))])` matches on `xs`. Nested patterns and the coverage check above both
 apply.
 
+Some functions recurse in a way the kernel's *one-step* structural check can't see — quicksort
+recurses on `filter`-ed sublists, gcd on subtractive differences. These are still **total**, just
+not obviously so, and Blight makes them `deftotal` with a `(measure …)` clause instead of a
+hand-written fuel counter:
+
+```
+(deftotal qsort (Pi ((xs (List Nat))) (List Nat))
+  (measure (length xs))   ; each recursive call shrinks the list length
+  (default xs)            ; the value if the bound is ever wrong
+  (lam (xs)
+    (match xs [(nil) nil]
+      [(cons p rest)
+        (append (qsort (lesser p rest)) (cons p (qsort (greater-eq p rest))))])))
+```
+
+The elaborator synthesizes a helper that recurses structurally on a `Nat` fuel seeded at
+`(Succ (measure))`, so the kernel still certifies a plain `Elim`. The honest contract: totality is
+certified unconditionally, but *adequacy* of the measure is not — if some recursive call fails to
+shrink it, the function returns the `(default …)` value rather than looping. It is never unsound,
+and every proof about the function is about its real (fueled) definition. (`(measure …)` also works
+on a `defn`, before the first equation.) When no measure exists — `collatz_steps.bl`'s termination
+is an open conjecture — a hand-written fuel bound with a live exhaustion arm is still the honest
+tool.
+
 ## 5. Paths: equality in the cubical kernel
 
 Blight's kernel is cubical: propositional equality is the **path** type `Path A x y` (a function out

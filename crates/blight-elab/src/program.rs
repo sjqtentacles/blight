@@ -276,6 +276,19 @@ impl<'a> Program<'a> {
                     }
                     return Ok(outcomes);
                 }
+                // Measured total definition (E6): `(deftotal name T (measure e) (default e) (lam …))`.
+                // Desugar to a fueled helper (structural on the prepended fuel) + a seeding wrapper,
+                // and process both in place. The kernel certifies totality; measure adequacy is the
+                // documented, unchecked contract. Zero kernel growth.
+                if crate::measure::is_measured(items) {
+                    let forms = crate::measure::desugar_measured(items)?;
+                    let mut outcomes = Vec::new();
+                    for f in &forms {
+                        let mut produced = self.run_form(f)?;
+                        outcomes.append(&mut produced);
+                    }
+                    return Ok(outcomes);
+                }
             }
         }
         // Macro-expand before parsing: a macro call rewrites to ordinary surface syntax.

@@ -1,12 +1,14 @@
-; quicksort.bl — quicksort over a `List Nat`, made structural with a `Nat` `fuel`.
+; quicksort.bl — quicksort over a `List Nat`, made total by a `(measure …)` clause (E6).
 ;
 ; Quicksort is not structurally recursive: it recurses on the *partitions* of the tail (the elements
 ; `< pivot` and `>= pivot`), which are `filter`-ed sublists, not immediate sub-terms of the input.
-; That descent is outside `deftotal`'s one-step structural fragment (see docs/roadmap.md), so — like
-; gcd.bl, collatz_steps.bl, and mergesort.bl — we recurse on a `Nat` `fuel` upper bound (the input
-; length bounds the recursion depth) and keep the partitioning in non-recursive `filter` helpers.
-; This keeps the whole program inside the fragment the native backend compiles directly (no `Delay`),
-; so it is buildable.
+; That descent is outside `deftotal`'s one-step structural fragment. Rather than hand-thread a `Nat`
+; `fuel` upper bound through a family of helper functions (the pre-E6 shape — see the git history, or
+; collatz_steps.bl, which keeps its hand fuel because no measure exists), we declare the recursion's
+; measure directly: `(measure (length xs))` says each recursive call shrinks the list length, and
+; `(default xs)` is the value returned if the bound is ever wrong. The elaborator synthesizes the
+; fuel plumbing (a helper structural on the fuel, seeded at `(Succ (length xs))`), so the kernel
+; still certifies a plain `Elim` — totality with none of the boilerplate.
 ;
 ; Sorting `[5,3,8,1,2,7]` gives `[1,2,3,5,7,8]`; `main : Nat` prints the head (the minimum), 1.
 ;
@@ -16,8 +18,7 @@
 (load "std/order.bl")
 
 ; Elements of `xs` strictly less than `p` (the `<` partition). `filter`/`append`'s element type is
-; implicit (E2); `xs`/`cont ...`'s type is tracked here (both come from an enclosing `deftotal`'s
-; own declared signature, checked-mode, unlike a bare inner lambda parameter), so it is recoverable.
+; implicit (E2); `xs`'s type is tracked here (from the enclosing `deftotal`'s declared signature).
 (deftotal lesser (Pi ((p Nat) (xs (List Nat))) (List Nat))
   (lam (p xs) (filter (lam (x) (and (nat-le x p) (not (nat-eq x p)))) xs)))
 
@@ -25,35 +26,21 @@
 (deftotal greater-eq (Pi ((p Nat) (xs (List Nat))) (List Nat))
   (lam (p xs) (filter (lam (x) (not (nat-le x p))) xs)))
 
-; One quicksort step on a non-empty list `(cons p rest)`: sort each partition via `cont`, then
-; concatenate `sorted-lesser ++ [p] ++ sorted-greater`. Non-recursive itself.
-(deftotal qsort-step
-  (Pi ((cont (Pi ((xs (List Nat))) (List Nat))) (p Nat) (rest (List Nat))) (List Nat))
-  (lam (cont p rest) (append (cont (lesser p rest)) (cons p (cont (greater-eq p rest))))))
-
-; Dispatch on the spine: the empty list is sorted; otherwise take a quicksort step.
-(deftotal qsort-on-xs (Pi ((cont (Pi ((xs (List Nat))) (List Nat))) (xs (List Nat))) (List Nat))
-  (lam (cont xs) (match xs [(nil) nil] [(cons p rest) (qsort-step cont p rest)])))
-
-; `qsort-go fuel xs`: structural recursion on `fuel`.
-(deftotal qsort-go (Pi ((fuel Nat) (xs (List Nat))) (List Nat))
-  (lam (fuel xs) (match fuel [(Zero) xs] [(Succ f) (qsort-on-xs (lam (xs2) (qsort-go f xs2)) xs)])))
-
-; `qsort xs` with fuel = |xs| (each level removes the pivot, so length fuel is ample).
-(deftotal qsort (Pi ((xs (List Nat))) (List Nat)) (lam (xs) (qsort-go (length xs) xs)))
+; Quicksort by its measure: sort the `< p` partition, the pivot, then the `>= p` partition. The two
+; recursive calls are on `filter`-ed sublists (non-structural), certified total by the length bound.
+(deftotal qsort (Pi ((xs (List Nat))) (List Nat))
+  (measure (length xs))
+  (default xs)
+  (lam (xs)
+    (match xs [(nil) nil]
+      [(cons p rest)
+        (append (qsort (lesser p rest)) (cons p (qsort (greater-eq p rest))))])))
 
 (deftotal head-or (Pi ((d Nat) (xs (List Nat))) Nat)
   (lam (d xs) (match xs [(nil) d] [(cons x rest) x])))
 
-(define one Nat (Succ Zero))
-(define two Nat (Succ (Succ Zero)))
-(define three Nat (Succ (Succ (Succ Zero))))
-(define five Nat (Succ (Succ (Succ (Succ (Succ Zero))))))
-(define seven Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero))))))))
-(define eight Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))
-
 ; [5, 3, 8, 1, 2, 7]
 (define input (List Nat)
-  (cons five (cons three (cons eight (cons one (cons two (cons seven nil)))))))
+  (cons 5 (cons 3 (cons 8 (cons 1 (cons 2 (cons 7 nil)))))))
 
 (define main Nat (head-or Zero (qsort input)))
