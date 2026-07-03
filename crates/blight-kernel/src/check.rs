@@ -2015,9 +2015,11 @@ impl Checker {
                     TypeError::BadDataDecl(format!("unknown constructor {name:?}"))
                 })?;
                 if &decl.name != d_name {
+                    // E7: render the *names*, not their Debug wrappers — this string reaches the
+                    // user verbatim through the elaborator's error path.
                     return Err(TypeError::Mismatch {
-                        expected: format!("a constructor of {d_name:?}"),
-                        found: format!("{name:?} (a constructor of {:?})", decl.name),
+                        expected: format!("`{}`", d_name.0),
+                        found: format!("`{}` (a constructor of `{}`)", name.0, decl.name.0),
                     });
                 }
                 if args.len() != ctor.args.len() {

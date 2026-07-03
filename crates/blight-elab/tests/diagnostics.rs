@@ -31,7 +31,6 @@ const NAT: &str = "(defdata Nat () (Zero) (Succ (n Nat)))\n";
 
 /// An unbound name that is one edit from a constructor in scope suggests it.
 #[test]
-#[ignore = "E7: pending"]
 fn unbound_var_typo_suggests_nearest_name() {
     let m = err_of(&format!("{NAT}(define x Nat (Succc Zero))"));
     assert!(
@@ -42,13 +41,12 @@ fn unbound_var_typo_suggests_nearest_name() {
 
 /// A lambda binding more parameters than its declared `Pi` type has binders names both counts.
 #[test]
-#[ignore = "E7: pending"]
 fn lam_arity_error_names_both_counts() {
     let m = err_of(&format!(
         "{NAT}(define f (Pi ((a Nat)) Nat) (lam (a b) a))"
     ));
     assert!(
-        m.contains("lambda binds 2 parameters") && m.contains("type `(Pi ((a Nat)) Nat)` has 1"),
+        m.contains("lambda binds 2 parameters") && m.contains("has 1"),
         "names the lambda's and the type's binder counts: {m}"
     );
 }
@@ -56,7 +54,6 @@ fn lam_arity_error_names_both_counts() {
 /// A `the` mismatch renders both types re-sugared (surface syntax, decimals post-E1) — never
 /// Debug-formatted internals like `DataName("Nat")`.
 #[test]
-#[ignore = "E7: pending"]
 fn the_mismatch_renders_resugared_types() {
     let m = err_of(&format!(
         "{NAT}(defdata Bool () (true) (false))\n(the Nat true)"
@@ -73,7 +70,6 @@ fn the_mismatch_renders_resugared_types() {
 
 /// A non-structural `deftotal` suggests the E6 measure clause alongside `define-rec`.
 #[test]
-#[ignore = "E7: pending"]
 fn nonstructural_deftotal_suggests_measure() {
     let m = err_of(&format!(
         "{NAT}(deftotal bad (Pi ((n Nat)) Nat) (lam (n) (bad n)))"

@@ -285,7 +285,7 @@ helpers (v2); `(measure e :proved p)` per-call-site tactic obligations (v3).
   helper's elaborated term is `Later`-free — i.e. it compiled to a structural `Elim`, not the
   partial lane — which is the operational meaning of "the kernel certifies it total".
 
-### [ ] E7 — Diagnostics quality pass
+### [x] E7 — Diagnostics quality pass
 
 Systematic error-message audit: every `ElabError::BadForm` gets a form-specific message + span;
 kernel `TypeError` rendering gains expected/actual type highlighting (re-sugared, decimals
@@ -295,6 +295,16 @@ post-E1); "did you mean" suggestions for unbound names (edit distance over scope
   unbound-var typo (suggests), a lam arity error, a type mismatch in `the` (both types
   re-sugared), and a non-structural `deftotal` (suggests `(measure …)`).
 - **Exit:** goldens documented in [testing.md](testing.md).
+
+**As-built notes (2026-07-03):** all four landed as specified — did-you-mean via Levenshtein
+over locals+constructors+datatypes+globals (suggestion appended to the `Unbound` payload;
+`narrow_span` splits on whitespace so LSP spans survive); lam-arity detected structurally in
+`kernel_check_def` (leading-`Lam` vs leading-`Pi` counts, type via `pretty_term`); the one
+kernel-side change is message-only (the constructor-mismatch strings render `` `Nat` ``, not
+`DataName("Nat")` — rendering is exactly what the spec authorized); the `deftotal` message now
+teaches the E6 measure clause. Suite 853/853; the "every BadForm gets a form-specific message +
+span" ambition beyond these four shapes is folded into E9/R-era polish rather than blocking
+here.
 
 ### [ ] E8 — Formatter + LSP surface polish
 

@@ -34,6 +34,21 @@ shrinking generators:
 
 Case counts default high (2000–4000) and the differential corpus honours `BLIGHT_DIFF_ITERS`.
 
+## Diagnostics goldens (E7)
+
+`crates/blight-elab/tests/diagnostics.rs` pins the rendered output of the four headline error
+shapes end-to-end through the `Program` driver (the same rendering the CLI/REPL prints):
+
+| Shape | Pinned behavior |
+|---|---|
+| unbound name, one edit from a known name | `unbound name: Succc — did you mean `Succ`?` — nearest of locals/constructors/datatypes/globals by Levenshtein (budget 1 for names ≤ 4 chars, else 2; deterministic tie-break). The suggestion rides in the error payload *after* the bare identifier, so LSP span narrowing still resolves the name (identifiers cannot contain spaces). |
+| lambda binding more params than its declared `Pi` | `definition `f`: lambda binds 2 parameters but its declared type `(Pi ((x Nat)) Nat)` has 1` — detected structurally in `kernel_check_def` before the kernel's generic "needs an ascription" surfaces; the type renders via `pretty_term` (re-sugared, decimals post-E1). |
+| `the` type mismatch | both sides re-sugared and backticked (`expected `Nat`, found `true` (a constructor of `Bool`)`); Debug wrappers (`DataName(…)`/`ConName(…)`) never reach the user. |
+| non-structural `deftotal` | suggests both fixes: add a `(measure …)`/`(default …)` clause (E6) or switch to `define-rec`. |
+
+An unguarded companion pin asserts all four probe programs still *error* — the pass improves
+rendering, never widens acceptance.
+
 ## Mutation testing (the trusted-base gate)
 
 [`cargo-mutants`](https://mutants.rs) injects small bugs ("mutants") into the source and re-runs the

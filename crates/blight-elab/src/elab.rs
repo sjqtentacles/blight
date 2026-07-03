@@ -193,9 +193,37 @@ impl ElabEnv {
             // door; the construct verifies via its own rule / `--recheck`, not here. Skip, do not
             // reject (rejecting would be a false soundness alarm).
             Err(blight_kernel::TypeError::EffectError(_)) => Ok(()),
-            Err(e) => Err(ElabError::BadForm(format!(
-                "kernel rejected definition `{name}` at its declared type: {e}"
-            ))),
+            Err(e) => {
+                // E7: the commonest beginner shape — a lambda binding more parameters than its
+                // declared type has `Pi` binders — used to surface as the kernel's generic
+                // "needs an ascription". Detect it structurally and name both counts.
+                fn leading<F: Fn(&Term) -> Option<&Term>>(mut t: &Term, step: F) -> usize {
+                    let mut n = 0;
+                    while let Some(inner) = step(t) {
+                        n += 1;
+                        t = inner;
+                    }
+                    n
+                }
+                let lams = leading(term, |t| match t {
+                    Term::Lam(b) => Some(b),
+                    _ => None,
+                });
+                let pis = leading(ty, |t| match t {
+                    Term::Pi(_, _, b) => Some(b),
+                    _ => None,
+                });
+                if lams > pis {
+                    return Err(ElabError::BadForm(format!(
+                        "definition `{name}`: lambda binds {lams} parameters but its declared \
+                         type `{}` has {pis}",
+                        crate::pretty::pretty_term(ty)
+                    )));
+                }
+                Err(ElabError::BadForm(format!(
+                    "kernel rejected definition `{name}` at its declared type: {e}"
+                )))
+            }
         }
     }
 
@@ -1751,6 +1779,57 @@ fn try_elab_row_polymorphic_handle(
     )))
 }
 
+/// Levenshtein edit distance, for "did you mean" suggestions (E7). Small inputs only (names).
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let sub = prev[j] + usize::from(ca != cb);
+            cur[j + 1] = sub.min(prev[j + 1] + 1).min(cur[j] + 1);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+/// The nearest name to `name` across locals, constructors, datatypes, and globals — within an
+/// edit-distance budget of 1 for short names, 2 otherwise (E7 "did you mean"). Ties break toward
+/// the smaller distance, then lexicographically (deterministic diagnostics).
+fn nearest_name(env: &ElabEnv, scope: &Scope, name: &str) -> Option<String> {
+    let budget = if name.chars().count() <= 4 { 1 } else { 2 };
+    let mut best: Option<(usize, String)> = None;
+    let mut consider = |cand: &str| {
+        if cand == name {
+            return;
+        }
+        let d = levenshtein(name, cand);
+        if d <= budget
+            && best
+                .as_ref()
+                .is_none_or(|(bd, bn)| d < *bd || (d == *bd && cand < bn.as_str()))
+        {
+            best = Some((d, cand.to_string()));
+        }
+    };
+    for v in &scope.vars {
+        consider(v);
+    }
+    for c in env.constructors.keys() {
+        consider(c);
+    }
+    for d in env.datas.keys() {
+        consider(d);
+    }
+    for g in env.globals.keys() {
+        consider(g);
+    }
+    best.map(|(_, n)| n)
+}
+
 fn elab(
     env: &ElabEnv,
     scope: &Scope,
@@ -1818,7 +1897,13 @@ fn elab(
                     });
                 }
             }
-            Err(ElabError::Unbound(name.clone()))
+            // E7: suggest the nearest name in scope. The suggestion rides in the payload after
+            // the bare name — `narrow_span` splits on whitespace, so span narrowing still finds
+            // the identifier (identifiers cannot contain spaces).
+            Err(ElabError::Unbound(match nearest_name(env, scope, name) {
+                Some(s) => format!("{name} — did you mean `{s}`?"),
+                None => name.clone(),
+            }))
         }
 
         Surface::The(ty, e) => {
@@ -2902,8 +2987,10 @@ fn elab_app_head(
                 // function's declared return type is `Delay A`, so `later (self a …) : Delay A`.
                 if rec.total {
                     return Err(ElabError::BadMatch(format!(
-                        "recursive call to `{name}` must be on the structural sub-term \
-                         (use `define-rec` instead of `deftotal` for general recursion)"
+                        "recursive call to `{name}` must be on the structural sub-term — add a \
+                         `(measure …)`/`(default …)` clause to this `deftotal` if a decreasing \
+                         measure exists (E6), or use `define-rec` for general (possibly-partial) \
+                         recursion"
                     )));
                 }
                 let self_idx = scope

@@ -8,6 +8,14 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **v0.1 roadmap arc E, milestone E7 (diagnostics quality):** the four headline error shapes now
+  render for humans — unbound names one edit from a known name get a "did you mean" (Levenshtein
+  over locals/constructors/datatypes/globals, LSP span narrowing preserved); a lambda binding
+  more parameters than its declared `Pi` names both counts with the type re-sugared; constructor
+  mismatches print backticked surface names instead of `DataName("…")` Debug wrappers (the one
+  kernel change is message-string-only, as the milestone authorizes); a non-structural `deftotal`
+  suggests the E6 `(measure …)` clause alongside `define-rec`. Goldens in
+  `crates/blight-elab/tests/diagnostics.rs`, documented in docs/testing.md.
 - **v0.1 roadmap arc E, milestone E4 (records):** `(defrecord Point ((x Nat) (y Nat)))` generates
   the whole record kit — nominal type, `mk-Point` constructor, projection `deftotal`s, and the
   `(Point-with p (y 5))` functional-update rewrite (any expression position, dedicated

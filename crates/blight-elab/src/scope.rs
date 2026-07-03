@@ -398,6 +398,9 @@ fn backtick_idents(msg: &str) -> impl Iterator<Item = &str> {
 /// kind, or a macro-hygiene-mangled name that no longer matches source text).
 pub fn narrow_span(form: &Spanned<SpannedSexpr>, err: &ElabError) -> Span {
     if let ElabError::Unbound(name) = err {
+        // E7: the payload may carry a "did you mean" suffix after the bare identifier;
+        // identifiers cannot contain spaces, so the first token is always the name itself.
+        let name = name.split_whitespace().next().unwrap_or(name);
         if let Some(span) = find_unbound_span(form, name) {
             return span;
         }
