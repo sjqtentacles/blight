@@ -40,7 +40,9 @@
 
 ; The first (smallest-key) entry of `map-to-list`'s ascending traversal.
 (deftotal list-head-key (Pi ((xs (List (Pair Nat Nat))) (fallback Nat)) Nat)
-  (lam (xs fallback) (match xs [(nil) fallback] [(cons p rest) (pair-fst Nat Nat p)])))
+  ; A match-bound field variable's type isn't tracked either (same gap as a bare lambda parameter),
+  ; so the ascription gives `pair-fst`'s now-implicit `A` something to unify against (E2).
+  (lam (xs fallback) (match xs [(nil) fallback] [(cons p rest) (pair-fst Nat (the (Pair Nat Nat) p))])))
 
 (define lookup-4-is-nothing Bool (match (nat-map-lookup Nat n4 m) [(nothing) true] [(just v) false]))
 
@@ -51,19 +53,19 @@
 (define t04 TestCase
   (deftest "member-miss-empty" (assert-false (map-member Nat Nat nat-compare n1 m0))))
 (define t05 TestCase
-  (deftest "lookup-value-1" (assert-eq-nat (from-maybe Nat n0 (nat-map-lookup Nat n1 m)) n11)))
+  (deftest "lookup-value-1" (assert-eq-nat (from-maybe n0 (nat-map-lookup Nat n1 m)) n11)))
 (define t06 TestCase
-  (deftest "lookup-value-2" (assert-eq-nat (from-maybe Nat n0 (nat-map-lookup Nat n2 m)) n22)))
+  (deftest "lookup-value-2" (assert-eq-nat (from-maybe n0 (nat-map-lookup Nat n2 m)) n22)))
 (define t07 TestCase (deftest "lookup-miss-4" lookup-4-is-nothing))
 (define t08 TestCase (deftest "size-is-3" (assert-eq-nat (map-size Nat Nat m) n3)))
 (define t09 TestCase (deftest "empty-size-is-0" (assert-eq-nat (map-size Nat Nat m0) n0)))
 (define t10 TestCase
-  (deftest "to-list-length-3" (assert-eq-nat (length (Pair Nat Nat) (map-to-list Nat Nat m)) n3)))
+  (deftest "to-list-length-3" (assert-eq-nat (length (map-to-list Nat Nat m)) n3)))
 (define t11 TestCase
   (deftest "to-list-ascending" (assert-eq-nat (list-head-key (map-to-list Nat Nat m) n0) n1)))
 (define t12 TestCase
   (deftest "overwrite-updates-value"
-    (assert-eq-nat (from-maybe Nat n0 (nat-map-lookup Nat n2 m-overwritten)) n99)))
+    (assert-eq-nat (from-maybe n0 (nat-map-lookup Nat n2 m-overwritten)) n99)))
 (define t13 TestCase
   (deftest "overwrite-keeps-size" (assert-eq-nat (map-size Nat Nat m-overwritten) n3)))
 (define t14 TestCase

@@ -15,19 +15,21 @@
 (load "std/list.bl")
 (load "std/order.bl")
 
-; Elements of `xs` strictly less than `p` (the `<` partition).
+; Elements of `xs` strictly less than `p` (the `<` partition). `filter`/`append`'s element type is
+; implicit (E2); `xs`/`cont ...`'s type is tracked here (both come from an enclosing `deftotal`'s
+; own declared signature, checked-mode, unlike a bare inner lambda parameter), so it is recoverable.
 (deftotal lesser (Pi ((p Nat) (xs (List Nat))) (List Nat))
-  (lam (p xs) (filter Nat (lam (x) (and (nat-le x p) (not (nat-eq x p)))) xs)))
+  (lam (p xs) (filter (lam (x) (and (nat-le x p) (not (nat-eq x p)))) xs)))
 
 ; Elements of `xs` greater than or equal to `p` (the `>=` partition).
 (deftotal greater-eq (Pi ((p Nat) (xs (List Nat))) (List Nat))
-  (lam (p xs) (filter Nat (lam (x) (not (nat-le x p))) xs)))
+  (lam (p xs) (filter (lam (x) (not (nat-le x p))) xs)))
 
 ; One quicksort step on a non-empty list `(cons p rest)`: sort each partition via `cont`, then
 ; concatenate `sorted-lesser ++ [p] ++ sorted-greater`. Non-recursive itself.
 (deftotal qsort-step
   (Pi ((cont (Pi ((xs (List Nat))) (List Nat))) (p Nat) (rest (List Nat))) (List Nat))
-  (lam (cont p rest) (append Nat (cont (lesser p rest)) (cons p (cont (greater-eq p rest))))))
+  (lam (cont p rest) (append (cont (lesser p rest)) (cons p (cont (greater-eq p rest))))))
 
 ; Dispatch on the spine: the empty list is sorted; otherwise take a quicksort step.
 (deftotal qsort-on-xs (Pi ((cont (Pi ((xs (List Nat))) (List Nat))) (xs (List Nat))) (List Nat))
@@ -38,7 +40,7 @@
   (lam (fuel xs) (match fuel [(Zero) xs] [(Succ f) (qsort-on-xs (lam (xs2) (qsort-go f xs2)) xs)])))
 
 ; `qsort xs` with fuel = |xs| (each level removes the pivot, so length fuel is ample).
-(deftotal qsort (Pi ((xs (List Nat))) (List Nat)) (lam (xs) (qsort-go (length Nat xs) xs)))
+(deftotal qsort (Pi ((xs (List Nat))) (List Nat)) (lam (xs) (qsort-go (length xs) xs)))
 
 (deftotal head-or (Pi ((d Nat) (xs (List Nat))) Nat)
   (lam (d xs) (match xs [(nil) d] [(cons x rest) x])))

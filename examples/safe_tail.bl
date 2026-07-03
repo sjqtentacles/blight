@@ -34,4 +34,4 @@
 ; main = 1. The tail of a length-2 vector has length 1; `vec-length` reads that index back as a
 ; concrete Nat. The "exactly one shorter" promise lives in safe-tail's TYPE and is re-verified by
 ; the independent re-checker under `--recheck`.
-(define main Nat (vec-length Nat one (safe-tail Nat one sample)))
+(define main Nat (vec-length (safe-tail Nat one sample)))

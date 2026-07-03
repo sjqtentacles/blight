@@ -25,6 +25,6 @@
 
 (define main Nat
   (plus
-    (plus (pair-fst Nat Nat (pair-fst (Pair Nat Nat) Nat built))
-      (pair-snd Nat Nat (pair-fst (Pair Nat Nat) Nat built)))
-    (pair-snd (Pair Nat Nat) Nat built)))
+    (plus (pair-fst Nat (pair-fst Nat built))
+      (pair-snd Nat (pair-fst Nat built)))
+    (pair-snd (Pair Nat Nat) built)))

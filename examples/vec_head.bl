@@ -18,4 +18,4 @@
 (define sample (Vec Nat three) (vcons two one (vcons one two (vcons Zero three (vnil)))))
 
 ; main = the length recovered from the index = 3.
-(define main Nat (vec-length Nat three sample))
+(define main Nat (vec-length sample))

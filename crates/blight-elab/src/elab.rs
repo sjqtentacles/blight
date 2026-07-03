@@ -4,7 +4,8 @@
 //! the user experiences" is untrusted tower code. Whatever core term `elaborate` produces is
 //! re-checked by the spore; a wrong result is simply rejected (spec §6.1).
 
-use crate::meta::{meta_term, MetaCtx};
+use crate::meta::{meta_term, MetaCtx, UnifyError};
+use crate::pretty::pretty_term;
 use crate::sexpr::Sexpr;
 use crate::surface::{Binder, Clause, Cofibration, ConstructorDecl, Decl, Surface};
 use blight_kernel::Term;
@@ -79,11 +80,13 @@ pub struct ElabEnv {
 /// How the elaborator fills one leading implicit binder at a use site (spec §6.4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImplicitSpec {
-    /// An ordinary implicit type/value argument, solved by metavariable unification.
-    Unify,
+    /// An ordinary implicit type/value argument, solved by metavariable unification. `name` is the
+    /// binder's surface name (e.g. `n` for `{n Nat}`), carried purely for diagnostics (E2) — an
+    /// unsolved or ambiguous implicit names *which* binder, not just the definition it belongs to.
+    Unify { name: String },
     /// A type-class constraint `{_ (C A)}`: resolved by dictionary search keyed on `C` and the
     /// head symbol of `A` (which is itself usually an earlier implicit, solved first).
-    Instance { class: String },
+    Instance { class: String, name: String },
 }
 
 /// Per-constructor info the elaborator needs to desugar `match`/`Con`.
@@ -1854,17 +1857,30 @@ fn elab(
         Surface::Pi(binders, cod) => elab_pi(env, scope, binders, cod),
 
         Surface::App(f, args) => {
+            // A recursive self-call `(self …)` must be recognized as the induction hypothesis
+            // *before* the implicit-global path below, and takes priority even when a same-named
+            // global already exists with implicit binders. This matters on an idempotent re-load
+            // (`(load …)` of a module a second time): the definition being re-elaborated is already
+            // registered as a global carrying its implicit spec, so without this guard its own body's
+            // `(self A …)` self-call would be mis-routed through `elab_implicit_app` — treating the
+            // explicitly-passed leading argument as the *first explicit* argument and failing to
+            // unify. Inside a recursive definition the self-name always denotes the recursion.
+            let is_self_call = matches!(f.as_ref(), Surface::Var(g)
+                if scope.rec.as_ref().is_some_and(|r| &r.self_name == g)
+                    && scope.var_index(g).is_none());
             // Implicit-argument insertion: a global head with leading implicit binders gets its
             // implicits solved (metavariable + unification) before the explicit args are applied.
-            if let Surface::Var(g) = f.as_ref() {
-                let k = env.implicit_arity(g);
-                if k > 0 && scope.var_index(g).is_none() {
-                    if let Some((gt, Some(gty))) = env.globals.get(g) {
-                        let g_term = Term::Ann(Box::new(gt.clone()), Box::new(gty.clone()));
-                        let specs = env.implicits.get(g).cloned().unwrap_or_default();
-                        return elab_implicit_app(
-                            env, scope, g, &g_term, gty, &specs, args, expected,
-                        );
+            if !is_self_call {
+                if let Surface::Var(g) = f.as_ref() {
+                    let k = env.implicit_arity(g);
+                    if k > 0 && scope.var_index(g).is_none() {
+                        if let Some((gt, Some(gty))) = env.globals.get(g) {
+                            let g_term = Term::Ann(Box::new(gt.clone()), Box::new(gty.clone()));
+                            let specs = env.implicits.get(g).cloned().unwrap_or_default();
+                            return elab_implicit_app(
+                                env, scope, g, &g_term, gty, &specs, args, expected,
+                            );
+                        }
                     }
                 }
             }
@@ -2351,8 +2367,13 @@ pub fn surface_implicit_specs(env: &ElabEnv, ty: &Surface) -> Vec<ImplicitSpec> 
                     return;
                 }
                 match surface_type_class(&b.ty) {
-                    Some(c) if env.is_class(&c) => out.push(ImplicitSpec::Instance { class: c }),
-                    _ => out.push(ImplicitSpec::Unify),
+                    Some(c) if env.is_class(&c) => out.push(ImplicitSpec::Instance {
+                        class: c,
+                        name: b.name.clone(),
+                    }),
+                    _ => out.push(ImplicitSpec::Unify {
+                        name: b.name.clone(),
+                    }),
                 }
             }
             go(env, cod, out);
@@ -2486,6 +2507,32 @@ fn weaken_above(t: &Term, cutoff: usize, d: usize) -> Term {
     go(t, cutoff, d)
 }
 
+/// Render an explicit-argument unification failure during implicit-argument insertion (E2): an
+/// [`UnifyError::Ambiguous`] names both candidate types the elaborator saw for the same implicit
+/// (e.g. two list elements of visibly different types pinning a shared `{A (Type 0)}` two ways);
+/// anything else falls back to the declared-vs-actual domain/argument types, still pretty-printed
+/// rather than silent.
+fn implicit_unify_error(
+    g: &str,
+    mc: &MetaCtx,
+    err: UnifyError,
+    dom: &Term,
+    at: &Term,
+) -> ElabError {
+    match err {
+        UnifyError::Ambiguous(pair) => ElabError::BadForm(format!(
+            "ambiguous implicit argument of `{g}`: saw both `{}` and `{}`",
+            pretty_term(&pair.0),
+            pretty_term(&pair.1)
+        )),
+        UnifyError::Mismatch => ElabError::BadForm(format!(
+            "implicit-argument mismatch for `{g}`: expected `{}`, got `{}`",
+            pretty_term(&mc.zonk(dom)),
+            pretty_term(&mc.zonk(at))
+        )),
+    }
+}
+
 /// Insert and solve implicit arguments for a global head `g` with leading implicit binders
 /// described by `specs` (spec §6.4). Ordinary implicits are solved by metavariable unification
 /// against the arguments' synthesized types and the expected result; type-class constraints are
@@ -2508,8 +2555,15 @@ fn elab_implicit_app(
     //    explicit arguments pin down its parameter.
     let mut ty = g_ty.clone();
     enum Slot {
-        Unify(Term),
-        Instance { class: String, dom: Term },
+        Unify {
+            name: String,
+            meta: Term,
+        },
+        Instance {
+            class: String,
+            name: String,
+            dom: Term,
+        },
     }
     let mut slots: Vec<Slot> = Vec::with_capacity(specs.len());
     for spec in specs {
@@ -2522,13 +2576,16 @@ fn elab_implicit_app(
             }
         };
         match spec {
-            ImplicitSpec::Unify => {
+            ImplicitSpec::Unify { name } => {
                 let id = mc.fresh();
                 let m = meta_term(id);
-                slots.push(Slot::Unify(m.clone()));
+                slots.push(Slot::Unify {
+                    name: name.clone(),
+                    meta: m.clone(),
+                });
                 ty = subst0_closed(&cod, &m);
             }
-            ImplicitSpec::Instance { class } => {
+            ImplicitSpec::Instance { class, name } => {
                 // Defer: the dictionary occupies this binder; advance the type with a placeholder
                 // meta so dependent later binders still type. The placeholder is solved only if it
                 // is later constrained; the dictionary value is filled by search below.
@@ -2536,6 +2593,7 @@ fn elab_implicit_app(
                 let placeholder = meta_term(id);
                 slots.push(Slot::Instance {
                     class: class.clone(),
+                    name: name.clone(),
                     dom,
                 });
                 ty = subst0_closed(&cod, &placeholder);
@@ -2556,7 +2614,7 @@ fn elab_implicit_app(
         let ac = elab(env, scope, a, None)?;
         if let Some(at) = synth_type(env, scope, &ac) {
             mc.unify(&dom, &at)
-                .map_err(|_| ElabError::BadForm(format!("implicit-argument mismatch for `{g}`")))?;
+                .map_err(|e| implicit_unify_error(g, &mc, e, &dom, &at))?;
         }
         ty = subst0_closed(&cod, &ac);
         explicit.push(ac);
@@ -2569,25 +2627,29 @@ fn elab_implicit_app(
     let mut inserted = Vec::with_capacity(slots.len());
     for slot in slots {
         match slot {
-            Slot::Unify(m) => {
-                let z = mc.zonk(&m);
+            Slot::Unify { name, meta } => {
+                let z = mc.zonk(&meta);
                 if mc.has_unsolved(&z) {
                     return Err(ElabError::BadForm(format!(
-                        "could not infer implicit argument of `{g}` (add an annotation)"
+                        "could not infer implicit argument `{name}` of `{g}` (add an annotation)"
                     )));
                 }
                 inserted.push(z);
             }
-            Slot::Instance { class, dom } => {
+            Slot::Instance { class, name, dom } => {
                 // The constraint type `(class A)`: A is the first type argument; resolve its head.
                 let dom_z = mc.zonk(&dom);
                 let head = instance_head_of(&class, &dom_z).ok_or_else(|| {
                     ElabError::BadForm(format!(
-                        "could not determine the instance head for `{class}` in `{g}`"
+                        "could not determine the instance head for implicit `{name}` (`{class}`) \
+                         in `{g}`"
                     ))
                 })?;
                 let dict = env.lookup_instance(&class, &head).ok_or_else(|| {
-                    ElabError::BadForm(format!("no instance `{class} {head}` in scope"))
+                    ElabError::BadForm(format!(
+                        "no instance `{class} {head}` in scope, needed for implicit `{name}` of \
+                         `{g}`"
+                    ))
                 })?;
                 inserted.push(dict.clone());
             }

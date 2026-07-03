@@ -31,9 +31,11 @@
 (deftotal rle (Pi ((xs (List Nat))) (List (Pair Nat Nat)))
   (lam (xs) (match xs [(nil) nil] [(cons x rest) (rle-cons x (rle rest))])))
 
-; The count of the first run (0 if empty).
+; The count of the first run (0 if empty). The ascription on `p` gives `pair-snd`'s now-implicit
+; `B` something to unify against — a match-bound field variable's type is not otherwise tracked
+; (E2).
 (deftotal first-run-count (Pi ((runs (List (Pair Nat Nat)))) Nat)
-  (lam (runs) (match runs [(nil) Zero] [(cons p rest) (pair-snd Nat Nat p)])))
+  (lam (runs) (match runs [(nil) Zero] [(cons p rest) (pair-snd Nat (the (Pair Nat Nat) p))])))
 
 (define seven Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero))))))))
 (define one Nat (Succ Zero))

@@ -19,4 +19,4 @@
 (define main Nat (either Nat Nat Nat (lam (x) x) (lam (y) (Succ y)) e))
 
 ; A Maybe smoke test that also nets 4: default-out of `just 4` keeps the 4.
-(define from-just Nat (from-maybe Nat Zero (just (Succ (Succ (Succ (Succ Zero)))))))
+(define from-just Nat (from-maybe Zero (just (Succ (Succ (Succ (Succ Zero)))))))

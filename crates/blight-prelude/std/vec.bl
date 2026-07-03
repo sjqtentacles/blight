@@ -10,5 +10,10 @@
   (vcons (m Nat) (x a) (xs (Vec a m)) (=> (Succ m))))
 
 ; Recover the spine length as a plain `Nat` (a non-dependent fold; the motive is just `Nat`).
-(define-rec vec-length (Pi ((A (Type 0)) (n Nat) (v (Vec A n))) Nat)
+; `A` and `n` are implicit (E2, v0.1 roadmap): both are recoverable from `v`'s synthesized type
+; `Vec A n` at every call site — `(vec-length sample)`, not `(vec-length Nat three sample)`. Their
+; grades are left at the default `ω` (unchanged from the original explicit signature): implicit-ness
+; is a call-site/elaborator concern, independent of runtime erasure, and changing an eliminator
+; argument's grade here alters codegen — out of scope for an ergonomics-only milestone.
+(define-rec vec-length (Pi ({A (Type 0)} {n Nat} (v (Vec A n))) Nat)
   (lam (A n v) (match v [(vnil) Zero] [(vcons m x xs) (Succ (vec-length A m xs))])))

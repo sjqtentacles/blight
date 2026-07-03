@@ -69,7 +69,7 @@
 ; The tokens completed AT this byte: a delimiter flushes the pending atom and then emits its own paren
 ; (if any); an atom byte completes nothing yet (it extends the accumulator instead).
 (deftotal step-emit (Pi ((b Nat) (acc (List Nat))) (List Token))
-  (lam (b acc) (match (is-delim b) [(true) (append Token (flush acc) (paren-tok b))] [(false) nil])))
+  (lam (b acc) (match (is-delim b) [(true) (append (flush acc) (paren-tok b))] [(false) nil])))
 
 ; `tok-go fuel h i acc` scans buffer `h` from index `i` for at most `fuel` more bytes, with `acc` the
 ; reversed bytes of the atom currently being built, and returns the token list. Structural recursion
@@ -82,7 +82,7 @@
       [(Succ rest)
         (let ((b (perform get-byte (mk-pair h i))))
           (let ((toks-rest (tok-go rest h (Succ i) (step-acc b acc))))
-            (append Token (step-emit b acc) toks-rest)))])))
+            (append (step-emit b acc) toks-rest)))])))
 
 ; `tokenize h n` reads the whole `n`-byte buffer `h` into a token list.
 (define tokenize (Pi ((h Int) (n Nat)) (! Bytes (List Token))) (lam (h n) (tok-go n h Zero nil)))

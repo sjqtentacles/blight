@@ -33,4 +33,4 @@
 ; main = 2. Mapping `Succ` over a length-2 vector yields another length-2 vector; `vec-length`
 ; reads the preserved length back as a concrete Nat. The whole point: the length `2` is the SAME
 ; index before and after the map, guaranteed by `vec-map`'s type and re-verified by `--recheck`.
-(define main Nat (vec-length Nat two (vec-map Nat Nat (lam (x) (Succ x)) two sample)))
+(define main Nat (vec-length (vec-map Nat Nat (lam (x) (Succ x)) two sample)))

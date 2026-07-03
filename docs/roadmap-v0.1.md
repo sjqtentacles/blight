@@ -71,7 +71,7 @@ from raw atom text).
   byte-identical. Migration sweep of examples/ + std/ where decimals improve clarity (keep Peano
   forms in tutorial §1 for pedagogy). Oracle-corpus additions per the oracle rule.
 
-### [ ] E2 — Stdlib implicitization + unsolved-meta diagnostics
+### [x] E2 — Stdlib implicitization + unsolved-meta diagnostics
 
 Use the *existing* brace-implicit machinery
 ([crates/blight-elab/src/meta.rs](../crates/blight-elab/src/meta.rs)) across the stdlib so call
@@ -89,6 +89,29 @@ milestone, with the full example corpus + `DIFF_CORPUS` as the completeness gate
   `implicit_unsolved_reports_binder_name_and_span`, `ambiguous_meta_reports_both_candidates`.
 - **Exit:** std/vec, std/list, std/maybe, std/either, std/pair implicitized; vec_head/safe_head/
   zip_vec call sites shrink; README snippet updated.
+
+**As-built notes (findings not anticipated in the plan):**
+- *Implicit-ness and grade are independent.* The first attempt bundled a grade change
+  (`ω`→`0`/erased) into the implicit binders, which segfaulted the built binaries — changing an
+  eliminator argument's grade alters codegen. Implicitized binders keep their original `ω` grade;
+  erasure is a separate optimization, out of scope for an ergonomics-only milestone.
+- *Self-call priority on idempotent re-load.* When a module is `(load …)`ed a second time (e.g.
+  `mergesort.bl` loads both `std/list.bl` and `std/list_extra.bl`, the latter re-loading the
+  former), the function being re-elaborated already exists as a global carrying its implicit spec,
+  so its own body's `(self A …)` self-call was mis-routed through the implicit-app path. Fixed by
+  making the recursive-self-call check take priority in `Surface::App` — inside a recursive
+  definition the self-name always denotes the recursion.
+- *Effect subsumption in the unifier.* Solving an implicit type argument from an *effectful*
+  computation's type `(! E T)` (e.g. `append`'s element type at a `parser.bl` call site whose
+  argument is `(! Bytes (List Token))`) required the first-order unifier to strip the effect row
+  and unify against `T`, mirroring the kernel's subsumption that made the old explicit form work.
+- *`Ambiguous`-with-both-candidates is mostly defensive.* `unify` forces solved metas before
+  dispatch, so a real conflict surfaces as `Mismatch` at the leaf (reported as "expected X, got
+  Y" with both types re-sugared); the two-candidate `Ambiguous` path fires only for a directly
+  re-solved bare meta.
+- *Call sites needing an ascription.* A bare lambda parameter or a `match`-bound field variable
+  has no synthesizable type, so an implicit solved from it needs a `(the T x)` ascription — a
+  handful of sites (std/map, std/test, rle, map_scratch, spore_codegen_meta) carry one.
 
 ### [ ] E3 — Match coverage diagnostics
 

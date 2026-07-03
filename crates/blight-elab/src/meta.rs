@@ -38,8 +38,11 @@ pub struct MetaCtx {
 pub enum UnifyError {
     /// The two terms have incompatible rigid heads.
     Mismatch,
-    /// A meta would be solved two incompatible ways (no most-general solution).
-    Ambiguous(usize),
+    /// A meta would be solved two incompatible ways: `(existing solution, conflicting candidate)`,
+    /// both already zonked — a caller can pretty-print both for a "here are the two types I saw"
+    /// diagnostic (E2), rather than the generic [`Mismatch`](Self::Mismatch). Boxed to keep the
+    /// enum (and every `Result<_, UnifyError>` on the hot unify path) small.
+    Ambiguous(Box<(Term, Term)>),
 }
 
 impl MetaCtx {
@@ -134,6 +137,16 @@ impl MetaCtx {
             (Term::Delay(x), Term::Delay(y))
             | (Term::Now(x), Term::Now(y))
             | (Term::Later(x), Term::Later(y)) => self.unify(x, y),
+            // Effect subsumption at the elaborator level: when solving an implicit type argument
+            // from an *effectful* computation's type `(! E T)`, unify against the underlying value
+            // type `T`. This mirrors the kernel's subsumption (a value-typed slot accepts an
+            // effectful argument — the empty row is ≤ any row), which is exactly what let the old
+            // explicit-type-argument form work; without it, implicitizing e.g. `append`'s element
+            // type breaks at a call site whose argument is an effectful `(! Bytes (List Token))`.
+            // Only unsoundness-free: a wrong strip yields a term the kernel rejects, never accepts.
+            (Term::EffTy(_, ta), Term::EffTy(_, tb)) => self.unify(ta, tb),
+            (Term::EffTy(_, ta), _) => self.unify(ta, &b),
+            (_, Term::EffTy(_, tb)) => self.unify(&a, tb),
             // Anything else: require syntactic equality (covers cubical/effect nodes we do not
             // descend into for unification — a meta is never introduced under them in M3).
             _ if a == b => Ok(()),
@@ -143,9 +156,16 @@ impl MetaCtx {
 
     /// Assign meta `id := t` (occurs-check elided: M3 implicit args are non-recursive types).
     fn assign(&mut self, id: usize, t: &Term) -> Result<(), UnifyError> {
-        // If already solved, the new candidate must unify with the existing solution.
+        // If already solved, the new candidate must unify with the existing solution. On conflict,
+        // report *both* zonked candidates (E2) rather than whatever `Mismatch` the recursive
+        // unification bottomed out on internally — accurate even when the true clash is a few
+        // levels deeper inside a compound type, since it is still true that this meta's two
+        // proposed solutions disagree.
         if let Some(existing) = self.solution(id).cloned() {
-            return self.unify(&existing, t);
+            let candidate = self.zonk(t);
+            return self
+                .unify(&existing, &candidate)
+                .map_err(|_| UnifyError::Ambiguous(Box::new((existing, candidate))));
         }
         self.solutions[id] = Some(self.zonk(t));
         Ok(())
@@ -234,6 +254,22 @@ mod tests {
         // Solving the same meta to a *different* rigid type is a mismatch.
         let other = Term::Univ(blight_kernel::Level::Zero);
         assert!(mc.unify(&meta_term(m), &other).is_err());
+    }
+
+    /// E2: solving an implicit type argument from an *effectful* computation type `(! E T)` strips
+    /// the effect row and unifies against the value type `T` — the elaborator-level mirror of the
+    /// kernel's effect subsumption, without which implicitizing a function used at an effectful
+    /// call site would spuriously fail.
+    #[test]
+    fn effectful_argument_type_strips_row_for_unification() {
+        use blight_kernel::row::Row;
+        let list = |a: Term| Term::Data(DataName("List".into()), vec![a], vec![]);
+        let mut mc = MetaCtx::new();
+        let m = mc.fresh();
+        // Domain `List ?m`; argument's synthesized type `(! E (List Nat))`.
+        let eff = Term::EffTy(Row::empty(), Box::new(list(nat())));
+        mc.unify(&list(meta_term(m)), &eff).unwrap();
+        assert_eq!(mc.solution(m), Some(&nat()));
     }
 
     #[test]

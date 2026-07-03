@@ -16,7 +16,7 @@
 (define-rec fibpair (Pi ((n Nat)) (Pair Nat Nat))
   (lam (n) (match n [(Zero) (mk-pair Zero (Succ Zero))] [(Succ k) (fib-step (fibpair k))])))
 
-(define fib (Pi ((n Nat)) Nat) (lam (n) (pair-fst Nat Nat (fibpair n))))
+(define fib (Pi ((n Nat)) Nat) (lam (n) (pair-fst Nat (fibpair n))))
 
 (define ten Nat (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ (Succ Zero)))))))))))
 (define thirty Nat (mult (Succ (Succ (Succ Zero))) ten))

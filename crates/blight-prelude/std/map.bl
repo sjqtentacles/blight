@@ -67,7 +67,7 @@
   (lam (K V m)
     (match m [(tm-leaf) nil]
       [(tm-node l k0 v0 r)
-        (append (Pair K V) (map-to-list K V l) (cons (mk-pair k0 v0) (map-to-list K V r)))])))
+        (append (map-to-list K V l) (cons (mk-pair k0 v0) (map-to-list K V r)))])))
 
 ; The number of entries. Structural recursion on `m`.
 (deftotal map-size (Pi ((K (Type 0)) (V (Type 0)) (m (TreeMap K V))) Nat)
@@ -117,4 +117,7 @@
   (lam (K compare x s) (map-member K Unit compare x s)))
 
 (deftotal set-to-list (Pi ((K (Type 0)) (s (TreeSet K))) (List K))
-  (lam (K s) (map (Pair K Unit) K (lam (p) (pair-fst K Unit p)) (map-to-list K Unit s))))
+  ; `p`'s type is not tracked inside this bare lambda parameter (the surface has no inline lambda
+  ; type annotations), so `pair-fst`'s now-implicit `A` cannot be read off `p` alone here; the
+  ; `the`-ascription gives the elaborator a synthesizable type to unify against (E2).
+  (lam (K s) (map (Pair K Unit) K (lam (p) (pair-fst Unit (the (Pair K Unit) p))) (map-to-list K Unit s))))

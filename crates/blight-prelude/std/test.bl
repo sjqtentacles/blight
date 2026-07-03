@@ -64,9 +64,10 @@
 ; ---- reporting ----------------------------------------------------------------------------------
 (deftotal case-passed (Pi ((c TestCase)) Bool) (lam (c) (match c [(mk-test name passed) passed])))
 
-; The number of cases in a suite.
+; The number of cases in a suite. `length`'s element type is implicit (E2); the ascription gives it
+; something to unify against, since a match-bound field variable's type is not otherwise tracked.
 (deftotal suite-total (Pi ((s TestSuite)) Nat)
-  (lam (s) (match s [(mk-suite name cases) (length TestCase cases)])))
+  (lam (s) (match s [(mk-suite name cases) (length (the (List TestCase) cases))])))
 
 ; The number of *passing* cases in a suite (structural recursion on the case spine).
 (define-rec count-passed (Pi ((cases (List TestCase))) Nat)

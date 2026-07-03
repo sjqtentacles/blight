@@ -104,7 +104,7 @@
       [(Succ rest)
         (let ((b (perform get-byte (mk-pair h i))))
           (let ((stepped (paren-step b cur best)))
-            (scan-depth rest h (Succ i) (pair-fst Nat Nat stepped) (pair-snd Nat Nat stepped))))])))
+            (scan-depth rest h (Succ i) (pair-fst Nat stepped) (pair-snd Nat stepped))))])))
 
 ; `max-paren-depth s` : the maximum parenthesis nesting depth of source string `s`. Copies `s` into a
 ; byte buffer, then scans it. Fuel = the byte length, so the loop visits every byte exactly once.

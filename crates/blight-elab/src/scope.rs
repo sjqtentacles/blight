@@ -359,6 +359,40 @@ pub fn resolve_let_rhs_at(form: &Spanned<SpannedSexpr>, offset: usize) -> Option
     .flatten()
 }
 
+/// The byte span of the first occurrence of `name` as a plain atom anywhere in `form`, regardless
+/// of binding status. Unlike [`find_unbound_span`] (which specifically wants a *free* occurrence
+/// of an undefined name), this is for narrowing diagnostics about a name that legitimately
+/// resolves — a definition or binder an error message names in backticks (E2: "could not infer
+/// implicit argument `n` of `g`") — down to that name's use site.
+fn find_ident_span(form: &Spanned<SpannedSexpr>, name: &str) -> Option<Span> {
+    let mut bound = Vec::new();
+    walk_uses(form, &mut bound, &mut |text, span, _bound| {
+        if text == name {
+            Some(span)
+        } else {
+            None
+        }
+    })
+}
+
+/// Every backtick-quoted identifier in an error message, in order, e.g. "could not infer implicit
+/// argument `n` of `g`" yields `["n", "g"]`. A multi-token backtick span (e.g. `` "no instance
+/// `Show Bool` in scope" `` ) contributes only its leading token, the part most likely to be a
+/// single source atom.
+fn backtick_idents(msg: &str) -> impl Iterator<Item = &str> {
+    let mut rest = msg;
+    std::iter::from_fn(move || loop {
+        let start = rest.find('`')? + 1;
+        rest = &rest[start..];
+        let end = rest.find('`')?;
+        let quoted = &rest[..end];
+        rest = &rest[end + 1..];
+        if let Some(tok) = quoted.split_whitespace().next() {
+            return Some(tok);
+        }
+    })
+}
+
 /// Narrow a top-level form's span down to the sub-expression an [`ElabError`] actually concerns,
 /// falling back to the whole form's span when no tighter span can be found (unrecognized error
 /// kind, or a macro-hygiene-mangled name that no longer matches source text).
@@ -366,6 +400,17 @@ pub fn narrow_span(form: &Spanned<SpannedSexpr>, err: &ElabError) -> Span {
     if let ElabError::Unbound(name) = err {
         if let Some(span) = find_unbound_span(form, name) {
             return span;
+        }
+    }
+    if let ElabError::BadForm(msg) = err {
+        // Try each backtick-quoted identifier in message order; the first that actually resolves
+        // to a source occurrence wins (an invisible definition-side name like a binder's own
+        // parameter name legitimately resolves to nothing here, so this falls through to the
+        // next — typically the applied global's own name, which does appear at the call site).
+        for name in backtick_idents(msg) {
+            if let Some(span) = find_ident_span(form, name) {
+                return span;
+            }
         }
     }
     form.span

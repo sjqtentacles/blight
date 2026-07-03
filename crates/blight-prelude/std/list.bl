@@ -7,13 +7,16 @@
 
 (defdata List ((a (Type 0))) (nil) (cons (x a) (xs (List a))))
 
-; The spine length.
-(deftotal length (Pi ((A (Type 0)) (xs (List A))) Nat)
+; The spine length. `A` is implicit (E2): recoverable from `xs`'s synthesized `List A` at every
+; real call site (none pass a raw `cons`/`nil` literal directly — see `reverse`'s header below for
+; the contrasting case where that risk is real), unused in the body beyond the recursive self-call.
+(deftotal length (Pi ({A (Type 0)} (xs (List A))) Nat)
   (lam (A xs) (match xs [(nil) Zero] [(cons x rest) (Succ (length A rest))])))
 
 ; Append. The first list is the scrutinee; structural recursion on its spine. The second list and
-; the element type ride along verbatim in each recursive call.
-(deftotal append (Pi ((A (Type 0)) (xs (List A)) (ys (List A))) (List A))
+; the element type ride along verbatim in each recursive call. `A` is implicit (E2): every real
+; call site's `xs` is a plain var or a named function's result, never a raw `cons`/`nil` literal.
+(deftotal append (Pi ({A (Type 0)} (xs (List A)) (ys (List A))) (List A))
   (lam (A xs ys) (match xs [(nil) ys] [(cons x rest) (cons x (append A rest ys))])))
 
 ; Map a function over the spine (structural recursion).
@@ -26,8 +29,12 @@
 (deftotal list-if (Pi ((A (Type 0)) (t (List A)) (e (List A)) (b Bool)) (List A))
   (lam (A t e b) (match b [(true) t] [(false) e])))
 
-; Keep the elements satisfying the `Bool`-valued predicate.
-(deftotal filter (Pi ((A (Type 0)) (p (Pi ((x A)) Bool)) (xs (List A))) (List A))
+; Keep the elements satisfying the `Bool`-valued predicate. `A` is implicit (E2) but stays at the
+; default `omega` grade rather than `0`: the body passes it into `list-if`'s own (unerased) `A`
+; parameter, and an erased binding cannot satisfy an unrestricted one — implicit-ness (a call-site,
+; elaborator-only concern) and erasure (a kernel grade) are independent, and only the former is
+; being claimed here.
+(deftotal filter (Pi ({A (Type 0)} (p (Pi ((x A)) Bool)) (xs (List A))) (List A))
   (lam (A p xs)
     (match xs [(nil) nil]
       [(cons x rest) (list-if A (cons x (filter A p rest)) (filter A p rest) (p x))])))
@@ -44,4 +51,4 @@
 
 ; Flatten a list of lists (structural recursion on the outer spine).
 (deftotal concat (Pi ((A (Type 0)) (xss (List (List A)))) (List A))
-  (lam (A xss) (match xss [(nil) nil] [(cons xs rest) (append A xs (concat A rest))])))
+  (lam (A xss) (match xss [(nil) nil] [(cons xs rest) (append xs (concat A rest))])))

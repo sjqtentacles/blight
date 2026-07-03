@@ -51,14 +51,19 @@
 ; =====================================================================================
 
 ; First-projection β: the law unbox applies to a `let p = (a, b) in fst p` redex. The product type
-; parameters of `mk-pair` are inferred from `a`/`b`.
+; parameters of `mk-pair` are inferred from `a`/`b`. `pair-fst`'s `A` is implicit (E2); `Path`
+; itself does not propagate its type argument into its endpoints during elaboration, and a raw
+; `mk-pair` literal has no synthesizable type of its own (the `Con` case of `synth_type` requires a
+; parameter-free datatype), so the `the`-ascription is what lets `A` be solved here.
 (define-by sra-beta-fst
-  (Pi ((A (Type 0)) (B (Type 0)) (a A) (b B)) (Path A (pair-fst A B (mk-pair a b)) a))
+  (Pi ((A (Type 0)) (B (Type 0)) (a A) (b B))
+    (Path A (pair-fst B (the (Pair A B) (mk-pair a b))) a))
   (intro A (intro B (intro a (intro b refl)))))
 
-; Second-projection β: the symmetric law for `snd`.
+; Second-projection β: the symmetric law for `snd`. Same E2 ascription reasoning as `sra-beta-fst`.
 (define-by sra-beta-snd
-  (Pi ((A (Type 0)) (B (Type 0)) (a A) (b B)) (Path B (pair-snd A B (mk-pair a b)) b))
+  (Pi ((A (Type 0)) (B (Type 0)) (a A) (b B))
+    (Path B (pair-snd A (the (Pair A B) (mk-pair a b))) b))
   (intro A (intro B (intro a (intro b refl)))))
 
 ; =====================================================================================

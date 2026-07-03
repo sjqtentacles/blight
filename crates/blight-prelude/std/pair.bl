@@ -7,14 +7,26 @@
 
 (defdata Pair ((a (Type 0)) (b (Type 0))) (mk-pair (x a) (y b)))
 
-; First projection.
-(deftotal pair-fst (Pi ((A (Type 0)) (B (Type 0)) (p (Pair A B))) A)
+; First projection. `A` is implicit (E2): it is the result type, so it is always recoverable from
+; either the expected type or `p`'s synthesized `Pair A B`. `B` stays explicit — it does not
+; appear in the conclusion, so a caller passing a literal `(mk-pair a b)` for `p` (which has no
+; synthesizable type — see the `Con` case of `synth_type`) would leave it unsolvable; the second
+; type argument is a real cost, but an honest one (spec: "implicit only where FO-unifiable"). The
+; grade stays `ω` (implicit-ness is independent of erasure; changing an eliminator argument's grade
+; alters codegen — out of scope for E2).
+(deftotal pair-fst (Pi ({A (Type 0)} (B (Type 0)) (p (Pair A B))) A)
   (lam (A B p) (match p [(mk-pair x y) x])))
 
-; Second projection.
-(deftotal pair-snd (Pi ((A (Type 0)) (B (Type 0)) (p (Pair A B))) B)
-  (lam (A B p) (match p [(mk-pair x y) y])))
+; Second projection. Symmetric to `pair-fst`: `B` is the result type, so it leads and is implicit;
+; the telescope is reordered (`B` before `A`) because implicit binders must be a prefix (spec
+; §6.4) — `A` stays the second (now sole) explicit argument, so `(pair-snd A p)` reads the same as
+; dropping the middle, no-longer-needed `B` from the old three-argument call.
+(deftotal pair-snd (Pi ({B (Type 0)} (A (Type 0)) (p (Pair A B))) B)
+  (lam (B A p) (match p [(mk-pair x y) y])))
 
-; Swap the components.
+; Swap the components. Both `A` and `B` appear in the (swapped) result type `Pair B A`, but neither
+; appears in a plain explicit argument's type either (the sole explicit argument is `p : Pair A B`,
+; whose synthesis fails for a literal `(mk-pair a b)`, same as `pair-fst`'s `B`) — with no real call
+; site to validate against, both stay explicit rather than risking an unusable implicit.
 (deftotal pair-swap (Pi ((A (Type 0)) (B (Type 0)) (p (Pair A B))) (Pair B A))
   (lam (A B p) (match p [(mk-pair x y) (mk-pair y x)])))

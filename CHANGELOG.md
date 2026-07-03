@@ -8,6 +8,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **v0.1 roadmap arc E, milestone E2 (stdlib implicitization):** inferable leading type/index
+  arguments of `vec-length`, `pair-fst`/`pair-snd`, `from-maybe`, `length`, `append`, and `filter`
+  are now `{…}`-implicit and solved by first-order unification — `(vec-length sample)`, not
+  `(vec-length Nat three sample)`. Unsolved/mismatched-implicit errors name the offending binder
+  and re-sugar both candidate types; the diagnostic span narrows to the named identifier. The
+  elaborator's first-order unifier gained effect-row stripping (`(! E T)` unifies against `T`, the
+  elaborator mirror of the kernel's subsumption), and the recursive-self-call check now takes
+  priority over the implicit-app path (correct under idempotent module re-load). Implicit binders
+  keep their original `ω` grade — implicit-ness is independent of erasure. Zero kernel changes.
 - **v0.1 roadmap arc E, milestone E1 (numeric literals):** a bare decimal atom (`3`) in term
   position is now `Nat` sugar for `(Succ (Succ (Succ Zero)))` — elaborator-only (`Surface::NatLit`),
   no reader or kernel changes. The pretty-printer re-sugars canonical `Nat` numerals back to

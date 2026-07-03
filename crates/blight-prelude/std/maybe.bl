@@ -13,8 +13,11 @@
 (deftotal maybe-map (Pi ((A (Type 0)) (B (Type 0)) (f (Pi ((x A)) B)) (m (Maybe A))) (Maybe B))
   (lam (A B f m) (match m [(nothing) nothing] [(just x) (just (f x))])))
 
-; The default-or-value projection.
-(deftotal from-maybe (Pi ((A (Type 0)) (d A) (m (Maybe A))) A)
+; The default-or-value projection. `A` is implicit (E2): every real call site's default `d` is a
+; plain value (a global var, or a nullary-constructor-of-an-unparameterized-type like `Zero`) whose
+; synthesized type solves `A` before `m` is even examined. Grade stays `ω` (implicit-ness is
+; independent of runtime erasure — see the note on `vec-length`).
+(deftotal from-maybe (Pi ({A (Type 0)} (d A) (m (Maybe A))) A)
   (lam (A d m) (match m [(nothing) d] [(just x) x])))
 
 ; Monadic bind: `nothing` short-circuits, `just x` continues with `f x`.

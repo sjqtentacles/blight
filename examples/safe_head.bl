@@ -14,7 +14,7 @@
 ;
 ; To watch it fail, point `main` at an empty vector and rebuild with `--recheck`:
 ;
-;   (define main Nat (from-maybe Nat Zero (safe-head Nat Zero (vnil))))
+;   (define main Nat (from-maybe Zero (safe-head Nat Zero (vnil))))
 ;
 ; The independent re-checker rejects it as a soundness alarm:
 ;
@@ -43,4 +43,4 @@
 ; main = 1. safe-head returns (just 1); from-maybe unwraps it to a bare Nat so the compiled
 ; program prints a clean `1` (the runtime renders other constructors as `con#N`). The compile-time
 ; non-emptiness guarantee lives entirely in safe-head's INPUT type, not here.
-(define main Nat (from-maybe Nat Zero (safe-head Nat one sample)))
+(define main Nat (from-maybe Zero (safe-head Nat one sample)))

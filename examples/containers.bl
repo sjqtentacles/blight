@@ -21,8 +21,8 @@
 (define sample (Vec Nat two) (vcons one one (vcons Zero two (vnil))))
 
 ; Recover its length as a plain `Nat` (this is what `main` returns: 2).
-(define main Nat (vec-length Nat two sample))
+(define main Nat (vec-length sample))
 
 ; A `Maybe`/`Either` smoke test: pull a default out of `nothing`, and fold an `Either`.
-(define defaulted Nat (from-maybe Nat one (nothing)))
+(define defaulted Nat (from-maybe one (nothing)))
 (define folded Nat (either Nat Nat Nat (lam (x) x) (lam (y) (Succ y)) (right Zero)))

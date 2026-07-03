@@ -45,4 +45,4 @@
 ; main = 2. Zipping two length-2 vectors yields a length-2 vector of pairs; `vec-length` reads the
 ; preserved length back as a concrete Nat. The shared-length guarantee lives in zip-vec's TYPE and
 ; is re-verified by the independent re-checker under `--recheck`.
-(define main Nat (vec-length (Pair Nat Nat) two (zip-vec Nat Nat two sample-a sample-b)))
+(define main Nat (vec-length (zip-vec Nat Nat two sample-a sample-b)))
