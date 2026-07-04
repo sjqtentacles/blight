@@ -29,24 +29,7 @@
 //! non-escaping position relative to that region. Allocations outside any region, or in an escaping
 //! position, keep their default `Gc` tag. Nested regions are handled by the innermost scope.
 
-use crate::ir::{Alloc, Arm, Cir, Func, Program};
-
-/// Run the region escape analysis over a whole pre-closure-conversion program, returning a new
-/// program with eligible allocations retagged [`Alloc::Arena`]. Pure and total.
-pub fn analyze_program(prog: &Program) -> Program {
-    Program {
-        funcs: prog
-            .funcs
-            .iter()
-            .map(|f| Func {
-                name: f.name.clone(),
-                recursive: f.recursive,
-                body: analyze(&f.body),
-            })
-            .collect(),
-        entry: analyze(&prog.entry),
-    }
-}
+use crate::ir::{Alloc, Arm, Cir};
 
 /// Differentially-gated entry point. With `BL_NO_AUTOREGION` set, the region escape analysis is
 /// skipped entirely and every allocation keeps its default [`Alloc::Gc`] tag (the conservative

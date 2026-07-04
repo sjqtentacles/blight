@@ -1243,11 +1243,6 @@ fn quote_neutral(lvl: usize, dlvl: usize, n: &Neutral) -> Term {
     }
 }
 
-/// Weak-head normal form of a value (already in WHNF in this NbE: values are head-normal).
-pub fn whnf(value: &Value) -> Value {
-    value.clone()
-}
-
 /// Decide definitional equality `Γ ⊢ a ≡ b` by comparing values up to β and η (spec §2.8).
 ///
 /// η is handled directly here: comparing functions (or a function and a neutral) applies both to

@@ -29,15 +29,6 @@ impl Diagnostic {
         }
     }
 
-    /// Attach a span if one is not already present (used to enrich an inner error with the
-    /// enclosing top-level form's span at the `Program` boundary).
-    pub fn or_span(mut self, span: Span) -> Diagnostic {
-        if self.span.is_none() {
-            self.span = Some(span);
-        }
-        self
-    }
-
     /// Render this diagnostic against `source`, quoting the offending line with a caret underline.
     pub fn render(&self, source: &str) -> String {
         render(source, self.span, &self.message)

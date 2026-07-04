@@ -71,11 +71,6 @@ impl MacroEnv {
         Ok(name)
     }
 
-    /// Whether `name` names a registered macro.
-    pub fn is_macro(&self, name: &str) -> bool {
-        self.macros.contains_key(name)
-    }
-
     fn fresh_mark(&mut self) -> u64 {
         self.next_mark += 1;
         self.next_mark

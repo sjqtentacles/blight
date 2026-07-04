@@ -723,17 +723,6 @@ fn result_printer_for(ty: &Term) -> &'static str {
     }
 }
 
-/// Emit only the program object (no link) — used by the grade-0-absent acceptance test to scan
-/// symbols.
-pub fn emit_program_object(
-    term: &Term,
-    ty: &Term,
-    sig: &Signature,
-    out_obj: &Path,
-) -> Result<(), String> {
-    emit_program_object_for_target(term, ty, sig, out_obj, crate::llvm::Target::Native)
-}
-
 /// Emit only the program object (no link) for the requested `target`. The `wasm32` target produces
 /// a WebAssembly object (`\0asm` magic) rather than a host object; it is not linked here.
 pub fn emit_program_object_for_target(
@@ -1360,16 +1349,6 @@ pub mod bench_support {
         s
     }
 
-    /// `main : Nat` = `plus a b` over two numerals. With the M20 recognizer this folds to a single
-    /// O(1) `NatPrim::Add` of two machine-word `NatLit`s; without it, it is the prelude's O(n)
-    /// `Succ`-chain eliminator. The same source is the A/B arm for the `nat_arithmetic_is_fast` test.
-    pub fn nat_plus_source(a: usize, b: usize) -> String {
-        format!(
-            "(load \"std/nat.bl\")\n(define main Nat (plus {} {}))\n",
-            nat_lit(a),
-            nat_lit(b)
-        )
-    }
 
     /// `main : Nat` = `seed · 2^doublings`, computed by a *shallow* structurally-recursive driver
     /// `double-n` that repeatedly does `(plus acc acc)`. The SOURCE stays tiny (the counter literal
@@ -1553,16 +1532,6 @@ pub mod bench_support {
             }
         }
         in_tail(t)
-    }
-
-    /// Count every `Atom::EnvRef` occurrence in an [`AnfProgram`] (every function body + the entry).
-    pub fn count_envrefs(prog: &AnfProgram) -> usize {
-        count_envrefs_in_tail(&prog.entry)
-            + prog
-                .funcs
-                .iter()
-                .map(|f| count_envrefs_in_tail(&f.body))
-                .sum::<usize>()
     }
 
     /// A C `main` (spec §7.3 — dynamic heap) that initializes a deliberately **tiny** `heap_kib`-KiB

@@ -103,12 +103,6 @@ impl Row {
         self.tail.as_ref()
     }
 
-    /// Set the open tail (effect polymorphism). Returns the modified row.
-    pub fn with_tail(mut self, tail: RowVar) -> Self {
-        self.tail = Some(tail);
-        self
-    }
-
     /// Iterate over `(label, grade)` pairs (sorted by label).
     pub fn iter(&self) -> impl Iterator<Item = (&EffName, Grade)> {
         self.labels.iter().map(|(l, g)| (l, *g))

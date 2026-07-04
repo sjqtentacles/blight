@@ -10,9 +10,6 @@ pub struct Span {
 }
 
 impl Span {
-    /// A span covering nothing, used where a real source location is unknown (synthesized forms).
-    pub const NONE: Span = Span { start: 0, end: 0 };
-
     pub fn new(start: usize, end: usize) -> Span {
         Span { start, end }
     }
