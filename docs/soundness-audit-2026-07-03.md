@@ -25,13 +25,16 @@ golden, llvm bit-identity where relevant, mutants over new logic, plus a red-fir
   (`Bool` constructor at type `Nat`) or panic `snd: not a pair`. Fix: check `equiv` against the
   equivalence type between `ty` and `base` (an `isEquiv`/`Equiv` shape) before accepting.
 
-- [ ] **K4 — strict-positivity check misses `EffTy`/`Delay`/`PathP`/… wrappers**
-  (`signature.rs:254`). `mentions_data` recurses only through `Data/Pi/Sigma/App/Lam/Fst/Snd/Ann`,
-  so a negative self-occurrence under `EffTy`/`Delay`/etc. passes. Compounding: the elaborator's
-  `declare_data` never calls `check_positivity`, and `check_top_with` never re-verifies it — the
-  gate is both incomplete and unwired. A non-strictly-positive datatype admits a fixpoint →
-  inhabits `False`. Fix: complete the traversal (recurse all subterm-bearing formers) **and**
-  wire the gate into declaration.
+- [x] **K4 — strict-positivity check misses `EffTy`/`Delay`/`PathP`/… wrappers + unwired**
+  (`signature.rs:254`). `mentions_data` recursed only through `Data/Pi/Sigma/App/Lam/Fst/Snd/Ann`
+  and the elaborator's `declare_data` never called `check_positivity`. *Fixed 2026-07-03 (fad7b4d):*
+  `mentions_data` rewritten as an exhaustive match (no wildcard — future `Term` variants must be
+  handled) recursing every subterm-bearing former; `check_positivity` wired into `declare_data`
+  (mirrors `declare_effect`, rolls back via `Program`'s per-form snapshot). Gates: red pin +
+  comprehensive per-former traversal pin (19/19 mutants) + no-over-rejection guard; workspace
+  869/869; verdict golden byte-identical. *Note:* surface syntax can't currently express a
+  non-positive occurrence (data name not in scope during its own fields — same limitation blocks
+  legitimate nested types), so this hardens the kernel gate and future-proofs the path.
 
 - [ ] **K5 — `transp` over a non-constant Π line accepted, then panics** (`check.rs:743`,
   `kan.rs:289`). The grade-skeleton equality gate accepts a line whose endpoints differ
