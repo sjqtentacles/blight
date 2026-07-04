@@ -682,23 +682,29 @@ continuation capture), proving preservation and the resume-once theorem *operati
 
 ### [~] P2 — Dependent.lean substitution + preservation
 
-The acknowledged "comparably-sized effort": the substitution lemma + preservation for the
-dependent-Π fragment. Same red protocol. (Note: dependent-Π preservation does *not* need a
-conversion relation — its β-case type is already `subst0 a B` by `HasType.app`'s own rule; the
-conversion relation is the *Σ* blocker, per `Dependent.lean`'s module doc.)
+The substitution lemma is **done + machine-verified**; `preservation` itself is a genuine open
+subtlety (below). Same red protocol.
 
-- **In progress (2026-07-04, 1/2 — `10596c9`):** the named prerequisite is proved and
-  machine-verified — `Expr.subst_subst_comm`, the substitution/substitution commutation lemma
-  (`subst i s (subst j a e) = subst j (subst i s a) (subst (i+1) (shiftAbove j s) e)` for `j ≤ i`),
-  plus its cancellation helper. `lake build` green; `#print axioms` = `[propext, Quot.sound]` only,
-  no `sorryAx`. This is exactly the fact the substitution lemma's `app` case needs (lining up
-  `subst i s (subst0 a B)` with `subst0`'s shape).
-- **Remaining (2/2):** the substitution lemma over `Expr` + `preservation`. With the commutation
-  fact landed, the gap is now precisely characterized in `Dependent.lean`'s module doc: the `var`
-  rule's three subcases under a *type*-substituting conclusion (`i<k` cancels — proved; `i=k` needs
-  the lifted `shiftBy k 0 A'`; `i>k` needs a fresh "senior-entry" lemma), plus porting
-  `Substitution.lean`'s `Usage.Le`/`insertUsage`/`scale` bookkeeping verbatim.
-- **Exit:** closes the stated gap in Dependent.lean's header; checklist updated.
+- **Prerequisite (2026-07-04, `10596c9`):** `Expr.subst_subst_comm`, the substitution/substitution
+  commutation lemma, plus its cancellation helper. `#print axioms` = `[propext, Quot.sound]`, no
+  `sorryAx`.
+- **Substitution lemma DONE (2026-07-04):** the full dependent substitution lemma — `subst_lemma`
+  (the `k=0` public form `HasType (A'::Γ) e B σ φ → φ.get 0 ≤ π → ∃ φ', HasType Γ (subst0 a e)
+  (subst0 a B) σ φ'`) + its telescope workhorse `subst_lemma_tele` + the helper ladder. `#print
+  axioms subst_lemma` = `[propext, Classical.choice, Quot.sound]`, no `sorryAx`. Found en route (via
+  a 5-way independent worktree fan-out): the `ctxInsert` formulation provably cannot do the `lam`
+  case (it head-shifts the domain), so the lemma is stated over an explicit telescope `Δ ++ A'::Γ`.
+- **`preservation` — OPEN, and subtler than it first looked.** A first fan-out concluded it is
+  *false* (the `app2` argument-congruence case: `app f a'` types at `subst0 a' B`, not the required
+  `subst0 a B`). **That counterexample was refuted by independent verification** (machine-checked):
+  `lam` has no domain annotation, so a *value*'s `pi`-codomain is non-unique, and `app2` needs
+  `Value f` (always a `lam`), so the stepped term recovers the original type via a different codomain
+  (`app (lam (lam tt)) tt` checks at `pi 1 (app (lam tt) tt) bool`). So `app2` is a proof-engineering
+  obstruction (re-derive the value at an adjusted codomain), and preservation's true status is open —
+  NOT the trivial loss the agents reported. **Correction:** an earlier note here claimed dependent-Π
+  preservation needs no conversion relation; that was premature — the `app2` case is genuinely
+  non-trivial, whether or not it ultimately needs conversion.
+- **Exit:** `preservation` proved (or a valid, refutation-surviving counterexample), zero `sorryAx`.
 
 ### [ ] P3 — Dependent Kan increment (scoped)
 

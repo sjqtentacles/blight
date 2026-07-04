@@ -106,16 +106,16 @@ See `Progress.lean`'s module doc for the full argument.
   proofs of `weaken` and `progress`. Honestly **not** covered by this file: dependent `Σ` and
   `PathP` (both need a real definitional-equality/conversion relation as a prerequisite — see
   `Dependent.lean`'s module doc for exactly where `Σ`'s `snd`-elimination β-case would need it and
-  `Π`'s doesn't), and — the more load-bearing gap — the **general substitution lemma and
-  `preservation`** for the dependent fragment itself. `weaken`'s proof already needed a new
-  shift/substitution commutation lemma (a dependent type must shift correctly, not just a term); the
-  next rung of that ladder — the substitution/substitution commutation fact `subst_subst_comm` — is
-  now **proved** (P2, 1/2; `#print axioms` = `[propext, Quot.sound]`), so the remaining gap is the
-  substitution lemma + `preservation` themselves, threaded through every `HasType` case with the same
-  grade/usage bookkeeping `Substitution.lean` does for the non-dependent fragment (`Dependent.lean`'s
-  module doc now characterizes the `var`-case reasoning that a *type*-substituting conclusion forces).
-  A comparably-sized proof effort in its own right, tracked as P2's second half rather than folded
-  into this pass.
+  `Π`'s doesn't). The **general substitution lemma** for the dependent fragment is now **proved**
+  (P2; `subst_subst_comm` prerequisite + `subst_lemma`/`subst_lemma_tele`, `#print axioms subst_lemma`
+  = `[propext, Classical.choice, Quot.sound]`, no `sorryAx`) — over an explicit telescope `Δ ++ A'::Γ`,
+  since the `ctxInsert` formulation provably cannot do the `lam` case (it head-shifts the domain).
+  What remains open is **`preservation`** itself, and it is subtler than first thought: a fan-out
+  first reported it *false* (the `app2` argument-congruence case), but that counterexample was
+  refuted by machine-checked verification — `lam` codomains are non-unique and `app2` needs a *value*
+  (always a `lam`), so the stepped term recovers the original type via a different codomain. So
+  `preservation`'s `app2` case is a proof-engineering obstruction (re-derive the value at an adjusted
+  codomain), and its true status is a genuine open question — see `Dependent.lean`'s module doc.
 - **Effect/handler grade safety (the graded-row discharge) is now mechanized in a scoped form**
   (Wave 8 / M10, `Effects.lean`): a single fixed operation, a single-label closed row, no row-
   variable effect polymorphism, and lambda bodies required pure (see that file's module doc for

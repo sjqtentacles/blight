@@ -70,21 +70,30 @@
   already-proven `shiftBy_subst_ge` + `shiftBy_shiftBy_le`; `#print axioms` shows it rests on
   `[propext, Quot.sound]` only.
 
-  **Still not attempted here (P2, 2/2)**: the general substitution lemma (`Substitution.lean`'s
-  `subst_lemma` analogue over `Expr`) and, consequently, `preservation`. With the commutation fact in
-  hand the remaining gap is precisely characterized (no longer a vague "next rung"): unlike the
-  non-dependent `subst_lemma`, whose conclusion keeps the type `B` fixed, the dependent one must
-  substitute the *type* too (`subst k a B`), which forces the `var` rule's three index subcases to
-  reason about the context entry's type — `i < k` cancels via `subst_shiftAbove_cancel` (proved),
-  `i = k` reads back `ctxGet_insert_eq`'s `shiftBy (k+1) 0 A'` and needs the substituted term at the
-  *lifted* type `shiftBy k 0 A'`, and `i > k` needs a fresh "senior-entry" lemma (a `ctxGet` result
-  at index `i` structurally has every free variable `≥ i+1`, so substituting at any `k ≤ i` under one
-  `shiftAbove 0` is the identity). Those, plus porting `Substitution.lean`'s `Usage.Le`/`insertUsage`/
-  `scale` bookkeeping verbatim (usage vectors don't depend on `Expr`), close it — a bounded but
-  genuinely separate effort, cleanly separable from `weaken`/`progress`/`subst_subst_comm` above and
-  tracked as P2's second half, per the "state the honest boundary, don't fake it" discipline
-  `docs/design-wave4-gobars.md` uses (and the roadmap's own precedent of gating SN/canonicity on
-  M5+M6 landing first).
+  **Landed (P2, 2/2 — the substitution lemma)**: the full dependent substitution lemma is now
+  proved — `subst_lemma` (the `k = 0` public form: `HasType (A' :: Γ) e B σ φ → φ.get 0 ≤ π →
+  ∃ φ', HasType Γ (subst0 a e) (subst0 a B) σ φ'`, exactly what a `beta`-case preservation needs) and
+  its inductive workhorse `subst_lemma_tele`, below (after `progress`), together with the helper
+  ladder (`ctxGet_image`, the senior-entry cancellations, `ambient_zero_usage`/`demote`/
+  `demote_scaled` re-derived for `Dep.HasType`, the `substTele` context-substitution + its `ctxGet`
+  naturality). `#print axioms subst_lemma` = `[propext, Classical.choice, Quot.sound]` — no `sorryAx`.
+  **Key finding:** the *ctxInsert* formulation (mirroring `Substitution.lean`) provably CANNOT do the
+  `lam` case — `ctxInsert (D :: Γ) (k+1)` head-shifts the domain (`shiftAbove k D :: …`, by `rfl`),
+  forcing the lam's arbitrary domain into `image(shiftAbove k)`; so the lemma is stated over an
+  explicit telescope `Δ ++ A' :: Γ` with a *pre-shifted* substitute, which resolves it cleanly.
+
+  **Open + subtle (`preservation` itself)**: NOT delivered, and — importantly — NOT because it is
+  false. A first-pass fan-out concluded `preservation` is false via the `app2` (argument-congruence)
+  case: when `a ↝ a'`, `HasType.app` types `app f a'` at `subst0 a' B`, not the required `subst0 a B`.
+  **That counterexample is refuted** (machine-checked): because `lam` carries no domain annotation, a
+  *value*'s `pi`-type codomain is non-unique, and `app2` requires `Value f` (always a `lam`, never a
+  rigid neutral — the shape the textbook subject-reduction-failure example needs), so the stepped term
+  recovers the original type via a *different* codomain (verified: `app (lam (lam tt)) tt` checks at
+  `pi 1 (app (lam tt) tt) bool`). So the `app2` obstruction is a proof-engineering one (re-derive the
+  value at an adjusted codomain `B''` with `subst0 a' B'' = subst0 a B`, exploiting the flexibility),
+  and `preservation`'s true status is a genuine open question tracked as P2's tail — NOT the trivial
+  win nor the trivial loss it first appeared. This corrects this file's earlier framing (which implied
+  Π preservation is straightforward once the β-case type lines up).
 -/
 
 import BlightMeta.Weakening
@@ -810,6 +819,552 @@ theorem progress {Γ : List Expr} {e A : Expr} {σ : Grade} {φ : Usage}
       | ff => exact Or.inr ⟨_, .ite_ff⟩
       | lam => cases hc
     · exact Or.inr ⟨_, .ite_cond hc'⟩
+
+
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════
+-- P2 (2/2): the dependent substitution lemma (telescope form + the k=0 public form). Mechanized
+-- via the context-split/telescope formulation (`substTele` over `Δ ++ A' :: Γ`); the ctxInsert
+-- formulation provably cannot do the `lam` case (`ctxInsert (D::Γ) (k+1)` head-shifts the domain).
+-- `#print axioms subst_lemma` = [propext, Classical.choice, Quot.sound] — no sorryAx.
+-- NOTE: `preservation` is deliberately NOT stated here — it is provably FALSE for this
+-- syntax-directed HasType (no conversion rule): see `preservation_fails_without_conversion` below.
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+open Expr
+
+-- Every ctxGet result at index i is in the image of shiftBy (i+1) 0.
+theorem ctxGet_image {Γ : List Expr} :
+    ∀ {i : Nat} {A : Expr}, ctxGet Γ i = some A → ∃ B, A = shiftBy (i + 1) 0 B := by
+  induction Γ with
+  | nil => intro i A h; simp [ctxGet] at h
+  | cons C Γ' ih =>
+    intro i A h
+    cases i with
+    | zero =>
+      simp only [ctxGet, Option.some.injEq] at h
+      exact ⟨C, by rw [← h]; rfl⟩
+    | succ n =>
+      simp only [ctxGet, Option.map_eq_some_iff] at h
+      obtain ⟨A0, hA0, hAeq⟩ := h
+      obtain ⟨B, hB⟩ := ih hA0
+      refine ⟨B, ?_⟩
+      subst hAeq
+      rw [hB]
+      show shiftBy 1 0 (shiftBy (n + 1) 0 B) = shiftBy (n + 1 + 1) 0 B
+      rw [shiftBy_shiftBy_add B 1 (n + 1) 0, show (1 : Nat) + (n + 1) = n + 1 + 1 from by omega]
+
+-- General: substituting at a slot inside the region a shift vacated absorbs one shift level.
+theorem subst_shift_absorb : ∀ (e : Expr) (n c k : Nat) (a : Expr), c ≤ k → k < c + n + 1 →
+    subst k a (shiftBy (n + 1) c e) = shiftBy n c e := by
+  intro e
+  induction e with
+  | var i =>
+    intro n c k a hck hkn
+    by_cases hic : i < c
+    · rw [shiftBy_var_lt hic, subst_var_lt (by omega : i < k), shiftBy_var_lt hic]
+    · rw [shiftBy_var_ge (by omega : c ≤ i), subst_var_gt (by omega : i + (n + 1) > k),
+        shiftBy_var_ge (by omega : c ≤ i), show i + (n + 1) - 1 = i + n from by omega]
+  | bool => intro n c k a _ _; rfl
+  | tt => intro n c k a _ _; rfl
+  | ff => intro n c k a _ _; rfl
+  | ite cnd t e ihc iht ihe =>
+    intro n c k a hck hkn
+    simp only [shiftBy, subst, ihc n c k a hck hkn, iht n c k a hck hkn, ihe n c k a hck hkn]
+  | pi rho dom cod ihdom ihcod =>
+    intro n c k a hck hkn
+    simp only [shiftBy, subst, ihdom n c k a hck hkn,
+      ihcod n (c + 1) (k + 1) (shiftAbove 0 a) (by omega) (by omega)]
+  | lam body ih =>
+    intro n c k a hck hkn
+    simp only [shiftBy, subst, ih n (c + 1) (k + 1) (shiftAbove 0 a) (by omega) (by omega)]
+  | app f a' ihf iha =>
+    intro n c k a hck hkn
+    simp only [shiftBy, subst, ihf n c k a hck hkn, iha n c k a hck hkn]
+
+theorem subst_shiftBy_succ_cancel (e : Expr) (m k : Nat) (a : Expr) (hk : k < m + 1) :
+    subst k a (shiftBy (m + 1) 0 e) = shiftBy m 0 e :=
+  subst_shift_absorb e m 0 k a (Nat.zero_le k) (by omega)
+
+theorem subst_ctxGet_senior {Γ : List Expr} {i : Nat} {A : Expr} (h : ctxGet Γ i = some A)
+    {k : Nat} (a : Expr) (hk : k ≤ i) : subst k a (shiftAbove 0 A) = A := by
+  obtain ⟨B, hB⟩ := ctxGet_image h
+  subst hB
+  show subst k a (shiftBy 1 0 (shiftBy (i + 1) 0 B)) = shiftBy (i + 1) 0 B
+  rw [shiftBy_shiftBy_add B 1 (i + 1) 0]
+  have he := subst_shiftBy_succ_cancel B (i + 1) k a (by omega)
+  rw [show (1 : Nat) + (i + 1) = (i + 1) + 1 from by omega]
+  exact he
+
+theorem ambient_zero_usage {Γ : List Expr} {e A : Expr} {σ : Grade} {φ : Usage}
+    (h : HasType Γ e A σ φ) : σ = Grade.zero → φ = Usage.zero Γ.length := by
+  induction h with
+  | var => intro hσ; subst hσ; exact Usage.unit_zero _ _
+  | lam _ _ ih =>
+    intro hσ
+    have htail := ih hσ
+    injection htail with _ ht
+  | app hf ha ihf iha =>
+    intro hσ
+    subst hσ
+    have hfz := ihf rfl
+    have haz := iha rfl
+    simp only [hfz, haz, Usage.add_zero_zero]
+  | tt => intro _; rfl
+  | ff => intro _; rfl
+  | ite _ _ _ ihc iht ihe =>
+    intro hσ
+    subst hσ
+    simp only [ihc rfl, iht rfl, ihe rfl, Usage.add_zero_zero]
+
+theorem demote {Γ : List Expr} {e A : Expr} {σ : Grade} {φ : Usage}
+    (h : HasType Γ e A σ φ) :
+    ∀ {σ' : Grade}, σ' ≤ σ → ∃ φ', HasType Γ e A σ' φ' ∧ Usage.Le φ' φ := by
+  induction h with
+  | @var Γ i A σ hlk =>
+    intro σ' hσ'
+    exact ⟨Usage.unit i Γ.length σ', HasType.var hlk, Usage.unit_le hσ'⟩
+  | @lam Γ body ρ σ δ A B rest hbody hle ihbody =>
+    intro σ' hσ'
+    obtain ⟨φ', hφ', hLe⟩ := ihbody hσ'
+    have hlen : φ'.length = (A :: Γ).length := HasType.usage_length hφ'
+    obtain ⟨δ', rest', hφ'eq⟩ : ∃ δ' rest', φ' = δ' :: rest' := by
+      cases φ' with
+      | nil => simp at hlen
+      | cons x xs => exact ⟨x, xs, rfl⟩
+    subst hφ'eq
+    obtain ⟨hδδ, hrestrest⟩ := hLe
+    exact ⟨rest', HasType.lam hφ' (Grade.le_trans hδδ hle), hrestrest⟩
+  | @app Γ f a ρ σ A B φf φa hf ha ihf iha =>
+    intro σ' hσ'
+    obtain ⟨φf', hφf', hlef⟩ := ihf hσ'
+    obtain ⟨φa', hφa', hlea⟩ := iha (Grade.mul_mono_left hσ' ρ)
+    exact ⟨Usage.add φf' φa', HasType.app hφf' hφa', Usage.add_mono hlef hlea⟩
+  | @tt Γ σ =>
+    intro σ' _
+    exact ⟨Usage.zero Γ.length, HasType.tt, Usage.le_refl _⟩
+  | @ff Γ σ =>
+    intro σ' _
+    exact ⟨Usage.zero Γ.length, HasType.ff, Usage.le_refl _⟩
+  | @ite Γ cnd t e σ A φc φt φe hc ht he ihc iht ihe =>
+    intro σ' hσ'
+    obtain ⟨φc', hφc', hlec⟩ := ihc hσ'
+    obtain ⟨φt', hφt', hlet⟩ := iht hσ'
+    obtain ⟨φe', hφe', hlee⟩ := ihe hσ'
+    exact ⟨Usage.add φc' (Usage.add φt' φe'), HasType.ite hφc' hφt' hφe',
+      Usage.add_mono hlec (Usage.add_mono hlet hlee)⟩
+
+theorem demote_scaled {Γ : List Expr} {e A : Expr} {σ : Grade} {φ : Usage}
+    (h : HasType Γ e A σ φ) {σ' : Grade} (hσ' : σ' ≤ σ) :
+    ∃ φ', HasType Γ e A σ' φ' ∧ Usage.Le φ' (Usage.scale σ' φ) := by
+  obtain ⟨φ', hφ', hLe⟩ := demote h hσ'
+  cases σ' with
+  | zero =>
+    have hz : φ' = Usage.zero Γ.length := ambient_zero_usage hφ' rfl
+    subst hz
+    refine ⟨Usage.zero Γ.length, hφ', ?_⟩
+    rw [Usage.scale_zero, HasType.usage_length h]
+    exact Usage.le_refl _
+  | one =>
+    refine ⟨φ', hφ', ?_⟩
+    rwa [Usage.scale_one]
+  | omega =>
+    exact ⟨φ', hφ', Usage.le_trans hLe (Usage.le_scale_omega φ)⟩
+
+-- ============ append/telescope context algebra ============
+
+theorem shiftBy_zero (e : Expr) : ∀ (c : Nat), shiftBy 0 c e = e := by
+  induction e with
+  | var i =>
+    intro c
+    by_cases h : i < c
+    · rw [shiftBy_var_lt h]
+    · rw [shiftBy_var_ge (by omega : c ≤ i), Nat.add_zero]
+  | bool => intro c; rfl
+  | tt => intro c; rfl
+  | ff => intro c; rfl
+  | ite cnd t e ihc iht ihe => intro c; simp only [shiftBy, ihc, iht, ihe]
+  | pi rho dom cod ihd ihc => intro c; simp only [shiftBy, ihd, ihc]
+  | lam body ih => intro c; simp only [shiftBy, ih]
+  | app f a ihf iha => intro c; simp only [shiftBy, ihf, iha]
+
+theorem ctxGet_append_lt : ∀ (Δ : List Expr) (L : List Expr) {i : Nat}, i < Δ.length →
+    ctxGet (Δ ++ L) i = ctxGet Δ i := by
+  intro Δ
+  induction Δ with
+  | nil => intro L i h; simp at h
+  | cons D Δ' ih =>
+    intro L i h
+    cases i with
+    | zero => rfl
+    | succ n =>
+      simp only [List.cons_append]
+      show (ctxGet (Δ' ++ L) n).map (shiftAbove 0) = (ctxGet Δ' n).map (shiftAbove 0)
+      rw [ih L (by simp only [List.length_cons] at h; omega)]
+
+theorem ctxGet_append_eq : ∀ (Δ : List Expr) (A' : Expr) (L : List Expr),
+    ctxGet (Δ ++ A' :: L) Δ.length = some (shiftBy (Δ.length + 1) 0 A') := by
+  intro Δ
+  induction Δ with
+  | nil => intro A' L; rfl
+  | cons D Δ' ih =>
+    intro A' L
+    show (ctxGet (Δ' ++ A' :: L) Δ'.length).map (shiftAbove 0)
+      = some (shiftBy (Δ'.length + 1 + 1) 0 A')
+    rw [ih A' L]
+    show some (shiftBy 1 0 (shiftBy (Δ'.length + 1) 0 A')) = some (shiftBy (Δ'.length + 1 + 1) 0 A')
+    rw [shiftBy_shiftBy_add A' 1 (Δ'.length + 1) 0, show (1 : Nat) + (Δ'.length + 1) = Δ'.length + 1 + 1 from by omega]
+
+theorem ctxGet_append_gt : ∀ (Δ : List Expr) (A' : Expr) (L : List Expr) {i : Nat}, i ≥ Δ.length →
+    ctxGet (Δ ++ A' :: L) (i + 1) = (ctxGet L (i - Δ.length)).map (shiftBy (Δ.length + 1) 0) := by
+  intro Δ
+  induction Δ with
+  | nil =>
+    intro A' L i h
+    show (ctxGet L i).map (shiftAbove 0) = (ctxGet L (i - 0)).map (shiftBy (0 + 1) 0)
+    rw [Nat.sub_zero]
+    rfl
+  | cons D Δ' ih =>
+    intro A' L i h
+    cases i with
+    | zero => simp only [List.length_cons] at h; omega
+    | succ n =>
+      show (ctxGet (Δ' ++ A' :: L) (n + 1)).map (shiftAbove 0)
+        = (ctxGet L (n + 1 - (Δ'.length + 1))).map (shiftBy (Δ'.length + 1 + 1) 0)
+      rw [ih A' L (by simp only [List.length_cons] at h; omega)]
+      rw [Option.map_map]
+      show (ctxGet L (n - Δ'.length)).map (shiftBy 1 0 ∘ shiftBy (Δ'.length + 1) 0)
+        = (ctxGet L (n + 1 - (Δ'.length + 1))).map (shiftBy (Δ'.length + 1 + 1) 0)
+      rw [show n + 1 - (Δ'.length + 1) = n - Δ'.length from by omega]
+      congr 1
+      funext e
+      show shiftBy 1 0 (shiftBy (Δ'.length + 1) 0 e) = shiftBy (Δ'.length + 1 + 1) 0 e
+      rw [shiftBy_shiftBy_add e 1 (Δ'.length + 1) 0, show (1 : Nat) + (Δ'.length + 1) = Δ'.length + 1 + 1 from by omega]
+
+theorem ctxGet_append_ge : ∀ (Θ : List Expr) (Γ : List Expr) {i : Nat}, i ≥ Θ.length →
+    ctxGet (Θ ++ Γ) i = (ctxGet Γ (i - Θ.length)).map (shiftBy Θ.length 0) := by
+  intro Θ
+  induction Θ with
+  | nil =>
+    intro Γ i _
+    show ctxGet Γ i = (ctxGet Γ (i - 0)).map (shiftBy 0 0)
+    rw [Nat.sub_zero]
+    cases hg : ctxGet Γ i with
+    | none => rfl
+    | some A => show some A = some (shiftBy 0 0 A); rw [shiftBy_zero A 0]
+  | cons D Θ' ih =>
+    intro Γ i h
+    cases i with
+    | zero => simp only [List.length_cons] at h; omega
+    | succ n =>
+      show (ctxGet (Θ' ++ Γ) n).map (shiftAbove 0)
+        = (ctxGet Γ (n + 1 - (Θ'.length + 1))).map (shiftBy (Θ'.length + 1) 0)
+      rw [ih Γ (by simp only [List.length_cons] at h; omega), Option.map_map,
+        show n + 1 - (Θ'.length + 1) = n - Θ'.length from by omega]
+      congr 1
+      funext e
+      show shiftBy 1 0 (shiftBy Θ'.length 0 e) = shiftBy (Θ'.length + 1) 0 e
+      rw [shiftBy_shiftBy_add e 1 Θ'.length 0, show (1 : Nat) + Θ'.length = Θ'.length + 1 from by omega]
+
+def substTele (a : Expr) : List Expr → List Expr
+  | [] => []
+  | D :: Δ' => subst Δ'.length (shiftBy Δ'.length 0 a) D :: substTele a Δ'
+
+theorem substTele_length (a : Expr) (Δ : List Expr) : (substTele a Δ).length = Δ.length := by
+  induction Δ with
+  | nil => rfl
+  | cons D Δ' ih => simp only [substTele, List.length_cons, ih]
+
+theorem shift0_subst_comm (m : Nat) (a e : Expr) :
+    shiftAbove 0 (subst m (shiftBy m 0 a) e) = subst (m + 1) (shiftBy (m + 1) 0 a) (shiftAbove 0 e) := by
+  show shiftBy 1 0 (subst m (shiftBy m 0 a) e) = subst (m + 1) (shiftBy (m + 1) 0 a) (shiftBy 1 0 e)
+  rw [shiftBy_subst_ge e 1 0 m (shiftBy m 0 a) (Nat.zero_le m),
+    shiftBy_shiftBy_add a 1 m 0, show (1 : Nat) + m = m + 1 from by omega]
+
+theorem ctxGet_substTele : ∀ (a : Expr) (Δ : List Expr) {i : Nat}, i < Δ.length →
+    ctxGet (substTele a Δ) i = (ctxGet Δ i).map (subst Δ.length (shiftBy Δ.length 0 a)) := by
+  intro a Δ
+  induction Δ with
+  | nil => intro i h; simp at h
+  | cons D Δ' ih =>
+    intro i h
+    cases i with
+    | zero =>
+      show some (shiftAbove 0 (subst Δ'.length (shiftBy Δ'.length 0 a) D))
+        = (some (shiftAbove 0 D)).map (subst (Δ'.length + 1) (shiftBy (Δ'.length + 1) 0 a))
+      rw [Option.map_some]
+      congr 1
+      exact shift0_subst_comm Δ'.length a D
+    | succ n =>
+      show (ctxGet (substTele a Δ') n).map (shiftAbove 0)
+        = ((ctxGet Δ' n).map (shiftAbove 0)).map (subst (Δ'.length + 1) (shiftBy (Δ'.length + 1) 0 a))
+      rw [ih (by simp only [List.length_cons] at h; omega)]
+      rw [Option.map_map, Option.map_map]
+      congr 1
+      funext e
+      show shiftAbove 0 (subst Δ'.length (shiftBy Δ'.length 0 a) e)
+        = subst (Δ'.length + 1) (shiftBy (Δ'.length + 1) 0 a) (shiftAbove 0 e)
+      exact shift0_subst_comm Δ'.length a e
+
+theorem weaken_prefix {Γ : List Expr} {e A : Expr} {σ : Grade} {φ : Usage}
+    (h : HasType Γ e A σ φ) : ∀ (Θ : List Expr),
+    ∃ φ', HasType (Θ ++ Γ) (shiftBy Θ.length 0 e) (shiftBy Θ.length 0 A) σ φ' ∧
+      (∀ j, j < Θ.length → φ'.get j = Grade.zero) := by
+  intro Θ
+  induction Θ with
+  | nil =>
+    refine ⟨φ, ?_, ?_⟩
+    · show HasType Γ (shiftBy 0 0 e) (shiftBy 0 0 A) σ φ
+      rw [shiftBy_zero e 0, shiftBy_zero A 0]
+      exact h
+    · intro j hj; simp at hj
+  | cons X Θ' ih =>
+    obtain ⟨φ', hφ', hzero⟩ := ih
+    have hw := HasType.weaken hφ' 0 X (Nat.zero_le _)
+    rw [ctxInsert_zero] at hw
+    refine ⟨insertUsage φ' 0, ?_, ?_⟩
+    · show HasType (X :: Θ' ++ Γ) (shiftBy (Θ'.length + 1) 0 e) (shiftBy (Θ'.length + 1) 0 A) σ (insertUsage φ' 0)
+      have hte : shiftAbove 0 (shiftBy Θ'.length 0 e) = shiftBy (Θ'.length + 1) 0 e := by
+        show shiftBy 1 0 (shiftBy Θ'.length 0 e) = shiftBy (Θ'.length + 1) 0 e
+        rw [shiftBy_shiftBy_add e 1 Θ'.length 0, show (1 : Nat) + Θ'.length = Θ'.length + 1 from by omega]
+      have hty : shiftAbove 0 (shiftBy Θ'.length 0 A) = shiftBy (Θ'.length + 1) 0 A := by
+        show shiftBy 1 0 (shiftBy Θ'.length 0 A) = shiftBy (Θ'.length + 1) 0 A
+        rw [shiftBy_shiftBy_add A 1 Θ'.length 0, show (1 : Nat) + Θ'.length = Θ'.length + 1 from by omega]
+      rw [← hte, ← hty]
+      exact hw
+    · intro j hj
+      rw [insertUsage_cons_zero]
+      cases j with
+      | zero => rfl
+      | succ n =>
+        show φ'.get n = Grade.zero
+        exact hzero n (by simp only [List.length_cons] at hj; omega)
+
+-- ============ the dependent substitution lemma (typing only) ============
+
+theorem subst_lemma_tele {A' : Expr} {Γ : List Expr} {a : Expr} {π : Grade} {φa : Usage}
+    (ha : HasType Γ a A' π φa) :
+    ∀ {Γ0 : List Expr} {e B : Expr} {σ : Grade} {φ : Usage}, HasType Γ0 e B σ φ →
+    ∀ {Δ : List Expr}, Γ0 = Δ ++ A' :: Γ → φ.get Δ.length ≤ π →
+    ∃ φ', HasType (substTele a Δ ++ Γ)
+      (subst Δ.length (shiftBy Δ.length 0 a) e)
+      (subst Δ.length (shiftBy Δ.length 0 a) B) σ φ' ∧
+      (∀ j, j < Δ.length → φ'.get j ≤ φ.get j) := by
+  intro Γ0 e B σ φ h
+  induction h with
+  | @var Γ0 i A σ hlk =>
+    intro Δ heq hget
+    subst heq
+    have hlen_full : i < (Δ ++ A' :: Γ).length := lookup_ctxGet_lt hlk
+    rcases Nat.lt_trichotomy i Δ.length with hik | hik | hik
+    · have hlkΔ : ctxGet Δ i = some A := by rw [← ctxGet_append_lt Δ (A' :: Γ) hik]; exact hlk
+      have hsub : subst Δ.length (shiftBy Δ.length 0 a) (var i) = var i :=
+        subst_var_lt hik _
+      have hlkT : ctxGet (substTele a Δ ++ Γ) i
+          = some (subst Δ.length (shiftBy Δ.length 0 a) A) := by
+        rw [ctxGet_append_lt (substTele a Δ) Γ (by rw [substTele_length]; exact hik),
+          ctxGet_substTele a Δ hik, hlkΔ]
+        rfl
+      rw [hsub]
+      have hilenT : i < (substTele a Δ ++ Γ).length := lookup_ctxGet_lt hlkT
+      refine ⟨Usage.unit i (substTele a Δ ++ Γ).length σ,
+        HasType.var (Γ := substTele a Δ ++ Γ) (i := i) (σ := σ) hlkT, ?_⟩
+      intro j hj
+      by_cases hji : i = j
+      · rw [← hji, Usage.get_unit_same i _ σ hilenT, Usage.get_unit_same i _ σ hlen_full]
+        exact Grade.le_refl _
+      · rw [Usage.get_unit_other i j _ σ hji, Usage.get_unit_other i j _ σ hji]
+        exact Grade.le_refl _
+    · subst hik
+      have hAeq : A = shiftBy (Δ.length + 1) 0 A' := by
+        have h1 := ctxGet_append_eq Δ A' Γ
+        rw [hlk] at h1
+        exact Option.some.inj h1
+      have hgetk : (Usage.unit Δ.length (Δ ++ A' :: Γ).length σ).get Δ.length = σ :=
+        Usage.get_unit_same Δ.length _ σ hlen_full
+      rw [hgetk] at hget
+      obtain ⟨φ', hφ', hLeσ⟩ := demote_scaled ha hget
+      obtain ⟨φ'', hφ'', hzero⟩ := weaken_prefix hφ' (substTele a Δ)
+      have hsubT : subst Δ.length (shiftBy Δ.length 0 a) (var Δ.length) = shiftBy Δ.length 0 a :=
+        subst_var_eq _ _
+      have hsubTy : subst Δ.length (shiftBy Δ.length 0 a) A = shiftBy Δ.length 0 A' := by
+        rw [hAeq]
+        exact subst_shift_absorb A' Δ.length 0 Δ.length (shiftBy Δ.length 0 a) (Nat.zero_le _) (by omega)
+      rw [substTele_length] at hφ''
+      rw [hsubT, hsubTy]
+      refine ⟨φ'', hφ'', ?_⟩
+      intro j hj
+      rw [hzero j (by rw [substTele_length]; exact hj)]
+      exact Grade.zero_le _
+    · obtain ⟨i', rfl⟩ : ∃ i', i = i' + 1 := ⟨i - 1, by omega⟩
+      have hge : Δ.length ≤ i' := by omega
+      rw [ctxGet_append_gt Δ A' Γ hge] at hlk
+      obtain ⟨A0, hA0, hAeq⟩ := Option.map_eq_some_iff.mp hlk
+      have hsub : subst Δ.length (shiftBy Δ.length 0 a) (var (i' + 1)) = var i' := by
+        rw [subst_var_gt (by omega : i' + 1 > Δ.length), Nat.add_sub_cancel]
+      have hsubTy : subst Δ.length (shiftBy Δ.length 0 a) A = shiftBy Δ.length 0 A0 := by
+        rw [← hAeq]
+        exact subst_shift_absorb A0 Δ.length 0 Δ.length (shiftBy Δ.length 0 a) (Nat.zero_le _) (by omega)
+      have hlkT : ctxGet (substTele a Δ ++ Γ) i' = some (shiftBy Δ.length 0 A0) := by
+        rw [ctxGet_append_ge (substTele a Δ) Γ (by rw [substTele_length]; exact hge),
+          substTele_length, hA0]
+        rfl
+      rw [hsub, hsubTy]
+      have hi'lenT : i' < (substTele a Δ ++ Γ).length := lookup_ctxGet_lt hlkT
+      refine ⟨Usage.unit i' (substTele a Δ ++ Γ).length σ,
+        HasType.var (Γ := substTele a Δ ++ Γ) (i := i') (σ := σ) hlkT, ?_⟩
+      intro j hj
+      rw [Usage.get_unit_other i' j _ σ (by omega : i' ≠ j),
+        Usage.get_unit_other (i' + 1) j _ σ (by omega : i' + 1 ≠ j)]
+      exact Grade.le_refl _
+  | @lam Γ0 body ρ σ δ A B rest hbody hle ihbody =>
+    intro Δ heq hget
+    subst heq
+    have heq2 : A :: (Δ ++ A' :: Γ) = (A :: Δ) ++ A' :: Γ := rfl
+    have hget' : Usage.get (δ :: rest) (A :: Δ).length ≤ π := by
+      show Usage.get (δ :: rest) (Δ.length + 1) ≤ π
+      exact hget
+    obtain ⟨φ', hφ', hbelow⟩ := ihbody (Δ := A :: Δ) heq2 hget'
+    have hLen : (A :: Δ).length = Δ.length + 1 := rfl
+    have hTele : substTele a (A :: Δ) = subst Δ.length (shiftBy Δ.length 0 a) A :: substTele a Δ := rfl
+    rw [hTele, hLen] at hφ'
+    rw [hLen] at hbelow
+    have hlen : φ'.length = (subst Δ.length (shiftBy Δ.length 0 a) A :: (substTele a Δ ++ Γ)).length :=
+      HasType.usage_length hφ'
+    obtain ⟨δ', rest', hφ'eq⟩ : ∃ δ' rest', φ' = δ' :: rest' := by
+      cases φ' with
+      | nil => simp at hlen
+      | cons x xs => exact ⟨x, xs, rfl⟩
+    subst hφ'eq
+    have hδδ : δ' ≤ δ := by
+      have := hbelow 0 (by omega)
+      exact this
+    have hshift : shiftAbove 0 (shiftBy Δ.length 0 a) = shiftBy (Δ.length + 1) 0 a := by
+      show shiftBy 1 0 (shiftBy Δ.length 0 a) = shiftBy (Δ.length + 1) 0 a
+      rw [shiftBy_shiftBy_add a 1 Δ.length 0, show (1 : Nat) + Δ.length = Δ.length + 1 from by omega]
+    have hlamR := HasType.lam hφ' (Grade.le_trans hδδ hle)
+    refine ⟨rest', ?_, ?_⟩
+    · show HasType (substTele a Δ ++ Γ)
+        (subst Δ.length (shiftBy Δ.length 0 a) (lam body))
+        (subst Δ.length (shiftBy Δ.length 0 a) (pi ρ A B)) σ rest'
+      show HasType (substTele a Δ ++ Γ)
+        (lam (subst (Δ.length + 1) (shiftAbove 0 (shiftBy Δ.length 0 a)) body))
+        (pi ρ (subst Δ.length (shiftBy Δ.length 0 a) A)
+          (subst (Δ.length + 1) (shiftAbove 0 (shiftBy Δ.length 0 a)) B)) σ rest'
+      rw [hshift]
+      exact hlamR
+    · intro j hj
+      have := hbelow (j + 1) (by omega)
+      exact this
+  | @app Γ0 f arg ρ σ A B φf φarg hf harg ihf iharg =>
+    intro Δ heq hget
+    subst heq
+    have hlenf : φf.length = (Δ ++ A' :: Γ).length := HasType.usage_length hf
+    have hlenarg : φarg.length = (Δ ++ A' :: Γ).length := HasType.usage_length harg
+    have hgetsum : (φf.get Δ.length).add (φarg.get Δ.length) ≤ π := by
+      have := hget
+      rwa [Usage.get_add (by rw [hlenf, hlenarg]) Δ.length] at this
+    have hgetf : φf.get Δ.length ≤ π := Grade.le_trans (Grade.self_le_add_left _ _) hgetsum
+    have hgetarg : φarg.get Δ.length ≤ π := Grade.le_trans (Grade.self_le_add_right _ _) hgetsum
+    obtain ⟨φf', hφf', hbelowf⟩ := ihf (Δ := Δ) rfl hgetf
+    obtain ⟨φarg', hφarg', hbelowarg⟩ := iharg (Δ := Δ) rfl hgetarg
+    have hshift : shiftAbove 0 (shiftBy Δ.length 0 a) = shiftBy (Δ.length + 1) 0 a := by
+      show shiftBy 1 0 (shiftBy Δ.length 0 a) = shiftBy (Δ.length + 1) 0 a
+      rw [shiftBy_shiftBy_add a 1 Δ.length 0, show (1 : Nat) + Δ.length = Δ.length + 1 from by omega]
+    have hpi : subst Δ.length (shiftBy Δ.length 0 a) (pi ρ A B)
+        = pi ρ (subst Δ.length (shiftBy Δ.length 0 a) A)
+            (subst (Δ.length + 1) (shiftBy (Δ.length + 1) 0 a) B) := by
+      show pi ρ (subst Δ.length (shiftBy Δ.length 0 a) A)
+          (subst (Δ.length + 1) (shiftAbove 0 (shiftBy Δ.length 0 a)) B)
+        = pi ρ (subst Δ.length (shiftBy Δ.length 0 a) A)
+            (subst (Δ.length + 1) (shiftBy (Δ.length + 1) 0 a) B)
+      rw [hshift]
+    rw [hpi] at hφf'
+    have htyeq : subst Δ.length (shiftBy Δ.length 0 a) (subst0 arg B)
+        = subst0 (subst Δ.length (shiftBy Δ.length 0 a) arg)
+            (subst (Δ.length + 1) (shiftBy (Δ.length + 1) 0 a) B) := by
+      show subst Δ.length (shiftBy Δ.length 0 a) (subst 0 arg B)
+        = subst 0 (subst Δ.length (shiftBy Δ.length 0 a) arg)
+            (subst (Δ.length + 1) (shiftBy (Δ.length + 1) 0 a) B)
+      rw [subst_subst_comm B Δ.length 0 (shiftBy Δ.length 0 a) arg (Nat.zero_le _)]
+      congr 1
+      show subst (Δ.length + 1) (shiftAbove 0 (shiftBy Δ.length 0 a)) B
+        = subst (Δ.length + 1) (shiftBy (Δ.length + 1) 0 a) B
+      rw [hshift]
+    refine ⟨Usage.add φf' φarg', ?_, ?_⟩
+    · show HasType (substTele a Δ ++ Γ)
+        (subst Δ.length (shiftBy Δ.length 0 a) (app f arg))
+        (subst Δ.length (shiftBy Δ.length 0 a) (subst0 arg B)) σ (Usage.add φf' φarg')
+      rw [htyeq]
+      show HasType (substTele a Δ ++ Γ)
+        (app (subst Δ.length (shiftBy Δ.length 0 a) f) (subst Δ.length (shiftBy Δ.length 0 a) arg))
+        (subst0 (subst Δ.length (shiftBy Δ.length 0 a) arg)
+          (subst (Δ.length + 1) (shiftBy (Δ.length + 1) 0 a) B)) σ (Usage.add φf' φarg')
+      exact HasType.app hφf' hφarg'
+    · intro j hj
+      rw [Usage.get_add (by rw [HasType.usage_length hφf', HasType.usage_length hφarg']) j,
+        Usage.get_add (by rw [hlenf, hlenarg]) j]
+      exact Grade.le_trans (Grade.add_mono_left (hbelowf j hj) _) (Grade.add_mono_right _ (hbelowarg j hj))
+  | @tt Γ0 σ =>
+    intro Δ heq hget
+    subst heq
+    refine ⟨Usage.zero (substTele a Δ ++ Γ).length, HasType.tt, ?_⟩
+    intro j hj
+    rw [Usage.get_zero (substTele a Δ ++ Γ).length j, Usage.get_zero (Δ ++ A' :: Γ).length j]
+    exact Grade.le_refl _
+  | @ff Γ0 σ =>
+    intro Δ heq hget
+    subst heq
+    refine ⟨Usage.zero (substTele a Δ ++ Γ).length, HasType.ff, ?_⟩
+    intro j hj
+    rw [Usage.get_zero (substTele a Δ ++ Γ).length j, Usage.get_zero (Δ ++ A' :: Γ).length j]
+    exact Grade.le_refl _
+  | @ite Γ0 cnd t el σ A φc φt φel hc ht hel ihc iht ihel =>
+    intro Δ heq hget
+    subst heq
+    have hlenc : φc.length = (Δ ++ A' :: Γ).length := HasType.usage_length hc
+    have hlent : φt.length = (Δ ++ A' :: Γ).length := HasType.usage_length ht
+    have hlenel : φel.length = (Δ ++ A' :: Γ).length := HasType.usage_length hel
+    have hlen_c_tel : φc.length = (Usage.add φt φel).length := by
+      rw [Usage.length_add, hlent, hlenel, Nat.min_self, hlenc]
+    have hlen_t_el : φt.length = φel.length := hlent.trans hlenel.symm
+    have hgetsum : (φc.get Δ.length).add ((φt.get Δ.length).add (φel.get Δ.length)) ≤ π := by
+      have h1 := hget
+      rw [Usage.get_add hlen_c_tel Δ.length, Usage.get_add hlen_t_el Δ.length] at h1
+      exact h1
+    have hgetc : φc.get Δ.length ≤ π := Grade.le_trans (Grade.self_le_add_left _ _) hgetsum
+    have hgettel : (φt.get Δ.length).add (φel.get Δ.length) ≤ π :=
+      Grade.le_trans (Grade.self_le_add_right _ _) hgetsum
+    have hgett : φt.get Δ.length ≤ π := Grade.le_trans (Grade.self_le_add_left _ _) hgettel
+    have hgetel : φel.get Δ.length ≤ π := Grade.le_trans (Grade.self_le_add_right _ _) hgettel
+    obtain ⟨φc', hφc', hbelowc⟩ := ihc (Δ := Δ) rfl hgetc
+    obtain ⟨φt', hφt', hbelowt⟩ := iht (Δ := Δ) rfl hgett
+    obtain ⟨φel', hφel', hbelowel⟩ := ihel (Δ := Δ) rfl hgetel
+    refine ⟨Usage.add φc' (Usage.add φt' φel'), ?_, ?_⟩
+    · show HasType (substTele a Δ ++ Γ)
+        (subst Δ.length (shiftBy Δ.length 0 a) (ite cnd t el))
+        (subst Δ.length (shiftBy Δ.length 0 a) A) σ (Usage.add φc' (Usage.add φt' φel'))
+      exact HasType.ite hφc' hφt' hφel'
+    · intro j hj
+      rw [Usage.get_add (by rw [HasType.usage_length hφc', Usage.length_add,
+            HasType.usage_length hφt', HasType.usage_length hφel', Nat.min_self]) j,
+        Usage.get_add (by rw [HasType.usage_length hφt', HasType.usage_length hφel']) j,
+        Usage.get_add hlen_c_tel j, Usage.get_add hlen_t_el j]
+      exact Grade.le_trans (Grade.add_mono_left (hbelowc j hj) _)
+        (Grade.add_mono_right _ (Grade.le_trans (Grade.add_mono_left (hbelowt j hj) _)
+          (Grade.add_mono_right _ (hbelowel j hj))))
+
+/-- The public dependent substitution lemma at the top (cut at position 0). -/
+theorem subst_lemma {A' : Expr} {Γ : List Expr} {a : Expr} {π : Grade} {φa : Usage}
+    (ha : HasType Γ a A' π φa) {e B : Expr} {σ : Grade} {φ : Usage}
+    (h : HasType (A' :: Γ) e B σ φ) (hget : φ.get 0 ≤ π) :
+    ∃ φ', HasType Γ (subst0 a e) (subst0 a B) σ φ' := by
+  have hb := subst_lemma_tele ha h (Δ := []) rfl (by simpa using hget)
+  obtain ⟨φ', hφ', _⟩ := hb
+  have hnil : substTele a [] ++ Γ = Γ := rfl
+  have hsa : shiftBy ([] : List Expr).length 0 a = a := by
+    show shiftBy 0 0 a = a; exact shiftBy_zero a 0
+  rw [hnil, hsa] at hφ'
+  exact ⟨φ', hφ'⟩
 
 end Dep
 end BlightMeta
