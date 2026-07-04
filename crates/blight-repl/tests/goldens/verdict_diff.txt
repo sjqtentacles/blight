@@ -1029,7 +1029,7 @@ GLOBAL spore.bl plus Ok
 FILE spore_codegen_meta.bl forms=33 declared=22 checked=11
 GLOBAL spore_codegen_meta.bl aeval Ok
 GLOBAL spore_codegen_meta.bl aeval-k Ok
-GLOBAL spore_codegen_meta.bl aeval-k-correct Rejected
+GLOBAL spore_codegen_meta.bl aeval-k-correct Ok
 GLOBAL spore_codegen_meta.bl and Ok
 GLOBAL spore_codegen_meta.bl anf-let Ok
 GLOBAL spore_codegen_meta.bl anf-let-subst Ok

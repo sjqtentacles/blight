@@ -148,7 +148,15 @@ pub fn eval(sig: &Signature, env: &Env, t: &RTerm) -> RValue {
         RTerm::Pair(a, b) => RValue::Pair(Rc::new(eval(sig, env, a)), Rc::new(eval(sig, env, b))),
         RTerm::Fst(p) => vfst(eval(sig, env, p)),
         RTerm::Snd(p) => vsnd(sig, eval(sig, env, p)),
-        RTerm::Ann(e, _ty) => eval(sig, env, e),
+        // Reflect a stuck result against its ascribed type so path boundaries (`@0`/`@1`) and
+        // η for functions/pairs fire on ascribed neutrals — mirroring the kernel's `Term::Ann`
+        // (`kernel/normalize.rs`). Dropping the annotation (the previous behavior) left a bare
+        // neutral stuck, making recheck falsely *Reject* proofs the kernel accepts (soundness
+        // audit 2026-07-03, R-P3).
+        RTerm::Ann(e, ty) => match eval(sig, env, e) {
+            RValue::Neutral(n) => reflect(sig, n, &eval(sig, env, ty)),
+            other => other,
+        },
         RTerm::Data(name, ps, is) => RValue::Data(
             name.clone(),
             Rc::new(ps.iter().map(|x| eval(sig, env, x)).collect()),
@@ -649,6 +657,54 @@ fn quote_interval(dlvl: usize, r: &RInterval) -> RInterval {
             Box::new(quote_interval(dlvl, &b)),
         ),
         RInterval::Neg(a) => RInterval::Neg(Box::new(quote_interval(dlvl, &a))),
+    }
+}
+
+#[cfg(test)]
+mod rp3_tests {
+    use super::*;
+
+    /// R-P3 (soundness audit 2026-07-03): `eval` must reflect an ascribed neutral against its
+    /// type so path boundaries fire — `(the (Path A x y) <stuck>) @ 0` reduces to `x`, mirroring
+    /// the kernel (`kernel/normalize.rs` `Term::Ann`). Before the fix, recheck's `Ann` arm dropped
+    /// the annotation, leaving a bare neutral whose `@ 0` stayed stuck — a spurious mismatch that
+    /// made recheck falsely *Reject* proofs the kernel accepts (`flat_esc`, `spore_codegen_meta`).
+    #[test]
+    fn ann_reflects_path_neutral_so_boundary_fires() {
+        let sig = Signature::empty();
+        // Bind de Bruijn 0 to a stuck neutral variable.
+        let env = Env::new().extend(RValue::Neutral(Neutral::Var(0)));
+        // `(the (PathP (_.Univ0) (Univ 3) (Univ 7)) x0) @ 0`
+        let path_ty = RTerm::PathP {
+            family: Box::new(RTerm::Univ(0)),
+            lhs: Box::new(RTerm::Univ(3)),
+            rhs: Box::new(RTerm::Univ(7)),
+        };
+        let term = RTerm::PApp(
+            Box::new(RTerm::Ann(Box::new(RTerm::Var(0)), Box::new(path_ty))),
+            RInterval::I0,
+        );
+        assert!(
+            matches!(eval(&sig, &env, &term), RValue::Univ(3)),
+            "@0 through an ascribed path neutral must reduce to lhs (Univ 3)"
+        );
+    }
+
+    /// The `@ 1` twin: the same ascription reduces to `rhs`.
+    #[test]
+    fn ann_reflects_path_neutral_rhs_boundary() {
+        let sig = Signature::empty();
+        let env = Env::new().extend(RValue::Neutral(Neutral::Var(0)));
+        let path_ty = RTerm::PathP {
+            family: Box::new(RTerm::Univ(0)),
+            lhs: Box::new(RTerm::Univ(3)),
+            rhs: Box::new(RTerm::Univ(7)),
+        };
+        let term = RTerm::PApp(
+            Box::new(RTerm::Ann(Box::new(RTerm::Var(0)), Box::new(path_ty))),
+            RInterval::I1,
+        );
+        assert!(matches!(eval(&sig, &env, &term), RValue::Univ(7)));
     }
 }
 

@@ -82,11 +82,18 @@ bugs (R-P1…R-P5) remain — each false-`Ok` is fatal, so they are the next pri
   on a malformed-`Data` term the kernel rejects (false-`Ok`). Fix: port the kernel's arity +
   type checks.
 
-- [ ] **R-P3 — `eval` of `Ann` drops the annotation without reflecting stuck neutrals**
-  (`recheck/normalize.rs:151`). The kernel reflects an `Ann`'d neutral against its type so path
-  boundaries / η fire; recheck leaves it stuck → spurious `Rejected` (this is plausibly the same
-  family as the pinned flat_esc / spore false-`Rejected`). Fix: reflect the neutral, mirroring
-  `kernel/normalize.rs:281`.
+- [x] **R-P3 — `eval` of `Ann` drops the annotation without reflecting stuck neutrals**
+  (`recheck/normalize.rs:151`). *Fixed 2026-07-03:* the `Ann` arm now reflects a neutral result
+  against its type (mirrors `kernel/normalize.rs:281`), so path `@0`/`@1` boundaries and function/
+  pair η fire on ascribed neutrals. Red pins (`ann_reflects_path_neutral_*`). **Closed ONE of the
+  two pinned false-`Rejected` verdicts: `spore_codegen_meta.bl aeval-k-correct Rejected → Ok`**
+  (the "trans-chain rhs boundary" case). Verdict golden re-blessed — exactly that one line changed
+  (diff-reviewed: no `Ok→Rejected` regression). Differential + proptest harnesses still green
+  (kernel-accept ⇒ recheck agrees/declines).
+  **NOTE — flat_esc.bl::main did NOT flip** (still `Rejected`): its "nested Pair-match inference"
+  failure has a *different* root cause than Ann-reflection. Needs separate investigation (likely an
+  inference/`from_kernel`/match-compilation issue, not eval reflection). Tracked as a follow-up
+  below.
 
 - [ ] **R-P4 — `transp_pi` codomain line uses constant `x1` instead of the transport fill**
   (`recheck/kan.rs:105`); **R-P5 — `transp_sigma` uses source `a0` instead of the fill**
