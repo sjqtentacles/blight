@@ -424,6 +424,28 @@ fn rename_at(
     }
 }
 
+// ---- E8: formatting + completion (red stubs — see docs/roadmap-v0.1.md §E8) -------------------
+
+/// Full-document formatting via the shared `blight_elab::format_source` (the same canonicalizer
+/// behind `blight fmt` and the fmt_corpus idempotence/semantics gate). Contract, pinned by
+/// `lsp_formatting_returns_fmt_output`: `None` when the buffer is lexically malformed (the
+/// formatter never guesses at text it cannot re-read), an empty vec when the buffer is already
+/// canonical, and exactly one whole-document `TextEdit` otherwise.
+#[allow(dead_code)] // E8 red stub — the green flip wires this into handle_request and drops the allow.
+fn formatting_edits(_doc: &DocState) -> Option<Vec<TextEdit>> {
+    None
+}
+
+/// Completion candidates at `offset` (E8). Three sources, pinned by
+/// `completion_lists_globals_and_keywords` / `completion_lists_std_modules_after_load`: the
+/// buffer's indexed globals/constructors/effect-ops (`doc.definitions`), the surface keyword
+/// set, and — when `offset` sits inside a `(load "` string literal — the embedded std module
+/// paths *instead* (keywords are noise inside a path string).
+#[allow(dead_code)] // E8 red stub — the green flip wires this into handle_request and drops the allow.
+fn completions_at(_doc: &DocState, _offset: usize) -> Vec<lsp_types::CompletionItem> {
+    Vec::new()
+}
+
 // ---- LSP position <-> byte-offset conversion (UTF-16, per the LSP default encoding) -----------
 //
 // This is deliberately separate from `blight_elab::diagnostic`'s char-counting `line_col` (which
@@ -794,5 +816,70 @@ mod tests {
         let pos = offset_to_position(text, newline + 1 + 8); // into "(define y" on line 2
         assert_eq!(pos.line, 1);
         assert_eq!(position_to_offset(text, pos), newline + 1 + 8);
+    }
+
+    // ---- E8 red: formatter + completion acceptance (un-ignore at the green flip) -------------
+
+    #[test]
+    #[ignore = "E8 red: LSP formatting not wired yet — un-ignore at the green flip"]
+    fn lsp_formatting_returns_fmt_output() {
+        let messy = "(  define a   1 )\n(define b 2)\n";
+        let doc = analyze(messy, Path::new("."));
+        let edits = formatting_edits(&doc).expect("a lexically well-formed buffer formats");
+        let expected =
+            blight_elab::format_source(messy).expect("the formatter accepts the buffer");
+        assert_eq!(edits.len(), 1, "one whole-document edit: {edits:?}");
+        assert_eq!(edits[0].new_text, expected);
+        assert_eq!(edits[0].range.start, Position::new(0, 0));
+        // Already-canonical text: an empty edit list, not a no-op whole-document rewrite (which
+        // would churn editor undo history on every format-on-save).
+        let canonical = analyze(&expected, Path::new("."));
+        assert!(
+            formatting_edits(&canonical)
+                .expect("canonical text still formats")
+                .is_empty(),
+            "canonical text needs no edits"
+        );
+        // Lexically malformed text: no edits at all — never rewrite what cannot be re-read.
+        let broken = analyze("(define a", Path::new("."));
+        assert!(formatting_edits(&broken).is_none());
+    }
+
+    #[test]
+    #[ignore = "E8 red: completion not implemented yet — un-ignore at the green flip"]
+    fn completion_lists_globals_and_keywords() {
+        let src = "(defdata Nat () (Zero) (Succ (n Nat)))\n\
+                   (define plus-two (the Nat Zero))\n";
+        let doc = analyze(src, Path::new("."));
+        let items = completions_at(&doc, src.len());
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        // One representative per candidate class: a `define`d global, a constructor, the type
+        // head, and surface keywords.
+        for expected in ["plus-two", "Succ", "Nat", "define", "lam"] {
+            assert!(
+                labels.contains(&expected),
+                "completion offers `{expected}`; got {labels:?}"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "E8 red: load-path completion not implemented yet — un-ignore at the green flip"]
+    fn completion_lists_std_modules_after_load() {
+        // The buffer is mid-keystroke (unterminated string), so `doc.definitions` is empty —
+        // the `(load "` context must be detected lexically from the text before the cursor.
+        let src = "(load \"";
+        let doc = analyze(src, Path::new("."));
+        let items = completions_at(&doc, src.len());
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(
+            labels.contains(&"std/nat.bl"),
+            "load-string completion offers the embedded std modules; got {labels:?}"
+        );
+        // Inside the load string, bare keywords are noise — the paths must not drown in them.
+        assert!(
+            !labels.contains(&"define"),
+            "no keyword candidates inside a load string: {labels:?}"
+        );
     }
 }

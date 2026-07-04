@@ -1069,6 +1069,30 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "(define a 1)\n");
     }
 
+    /// E8 pin: the single-file in-place path is a fixpoint — a second run rewrites nothing and
+    /// `--check` agrees. (The write path itself is covered above; the idempotence half is what
+    /// the roadmap's E8 red list names.)
+    #[test]
+    fn blight_fmt_rewrites_file_in_place_idempotently() {
+        let dir = TempDir::new("fmt_idempotent");
+        let file = dir.path.join("a.bl");
+        std::fs::write(&file, "(  define a   1 )\n").unwrap();
+        run_fmt(&[file.display().to_string()]).expect("first pass formats");
+        let canonical = std::fs::read_to_string(&file).unwrap();
+        let msg = run_fmt(&[file.display().to_string()]).expect("second pass runs");
+        assert!(
+            msg.contains("formatted 0 of 1"),
+            "second pass must rewrite nothing: {msg}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            canonical,
+            "file bytes unchanged by the second pass"
+        );
+        run_fmt(&["--check".to_string(), file.display().to_string()])
+            .expect("--check agrees the file is canonical");
+    }
+
     #[test]
     fn run_fmt_check_does_not_write_and_fails_on_unformatted_input() {
         let dir = TempDir::new("fmt_check_fail");
