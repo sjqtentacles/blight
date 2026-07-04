@@ -101,8 +101,9 @@ runs). General *file* I/O beyond stdin/stdout is still future. The design that l
 
 Why the **re-checker declines** (rather than rejects) a *cubical or foreign* `main`, while it now
 **checks effectful programs at the type level**: the independent re-checker re-derives the types of
-`perform`/`handle`/`! E A` (consulting the kernel's operation signatures) but does not track effect
-rows or continuation grades — so an effectful program is a genuine second opinion at the type level
+`perform`/`handle`/`! E A` (consulting the kernel's operation signatures), independently re-derives
+the effect row, and enforces the continuation multiplicity (resuming above the operation's
+`cont_grade` is `Rejected`) — so an effectful program is a genuine second opinion at the type level
 (**Checked**), and only the truly out-of-fragment forms (cubical `Glue`/`ua`/partial elements,
 `foreign` postulates, universe-level variables) are **Declined**. Declining ≠ accepting a falsehood, which is exactly what
 `effects_demo.bl` documents. The headline: **I/O is a library + a runtime handler, not a kernel

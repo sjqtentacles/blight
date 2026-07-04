@@ -251,9 +251,11 @@ probe before being accepted as sound, rather than assuming the negative result t
 (`from_kernel_declines_pcon`, `crates/blight-recheck/src/term.rs`) — the same honest-refusal
 discipline as `Glue`/`Partial`/`System` in Track M7, chosen because the re-checker has no
 independent model of a HIT's boundary equations (those live only in the kernel's `Signature`) to
-re-derive them from. Since Wave 7/E4 tracks usage/grades in the *kernel* alone (the re-checker
-already does not model continuation grades or effect rows either — see its module doc), this decline
-is the correct parity story: an honest refusal, never a silent pass.
+re-derive them from. Unlike effect rows and continuation grades — which the re-checker *does*
+independently re-derive and enforce (`typecheck.rs`: it re-derives the effect row and Rejects a
+handler clause that resumes above the operation's `cont_grade`) — a HIT's boundary equations have no
+independent re-derivation available to the re-checker, so this decline is the correct parity story:
+an honest refusal, never a silent pass.
 
 ### 1.4 Univalence (`ua`) via `Glue`, and the deliberately-deferred polymorphic computation rule
 
@@ -536,9 +538,14 @@ document, evidence from *measured kernel behavior* — a real but informal stand
 independent, machine-checked witness on top: a from-scratch Lean 4 development
 ([`mechanization/`](../mechanization)) of the QTT resource semiring and a graded simply-typed core,
 proving weakening and — the harder of the two classical preservation lemmas — **substitution**, with
-zero `sorry`. It is scoped to a non-cubical fragment (no Kan operations yet) and does not attempt
-SN/canonicity for the full fused theory; see [docs/metatheory-mechanized.md](metatheory-mechanized.md)
-for the exact scope, the per-lemma correspondence to the kernel tests above, and what remains open.
+zero `sorry`. It now reaches well beyond that STLC core: the **constant-family cubical Kan fragment**
+(`transp`/`hcomp`, M5), a **strong-normalization + canonicity** proof for the `Bool`/`Π` +
+constant-family-Kan fragment (a Tait reducibility argument, M8), a **bona-fide dependent-`Π`** core
+(M9), and the **graded effect-row discharge** for `perform`/`handle` (M10). What it does *not* attempt
+is SN/canonicity for the *full fused theory*: the fully heterogeneous cubical corner
+(`PathP`/`Glue`/dimension-varying type lines) and dependent `Σ` remain outside the mechanized
+fragment. See [docs/metatheory-mechanized.md](metatheory-mechanized.md) for the exact scope, the
+per-lemma correspondence to the kernel tests above, and what remains open.
 
 ## Cross-references
 

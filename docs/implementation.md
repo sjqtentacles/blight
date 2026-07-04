@@ -779,7 +779,7 @@ current honest coverage:
 | Cubical Kan (`Transp`/`HComp`/`Comp`) | ✅ checked | the re-checker now models the Kan table in its own value layer (`crates/blight-recheck/src/kan.rs`), independently of the kernel |
 | Native `Int` (`IntTy`/`IntLit`/`IntPrim`, M10) | ✅ checked | the re-checker models the primitive integer type and its operations directly (`int+`/`int*`/… are typed `Int → Int → Int`); `std/int.bl` wrappers and `int_arith.bl`/`int_sum.bl`/`calculator.bl` are all re-checker-accepted |
 | `Glue` / `ua` | ⛔ `Declined` (counted) | the univalence machinery is not modeled in the re-checker value layer |
-| Effects/handlers (`Op`/`Handle`/`EffTy`) | ✅ checked (type-level) | the re-checker re-derives the types of `perform`/`handle`/`! E A` from the signature; it does not track effect rows or continuation grades (the kernel's job) — so it offers a genuine second opinion at the type level rather than declining |
+| Effects/handlers (`Op`/`Handle`/`EffTy`) | ✅ checked (type-level) | the re-checker re-derives the types of `perform`/`handle`/`! E A` from the signature, **independently re-derives the effect row** (and requires a top-level proof's row to be empty), and **enforces the continuation multiplicity** — resuming `k` above the operation's `cont_grade` is `Rejected`, mirroring the kernel (B2, `typecheck.rs`) — a genuine second opinion, not a decline |
 | Partiality (`Delay`/`Now`/`Later`/`Force`) | ✅ checked | a second, independent NbE over the delay layer with `force (now a) ⇝ a` and guarded `later`; the proof-boundary `Partial` discipline stays the kernel's job |
 
 `recheck_agrees_with_kernel_on_M0_M5` drives the M0-M6 corpus (Nat arithmetic, linear grades,

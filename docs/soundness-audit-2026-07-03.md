@@ -132,9 +132,21 @@ root cause, follow-up below).**
 ## Non-TCB (untrusted tooling / cleanup)
 
 The remaining confirmed findings and the full cleanup inventory (dead `pub fn`s, committed
-`.profraw`/`.vsix` artifacts, doc-drift in `implementation.md`/`roadmap.md`/`metatheory.md`/
-`README.md` overstating the re-checker's coverage) are lower priority and fed into the R4 docs
-truth pass. Doc-drift highlights: three docs claim the re-checker "does not track effect rows or
-continuation grades" — the code (recheck B2) does track and enforce both; README claims the Lean
-mechanization is "non-cubical / no SN-canonicity" — it now mechanizes the constant-family Kan
-fragment plus SN + canonicity.
+`.profraw`/`.vsix` artifacts) are lower priority.
+
+**Doc-drift — RESOLVED 2026-07-04** (verified against the code/Lean sources before rewriting, not
+blindly re-worded):
+- Three docs (`implementation.md:782`, `roadmap.md:104`, `metatheory.md:255`) claimed the re-checker
+  "does not track effect rows or continuation grades" — **false**: `recheck/typecheck.rs` re-derives
+  the effect row (and requires a top-level proof's row empty) *and* enforces the continuation
+  multiplicity (resuming above `cont_grade` is `Rejected`, B2, `typecheck.rs:625`). Corrected to state
+  what it actually does.
+- `README.md:387` + `metatheory.md:541` understated the Lean mechanization as a "non-cubical fragment
+  / no Kan / no SN-canonicity" — **false**: `Calculus.lean` mechanizes the constant-family Kan
+  fragment (`transp`/`hcomp`), `Reducibility.lean` proves SN + canonicity for that fragment (Tait,
+  closed `Bool`→`tt`/`ff`), `Dependent.lean` adds a dependent-`Π` core, `Effects.lean` the graded
+  effect-row discharge — all zero-`sorry`. Corrected to the true scope *and* the honest remaining gap
+  (fully heterogeneous cubical `PathP`/`Glue` + dependent `Σ` still out of the fragment).
+  `metatheory-mechanized.md` was already accurate — left unchanged.
+  A sweep confirmed no other copies of either stale claim remain (the `metatheory.md:541` instance was
+  *not* in the original bughunt list — the truth-pass sweep caught it).

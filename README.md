@@ -384,11 +384,16 @@ See the [milestone map](docs/implementation.md#7-milestone-map-m0m6), the
 
 - The *combination* of cubical + grading + effects in one kernel has no published end-to-end
   normalization proof; M0 soundness rests on the component results plus extensive testing (spec §10).
-  An external, machine-checked (Lean 4) mechanization of a scoped, non-cubical fragment — the QTT
-  grade semiring plus weakening and substitution for a graded simply-typed core, zero `sorry` — lives
-  in [`mechanization/`](mechanization) (see [docs/metatheory-mechanized.md](docs/metatheory-mechanized.md));
-  it is a genuine independent proof, not a restatement of the kernel's own checking, but it does not
-  yet cover the cubical layer or attempt full SN/canonicity.
+  An external, machine-checked (Lean 4) mechanization lives in [`mechanization/`](mechanization) (see
+  [docs/metatheory-mechanized.md](docs/metatheory-mechanized.md)), **zero `sorry`**: it covers the QTT
+  grade semiring, weakening + substitution for the graded core, the **constant-family cubical Kan
+  fragment** (`transp`/`hcomp`), a **strong-normalization + canonicity** proof for that fragment (a
+  Tait reducibility-candidates argument; a closed `Bool` reduces to `tt`/`ff`), and a separate
+  **bona-fide dependent-`Π` core** with weakening/substitution/progress/preservation. It is a genuine
+  independent proof, not a restatement of the kernel's own checking. What it does **not** yet cover,
+  honestly: the *fully heterogeneous* cubical corner — non-constant type lines, `PathP`, `Glue`/`ua` —
+  and dependent `Σ` (which needs a definitional-conversion relation as a prerequisite); those remain
+  outside the mechanized fragment.
 - The cubical layer ships `transp`/`hcomp`/`comp` and `Glue`/`unglue`. Both `funext` and `ua` are
   exported from [std/path.bl](crates/blight-prelude/std/path.bl): `funext` re-checks, and `ua` is
   built from a single-face `Glue` line. The univalence *computation* rule (`transp` over `ua e`
