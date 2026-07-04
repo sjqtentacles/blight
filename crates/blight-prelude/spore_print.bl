@@ -26,7 +26,7 @@
 ; `String`. Zero kernel growth.
 
 (load "spore_elab.bl")  ; BSurf, BSig, BTy (Base/Arr), belaborate, CNil
-(load "std/json.bl")    ; nat-to-string (decimal rendering; over the collapsed single `Nat` tower)
+(load "std/json.bl")  ; nat-to-string (decimal rendering; over the collapsed single `Nat` tower)
 (load "std/string_extra.bl")  ; string-concat over a List String (string-append transitively)
 
 ; Fold a list of strings into one (a thin alias so the printer reads as concatenation).
@@ -38,10 +38,9 @@
 ; `v` is fine, even when nested arrows shadow it.
 (deftotal bty-print (Pi ((a BTy)) String)
   (lam (a)
-    (match a
-      [(Base) "Base"]
-      [(Arr d c) (cat (cons "(Pi ((v " (cons (bty-print d)
-                        (cons ")) " (cons (bty-print c) (cons ")" nil))))))])))
+    (match a [(Base) "Base"]
+      [(Arr d c)
+        (cat (cons "(Pi ((v " (cons (bty-print d) (cons ")) " (cons (bty-print c) (cons ")" nil))))))])))
 
 ; ── Term embedding: ⟦BSurf⟧ at binding depth `d` ─────────────────────────────────────────────────────
 ; A `su-lam` at depth `d` binds the name `v<d>` and recurses at depth `d+1`; a `su-var i` at depth `d`
@@ -51,22 +50,21 @@
 (deftotal var-name (Pi ((d Nat) (i Nat)) String)
   (lam (d i) (cat (cons "v" (cons (nat-to-string (sub (sub d 1) i)) nil)))))
 
-(deftotal binder-name (Pi ((d Nat)) String)
-  (lam (d) (cat (cons "v" (cons (nat-to-string d) nil)))))
+(deftotal binder-name (Pi ((d Nat)) String) (lam (d) (cat (cons "v" (cons (nat-to-string d) nil)))))
 
 ; The scrutinee `s` is the FIRST parameter and the depth `d` a TRAILING accumulator: structural
 ; recursion fixes the leading parameters at their outer values but lets trailing ones vary through
 ; the induction hypothesis, so `d` can increment under a binder (the `std/lexer.bl` `scan-depth` shape).
 (define-rec bsurf-print (Pi ((s BSurf) (d Nat)) String)
   (lam (s d)
-    (match s
-      [(su-var i) (var-name d i)]
+    (match s [(su-var i) (var-name d i)]
       [(su-lam dom body)
-        (cat (cons "(lam (" (cons (binder-name d)
-              (cons ") " (cons (bsurf-print body (Succ d)) (cons ")" nil))))))]
+        (cat
+          (cons "(lam ("
+            (cons (binder-name d) (cons ") " (cons (bsurf-print body (Succ d)) (cons ")" nil))))))]
       [(su-app fn arg)
-        (cat (cons "(" (cons (bsurf-print fn d)
-              (cons " " (cons (bsurf-print arg d) (cons ")" nil))))))])))
+        (cat
+          (cons "(" (cons (bsurf-print fn d) (cons " " (cons (bsurf-print arg d) (cons ")" nil))))))])))
 
 ; ── The bridge payload for one source term ───────────────────────────────────────────────────────────
 ; The elaborator's verdict rendered as a checkable line: `ACCEPT (the ⟦a⟧ ⟦s⟧)` on success, `REJECT`
@@ -76,8 +74,9 @@
   (lam (s sig)
     (match sig
       [(bsig a tm)
-        (cat (cons "ACCEPT (the " (cons (bty-print a)
-              (cons " " (cons (bsurf-print s Zero) (cons ")" nil))))))])))
+        (cat
+          (cons "ACCEPT (the "
+            (cons (bty-print a) (cons " " (cons (bsurf-print s Zero) (cons ")" nil))))))])))
 
 (deftotal verdict-of (Pi ((s BSurf) (m (Maybe (BSig CNil)))) String)
   (lam (s m) (match m [(nothing) "REJECT"] [(just sig) (sig-payload s sig)])))
@@ -85,5 +84,6 @@
 ; `bridge-line idx s`: the full `BRIDGE <idx> <verdict>` line for source term `s`.
 (deftotal bridge-line (Pi ((idx Nat) (s BSurf)) String)
   (lam (idx s)
-    (cat (cons "BRIDGE " (cons (nat-to-string idx)
-          (cons " " (cons (verdict-of s (belaborate CNil s)) nil)))))))
+    (cat
+      (cons "BRIDGE "
+        (cons (nat-to-string idx) (cons " " (cons (verdict-of s (belaborate CNil s)) nil)))))))

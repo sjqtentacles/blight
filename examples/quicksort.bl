@@ -28,19 +28,15 @@
 
 ; Quicksort by its measure: sort the `< p` partition, the pivot, then the `>= p` partition. The two
 ; recursive calls are on `filter`-ed sublists (non-structural), certified total by the length bound.
-(deftotal qsort (Pi ((xs (List Nat))) (List Nat))
-  (measure (length xs))
-  (default xs)
+(deftotal qsort (Pi ((xs (List Nat))) (List Nat)) (measure (length xs)) (default xs)
   (lam (xs)
     (match xs [(nil) nil]
-      [(cons p rest)
-        (append (qsort (lesser p rest)) (cons p (qsort (greater-eq p rest))))])))
+      [(cons p rest) (append (qsort (lesser p rest)) (cons p (qsort (greater-eq p rest))))])))
 
 (deftotal head-or (Pi ((d Nat) (xs (List Nat))) Nat)
   (lam (d xs) (match xs [(nil) d] [(cons x rest) x])))
 
 ; [5, 3, 8, 1, 2, 7]
-(define input (List Nat)
-  (cons 5 (cons 3 (cons 8 (cons 1 (cons 2 (cons 7 nil)))))))
+(define input (List Nat) (cons 5 (cons 3 (cons 8 (cons 1 (cons 2 (cons 7 nil)))))))
 
 (define main Nat (head-or Zero (qsort input)))

@@ -21,8 +21,7 @@
 (define q Point (Point-with p (y 5)))
 
 ; Records are ordinary single-constructor inductives: match on them.
-(deftotal manhattan (Pi ((pt Point)) Nat)
-  (lam (pt) (match pt [(mk-Point a b) (plus a b)])))
+(deftotal manhattan (Pi ((pt Point)) Nat) (lam (pt) (match pt [(mk-Point a b) (plus a b)])))
 
 ; The kernel computes through all of it (certified by refl).
 (the (Path Nat (manhattan q) 8) (plam (i) 8))

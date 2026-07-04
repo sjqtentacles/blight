@@ -56,14 +56,12 @@
 ; `mk-pair` literal has no synthesizable type of its own (the `Con` case of `synth_type` requires a
 ; parameter-free datatype), so the `the`-ascription is what lets `A` be solved here.
 (define-by sra-beta-fst
-  (Pi ((A (Type 0)) (B (Type 0)) (a A) (b B))
-    (Path A (pair-fst B (the (Pair A B) (mk-pair a b))) a))
+  (Pi ((A (Type 0)) (B (Type 0)) (a A) (b B)) (Path A (pair-fst B (the (Pair A B) (mk-pair a b))) a))
   (intro A (intro B (intro a (intro b refl)))))
 
 ; Second-projection β: the symmetric law for `snd`. Same E2 ascription reasoning as `sra-beta-fst`.
 (define-by sra-beta-snd
-  (Pi ((A (Type 0)) (B (Type 0)) (a A) (b B))
-    (Path B (pair-snd A (the (Pair A B) (mk-pair a b))) b))
+  (Pi ((A (Type 0)) (B (Type 0)) (a A) (b B)) (Path B (pair-snd A (the (Pair A B) (mk-pair a b))) b))
   (intro A (intro B (intro a (intro b refl)))))
 
 ; =====================================================================================

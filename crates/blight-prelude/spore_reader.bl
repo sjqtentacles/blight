@@ -205,6 +205,4 @@
 ; actual blocker was `do_elim` eagerly computing *discarded* induction hypotheses (~2^codepoint
 ; steps per `nat-eq`; this refl used to die inside `is-lam-kw`'s first character comparison,
 ; `nat-eq(108,108)`). N5's dead-IH skip removed it; fuel was innocent all along (fuel = 11 here).
-(define-by reader-demo-refl
-  (Path (Maybe BSurf) (bsexp->bsurf reader-demo-sexp) (just demo-id))
-  refl)
+(define-by reader-demo-refl (Path (Maybe BSurf) (bsexp->bsurf reader-demo-sexp) (just demo-id)) refl)

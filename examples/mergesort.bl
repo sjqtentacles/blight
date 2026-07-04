@@ -34,29 +34,24 @@
       [(cons x xrest)
         (match ys [(nil) (cons x xrest)]
           [(cons y yrest)
-            (match (nat-le x y)
-              [(true) (cons x (merge xrest (cons y yrest)))]
+            (match (nat-le x y) [(true) (cons x (merge xrest (cons y yrest)))]
               [(false) (cons y (merge (cons x xrest) yrest))])])])))
 
 ; Merge sort: split at the midpoint, sort each half, merge. Each half is strictly shorter than a
 ; length-≥-2 input, so the recursion shrinks `|xs|` — the declared measure.
-(deftotal msort (Pi ((xs (List Nat))) (List Nat))
-  (measure (length xs))
-  (default xs)
+(deftotal msort (Pi ((xs (List Nat))) (List Nat)) (measure (length xs)) (default xs)
   (lam (xs)
     (match xs [(nil) nil]
       [(cons x rest)
         (match rest
           [(nil) (cons x nil)]  ; singleton: already sorted
           [(cons y more)
-            (merge (msort (take Nat (half (length xs)) xs))
-                   (msort (drop Nat (half (length xs)) xs)))])])))
+            (merge (msort (take Nat (half (length xs)) xs)) (msort (drop Nat (half (length xs)) xs)))])])))
 
 (deftotal head-or (Pi ((d Nat) (xs (List Nat))) Nat)
   (lam (d xs) (match xs [(nil) d] [(cons x rest) x])))
 
 ; [5, 3, 8, 1, 2, 7]
-(define input (List Nat)
-  (cons 5 (cons 3 (cons 8 (cons 1 (cons 2 (cons 7 nil)))))))
+(define input (List Nat) (cons 5 (cons 3 (cons 8 (cons 1 (cons 2 (cons 7 nil)))))))
 
 (define main Nat (head-or Zero (msort input)))

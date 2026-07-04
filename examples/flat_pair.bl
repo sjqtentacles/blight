@@ -24,7 +24,5 @@
 (define built (Pair (Pair Nat Nat) Nat) (mk-pair (mk-pair two three) one))
 
 (define main Nat
-  (plus
-    (plus (pair-fst Nat (pair-fst Nat built))
-      (pair-snd Nat (pair-fst Nat built)))
+  (plus (plus (pair-fst Nat (pair-fst Nat built)) (pair-snd Nat (pair-fst Nat built)))
     (pair-snd (Pair Nat Nat) built)))

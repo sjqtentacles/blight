@@ -13,12 +13,9 @@
 
 ; Subtractive Euclid: when `b` is zero, `a` is the gcd; otherwise reduce the larger of `a`/`b` by
 ; the smaller and recurse. Both recursive calls shrink `a + b`, the declared measure.
-(deftotal gcd (Pi ((a Nat) (b Nat)) Nat)
-  (measure (plus a b))
-  (default a)
+(deftotal gcd (Pi ((a Nat) (b Nat)) Nat) (measure (plus a b)) (default a)
   (lam (a b)
     (match b [(Zero) a]
-      [(Succ b1)
-        (match (nat-le a b) [(true) (gcd a (sub b a))] [(false) (gcd (sub a b) b)])])))
+      [(Succ b1) (match (nat-le a b) [(true) (gcd a (sub b a))] [(false) (gcd (sub a b) b)])])))
 
 (define main Nat (gcd 12 8))

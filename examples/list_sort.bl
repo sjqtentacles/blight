@@ -18,23 +18,19 @@
   (lam (t e b) (match b [(true) t] [(false) e])))
 
 ; Insert `x` into an already-sorted list, keeping it sorted (structural recursion on the spine).
-(defn insert (Pi ((x Nat) (xs (List Nat))) (List Nat))
-  [(x (nil)) (cons x nil)]
+(defn insert (Pi ((x Nat) (xs (List Nat))) (List Nat)) [(x (nil)) (cons x nil)]
   [(x (cons y rest))
     (list-nat-if
-      (cons x (cons y rest))    ; x <= y: x goes in front
+      (cons x (cons y rest))  ; x <= y: x goes in front
       (cons y (insert x rest))  ; x > y: keep y, recurse
       (nat-le x y))])
 
 ; Insertion sort: fold `insert` over the list.
-(defn isort (Pi ((xs (List Nat))) (List Nat))
-  [((nil)) nil]
+(defn isort (Pi ((xs (List Nat))) (List Nat)) [((nil)) nil]
   [((cons x rest)) (insert x (isort rest))])
 
 ; `head-or d` of a list: the head, or `d` when empty.
-(defn head-or (Pi ((d Nat) (xs (List Nat))) Nat)
-  [(d (nil)) d]
-  [(d (cons x rest)) x])
+(defn head-or (Pi ((d Nat) (xs (List Nat))) Nat) [(d (nil)) d] [(d (cons x rest)) x])
 
 (define input (List Nat) (cons 3 (cons 1 (cons 2 nil))))
 

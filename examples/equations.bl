@@ -13,14 +13,10 @@
 (load "std/list.bl")
 
 ; Structural addition, matching on the first argument (`a`); `b` rides along unchanged.
-(defn add (Pi ((a Nat) (b Nat)) Nat)
-  [((Zero) b) b]
-  [((Succ n) b) (Succ (add n b))])
+(defn add (Pi ((a Nat) (b Nat)) Nat) [((Zero) b) b] [((Succ n) b) (Succ (add n b))])
 
 ; Sum a list, matching on the (second) list argument; the recursion is on its tail.
-(defn sum (Pi ((xs (List Nat))) Nat)
-  [((nil)) Zero]
-  [((cons x rest)) (add x (sum rest))])
+(defn sum (Pi ((xs (List Nat))) Nat) [((nil)) Zero] [((cons x rest)) (add x (sum rest))])
 
 ; [1, 2, 3, 4] sums to 10.
 (define input (List Nat) (cons 1 (cons 2 (cons 3 (cons 4 nil)))))

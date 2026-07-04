@@ -66,7 +66,8 @@
   (lam (name passed) (mk-TestCase name passed)))
 
 ; ---- reporting ----------------------------------------------------------------------------------
-(deftotal case-passed (Pi ((c TestCase)) Bool) (lam (c) (match c [(mk-TestCase name passed) passed])))
+(deftotal case-passed (Pi ((c TestCase)) Bool)
+  (lam (c) (match c [(mk-TestCase name passed) passed])))
 
 ; The number of cases in a suite. `length`'s element type is implicit (E2); the ascription gives it
 ; something to unify against, since a match-bound field variable's type is not otherwise tracked.

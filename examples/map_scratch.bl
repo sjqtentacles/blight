@@ -42,7 +42,8 @@
 (deftotal list-head-key (Pi ((xs (List (Pair Nat Nat))) (fallback Nat)) Nat)
   ; A match-bound field variable's type isn't tracked either (same gap as a bare lambda parameter),
   ; so the ascription gives `pair-fst`'s now-implicit `A` something to unify against (E2).
-  (lam (xs fallback) (match xs [(nil) fallback] [(cons p rest) (pair-fst Nat (the (Pair Nat Nat) p))])))
+  (lam (xs fallback)
+    (match xs [(nil) fallback] [(cons p rest) (pair-fst Nat (the (Pair Nat Nat) p))])))
 
 (define lookup-4-is-nothing Bool (match (nat-map-lookup Nat n4 m) [(nothing) true] [(just v) false]))
 

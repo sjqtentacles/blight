@@ -26,8 +26,8 @@
 ; re-checker (not declined); it compiles and runs natively.
 
 (load "spore_reader.bl")  ; bcheck-string, maybe-anf-size, banf-size, CNil, and the whole pipeline
-(load "std/io.bl")        ; Console (print/read) + FileIO (read-file/write-file)
-(load "std/json.bl")      ; nat-to-string (decimal rendering; over the collapsed single `Nat` tower)
+(load "std/io.bl")  ; Console (print/read) + FileIO (read-file/write-file)
+(load "std/json.bl")  ; nat-to-string (decimal rendering; over the collapsed single `Nat` tower)
 
 ; The scratch path the demo writes each source to and reads back — kept relative so the run leaves
 ; no absolute-path assumption; the S1 test runs the binary in a throwaway working directory.
@@ -36,8 +36,7 @@
 ; A human verdict for one check result: the accepted ANF's size, or a rejection.
 (deftotal verdict (Pi ((m (Maybe BAnf))) String)
   (lam (m)
-    (match m
-      [(nothing) "REJECT"]
+    (match m [(nothing) "REJECT"]
       [(just e) (string-append "OK size=" (nat-to-string (banf-size e)))])))
 
 ; Write `src` to the scratch file, read it back, run it through the Blight-written front end, and
@@ -46,8 +45,7 @@
   (lam (src)
     (let ((u (write-file-str scratch src)))
       (let ((back (read-file-str scratch)))
-        (let ((result (bcheck-string CNil back)))
-          (verdict result))))))
+        (let ((result (bcheck-string CNil back))) (verdict result))))))
 
 (define good String "(lam (x Base) x)")
 (define bad String "(lam (x Base) (x x))")
@@ -57,5 +55,4 @@
 (define main (! (Console FileIO Bytes) Unit)
   (let ((v-good (check-source good)))
     (let ((u1 (put-str (string-append v-good nl))))
-      (let ((v-bad (check-source bad)))
-        (put-str (string-append v-bad nl))))))
+      (let ((v-bad (check-source bad))) (put-str (string-append v-bad nl))))))
