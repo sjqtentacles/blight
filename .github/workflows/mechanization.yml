@@ -3,8 +3,9 @@ name: Mechanization
 # Track M4 (docs/metatheory-mechanized.md): builds the external Lean 4 mechanization in
 # mechanization/ on every push/PR. This is a proof-engineering regression guard, independent of the
 # Rust workspace: a green build here means every theorem in BlightMeta/ still type-checks against
-# Lean's own kernel with zero `sorry`/`admit`/`native_decide` — the grep step makes that a hard CI
-# fact rather than an eyeballed one.
+# Lean's own kernel with zero `sorry`/`admit`/`native_decide` — enforced by keying the sorry/admit
+# check off Lean's own "declaration uses 'sorry'" build warning (not a source grep, which would
+# false-positive on doc-comment prose like "proved, no `sorry`").
 on:
   push:
     branches: [main]
@@ -24,11 +25,29 @@ jobs:
         run: |
           curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-      - name: Reject sorry/admit/native_decide
+      - name: lake build (capturing output for the sorry check)
         run: |
-          if grep -rn --include='*.lean' -E '\b(sorry|admit|native_decide)\b' BlightMeta BlightMeta.lean; then
-            echo "::error::found a sorry/admit/native_decide placeholder in the mechanization"
+          set -o pipefail
+          lake build 2>&1 | tee /tmp/lean-build.log
+      - name: Reject sorry/admit (Lean's own warning) + native_decide (source)
+        run: |
+          # `sorry`/`admit` surface as Lean's "declaration uses 'sorry'" build warning above — a
+          # signal that fires ONLY on real usage. A bare source grep for the word `sorry` instead
+          # false-positives on the doc-comment prose several module docs legitimately contain (e.g.
+          # "fully proved, no `sorry`"), so the check keys off the compiler, not the text.
+          if grep -qE "declaration uses .sorry." /tmp/lean-build.log; then
+            echo "::error::a declaration in the mechanization uses sorry/admit"
             exit 1
           fi
-      - name: lake build
-        run: lake build
+          # `native_decide` bypasses the kernel via compiled code and emits no such warning, so catch
+          # it directly in source — skipping comment-only lines so prose can mention it without
+          # tripping the guard (the same false-positive class the sorry check above avoids). Capture
+          # into a variable and test for non-emptiness rather than relying on a piped `grep -q` exit
+          # code, whose empty-input behavior differs between GNU and BSD grep.
+          nd="$(grep -rn --include='*.lean' -E '\bnative_decide\b' BlightMeta BlightMeta.lean \
+                 | grep -vE ':[0-9]+:[[:space:]]*(--|/-|\*)' || true)"
+          if [ -n "$nd" ]; then
+            echo "::error::native_decide used in the mechanization (kernel-bypassing):"
+            echo "$nd"
+            exit 1
+          fi
