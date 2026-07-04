@@ -300,11 +300,40 @@ impl<'a> Recheck<'a> {
                 self.check(ctx, rhs, &fam1, RGrade::Zero)?;
                 Ok((RValue::Univ(l), RRow::empty(), Usage::zero(n)))
             }
-            RTerm::Data(name, _ps, _is) => {
+            RTerm::Data(name, ps, is) => {
                 let decl = self
                     .sig
                     .get(name)
-                    .ok_or_else(|| reject(format!("unknown inductive type {name:?}")))?;
+                    .ok_or_else(|| reject(format!("unknown inductive type {name:?}")))?
+                    .clone();
+                // Arity + 0-fragment type checking of parameters and indices, mirroring the kernel's
+                // `Term::Data` rule (`kernel/check.rs`). Previously ignored (`_ps`/`_is`), so recheck
+                // returned `Ok` on a malformed `Data` the kernel rejects (soundness audit
+                // 2026-07-03, R-P2). Declared param/index types form a telescope (de Bruijn over the
+                // preceding params, then indices), so each is evaluated against the accumulated
+                // supplied values — the same pattern as `check_con`.
+                if ps.len() != decl.params.len() || is.len() != decl.indices.len() {
+                    return Err(reject(format!(
+                        "{name:?} expects {} param(s) and {} index(es), got {} and {}",
+                        decl.params.len(),
+                        decl.indices.len(),
+                        ps.len(),
+                        is.len()
+                    )));
+                }
+                let mut tele = Env::new();
+                for (p, pty_kt) in ps.iter().zip(decl.params.iter()) {
+                    let pty_rt = crate::term::from_kernel(pty_kt)?;
+                    let pty_val = eval(self.sig, &tele, &pty_rt);
+                    self.check(ctx, p, &pty_val, RGrade::Zero)?;
+                    tele = tele.extend(eval(self.sig, &ctx.env, p));
+                }
+                for (ix, ixty_kt) in is.iter().zip(decl.indices.iter()) {
+                    let ixty_rt = crate::term::from_kernel(ixty_kt)?;
+                    let ixty_val = eval(self.sig, &tele, &ixty_rt);
+                    self.check(ctx, ix, &ixty_val, RGrade::Zero)?;
+                    tele = tele.extend(eval(self.sig, &ctx.env, ix));
+                }
                 Ok((RValue::Univ(decl.level), RRow::empty(), Usage::zero(n)))
             }
             RTerm::Con(name, args) => self.infer_con(ctx, name, args, sigma),
@@ -2183,5 +2212,76 @@ mod tests {
             matches!(r, Unify::Clash),
             "different data heads are a definite Clash"
         );
+    }
+
+    // R-P2 (soundness audit 2026-07-03): the `RTerm::Data` inference arm must check parameter/index
+    // arity and each param/index's type in the 0-fragment, mirroring the kernel's `Term::Data`
+    // rule — else recheck returns `Ok` on a malformed `Data` the kernel rejects (false-`Ok`).
+
+    /// `Nat : Type 0` (with a `zero`) and a parameterized/indexed `Vec : (A:Type 0) → Nat → Type 0`.
+    fn nat_vec_sig() -> Signature {
+        let mut sig = Signature::empty();
+        sig.declare(DataDecl {
+            name: DataName("Nat".into()),
+            params: vec![],
+            indices: vec![],
+            level: 0,
+            constructors: vec![Constructor {
+                name: ConName("zero".into()),
+                args: vec![],
+                result_indices: vec![],
+            }],
+            path_constructors: vec![],
+        });
+        sig.declare(DataDecl {
+            name: DataName("Vec".into()),
+            params: vec![Term::Univ(blight_kernel::Level::Zero)], // A : Type 0
+            indices: vec![Term::Data(DataName("Nat".into()), vec![], vec![])], // n : Nat
+            level: 0,
+            constructors: vec![],
+            path_constructors: vec![],
+        });
+        sig
+    }
+
+    fn nat_ty_rt() -> RTerm {
+        RTerm::Data(DataName("Nat".into()), vec![], vec![])
+    }
+    fn zero_rt() -> RTerm {
+        RTerm::Con(ConName("zero".into()), vec![])
+    }
+
+    #[test]
+    fn data_wrong_param_arity_rejected() {
+        let sig = nat_vec_sig();
+        let rc = Recheck::new(&sig);
+        // Nat takes 0 params; supplying one is an arity error.
+        let bad = RTerm::Data(DataName("Nat".into()), vec![RTerm::Univ(0)], vec![]);
+        assert!(rc.infer(&Ctx::empty(), &bad, RGrade::Zero).is_err());
+        // Vec needs 1 param + 1 index; supplying none is an arity error.
+        let bad2 = RTerm::Data(DataName("Vec".into()), vec![], vec![]);
+        assert!(rc.infer(&Ctx::empty(), &bad2, RGrade::Zero).is_err());
+    }
+
+    #[test]
+    fn data_param_not_a_type_rejected() {
+        let sig = nat_vec_sig();
+        let rc = Recheck::new(&sig);
+        // Vec's parameter must be a `Type 0`; an `Int` literal is not a type.
+        let bad = RTerm::Data(
+            DataName("Vec".into()),
+            vec![RTerm::IntLit(5)],
+            vec![zero_rt()],
+        );
+        assert!(rc.infer(&Ctx::empty(), &bad, RGrade::Zero).is_err());
+    }
+
+    #[test]
+    fn data_well_formed_still_accepted() {
+        let sig = nat_vec_sig();
+        let rc = Recheck::new(&sig);
+        // `Vec Nat zero` is well-formed: param `Nat : Type 0`, index `zero : Nat`.
+        let ok = RTerm::Data(DataName("Vec".into()), vec![nat_ty_rt()], vec![zero_rt()]);
+        assert!(rc.infer(&Ctx::empty(), &ok, RGrade::Zero).is_ok());
     }
 }

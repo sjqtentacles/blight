@@ -70,17 +70,22 @@ bugs (R-P1…R-P5) remain — each false-`Ok` is fatal, so they are the next pri
 
 ## Re-checker parity (trusted second opinion — false-`Ok` is fatal)
 
-- [ ] **R-P1 — `quote_interval` `saturating_sub` aliases distinct dimension levels**
-  (`recheck/normalize.rs:642`). Non-injective quoting collapses distinct stuck path
+- [x] **R-P1 — `quote_interval` `saturating_sub` aliases distinct dimension levels**
+  (`recheck/normalize.rs:642`). *Fixed 2026-07-03 (68e3c98):* injective `wrapping_sub` (`dlvl-k-1`,
+  matching the kernel's release semantics) so escaped dims stay distinct; red pin
+  `quote_interval_is_injective_on_escaped_dims`; workspace 879/879; verdict golden byte-identical;
+  no viable mutant. *(Original note:)* Non-injective quoting collapses distinct stuck path
   applications to `Dim(0)`, so `conv` equates different neutrals (`p @ j` ≡ `p @ k`) — a
   false definitional equality in the accepts-more direction. Kernel twin uses injective
   `dlvl - k - 1`. Fix: match the kernel's injective computation.
 
-- [ ] **R-P2 — `RTerm::Data` inference skips all param/index arity + type checking**
-  (`recheck/typecheck.rs:303`). Returns `Univ(decl.level)` ignoring params/indices; the kernel
-  twin rejects wrong arity and checks each against its declared type. Lets recheck return `Ok`
-  on a malformed-`Data` term the kernel rejects (false-`Ok`). Fix: port the kernel's arity +
-  type checks.
+- [x] **R-P2 — `RTerm::Data` inference skips all param/index arity + type checking**
+  (`recheck/typecheck.rs:303`). *Fixed 2026-07-03:* ported the kernel's arity + 0-fragment
+  param/index type checks (telescope env threaded like `check_con`). Red pins
+  `data_wrong_param_arity_rejected`, `data_param_not_a_type_rejected`, +
+  `data_well_formed_still_accepted` guard; recheck 82/82; workspace 882/882; verdict golden
+  byte-identical. Defense-in-depth for independence (recheck can now catch a malformed-`Data`
+  kernel/forged-judgement error it previously rubber-stamped).
 
 - [x] **R-P3 — `eval` of `Ann` drops the annotation without reflecting stuck neutrals**
   (`recheck/normalize.rs:151`). *Fixed 2026-07-03:* the `Ann` arm now reflects a neutral result
