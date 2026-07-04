@@ -861,7 +861,11 @@ impl Checker {
                 Ok((a1, row_base.union(&row_tube), usage_base.add(&usage_tube)))
             }
 
-            // Glue formation (spec §2.6): type formation; equiv is inferred in the 0-fragment.
+            // Glue formation (spec §2.6): type formation. `equiv` must be a genuine equivalence
+            // `Equiv ty base`, checked in the 0-fragment. Previously it was only *inferred* (its
+            // type discarded), so an arbitrary term could occupy the slot — `kan::transp_glue`
+            // then projected `vfst`/`vsnd` of it, laundering a value into `base`'s type or panicking
+            // on a non-pair (soundness audit 2026-07-03, K3).
             Term::Glue {
                 base,
                 cofib,
@@ -870,10 +874,9 @@ impl Checker {
             } => {
                 let l = self.infer_universe(ctx, base)?;
                 self.check_cofib(ctx, cofib)?;
-                let base_val = eval(&self.env_for(ctx), base);
                 self.infer_universe(ctx, ty)?;
-                self.infer(ctx, equiv)?;
-                let _ = base_val;
+                let equiv_ty = eval(&self.env_for(ctx), &equiv_type(ty, base));
+                self.check_g(ctx, equiv, &equiv_ty, Grade::Zero)?;
                 Ok((Value::Univ(nat_to_level(l)), Row::empty(), Usage::zero(n)))
             }
 
@@ -2368,6 +2371,70 @@ fn apply_value(f: Value, arg: Value) -> Value {
 
 /// Weaken a term by `n`: shift every free de Bruijn variable up by `n` (no binders are crossed by
 /// the caller's splice point). Implemented with a cutoff to leave bound variables untouched.
+/// The CCHM equivalence type `Equiv A B` fully unfolded to core formers, matching `std/equiv.bl`
+/// definitionally (Voevodsky's contractible-fibres definition):
+///
+/// ```text
+///   Σ (f : A → B).                                     -- the underlying function
+///     Π (y : B).                                       -- is-equiv A B f
+///       Σ (c : fib). Π (z : fib). Path fib c z         --   is-contr (fiber A B f y)
+///   where  fib = Σ (x : A). Path B (f x) y             --   fiber A B f y
+/// ```
+///
+/// `a`/`b` are terms over the ambient context Γ; the result is a term over Γ. The `Glue` formation
+/// rule checks `equiv` against this (in the 0-fragment) so that an arbitrary term cannot occupy the
+/// equivalence slot — `kan::transp_glue` blindly projects `vfst`/`vsnd` of the equiv, so an
+/// unchecked slot laundered a value into the wrong type (or panicked on a non-pair). Soundness
+/// audit 2026-07-03, K3.
+///
+/// `Path B lhs rhs` is the constant `PathP { family: B, lhs, rhs }`: a `PathP` binds a *dimension*
+/// (a separate index space from term variables — see the `Term::PathP` rule's `extend_dim`), so the
+/// family shares Γ's term indices and takes no shift.
+fn equiv_type(a: &Term, b: &Term) -> Term {
+    fn path(family: Term, lhs: Term, rhs: Term) -> Term {
+        Term::PathP {
+            family: Rc::new(family),
+            lhs: Rc::new(lhs),
+            rhs: Rc::new(rhs),
+        }
+    }
+    // `fiber = Σ (x : A). Path B (f x) y`, built where `a_s`/`b_s`/`f_s`/`y_s` are valid in the
+    // current scope; the `x` binder (index 0) shifts the rest up by one.
+    fn fiber(a_s: &Term, b_s: &Term, f_s: &Term, y_s: &Term) -> Term {
+        Term::Sigma(
+            Rc::new(a_s.clone()),
+            Rc::new(path(
+                shift(b_s, 1),
+                Term::App(Rc::new(shift(f_s, 1)), Rc::new(Term::Var(0))),
+                shift(y_s, 1),
+            )),
+        )
+    }
+    // `is-contr T = Σ (c : T). Π (z : T). Path T c z`, where `t_s` is valid in the current scope.
+    fn is_contr(t_s: &Term) -> Term {
+        Term::Sigma(
+            Rc::new(t_s.clone()),
+            Rc::new(Term::Pi(
+                Grade::Omega,
+                Rc::new(shift(t_s, 1)),                                    // z : T  (under c)
+                Rc::new(path(shift(t_s, 2), Term::Var(1), Term::Var(0))),  // Path T c z
+            )),
+        )
+    }
+    // `is-equiv A B f = Π (y : B). is-contr (fiber A B f y)`, in scope `[f, Γ]` (f = Var 0).
+    let is_equiv_body = {
+        let a2 = shift(a, 2); // under [y, f]
+        let b2 = shift(b, 2);
+        let fib = fiber(&a2, &b2, &Term::Var(1), &Term::Var(0)); // f = Var 1, y = Var 0
+        Term::Pi(Grade::Omega, Rc::new(shift(b, 1)), Rc::new(is_contr(&fib)))
+    };
+    // `Equiv A B = Σ (f : A → B). is-equiv A B f`. `A → B` = `Pi(ω, A, ↑B)`.
+    Term::Sigma(
+        Rc::new(Term::Pi(Grade::Omega, Rc::new(a.clone()), Rc::new(shift(b, 1)))),
+        Rc::new(is_equiv_body),
+    )
+}
+
 fn shift(term: &Term, n: usize) -> Term {
     fn go(term: &Term, n: usize, cutoff: usize) -> Term {
         match term {
@@ -5408,16 +5475,19 @@ mod tests {
         }
         let src_pi = pi_g(Grade::Omega); // i = 0 face (the `ty` field of the Glue)
         let tgt_pi = pi_g(Grade::One); // i = 1 face (the `base` field of the Glue)
-                                       // `i. Glue (Pi 1 A A) (i=0) (Pi ω A A) e` — `equiv` need only be *inferable*; `Term::Glue`'s
-                                       // formation rule (`check.rs`, `Term::Glue` arm) does not check it has any particular
-                                       // `Equiv`-shape, and type-*checking* the `Transp` below never forces `equiv`'s value (no
-                                       // `kan::transp_glue` reduction happens during `check_g`, only during `eval`/reduction of
-                                       // the whole expression, which this probe never triggers).
+                                       // `i. Glue (Pi 1 A A) (i=0) (Pi ω A A) e`. Since K3, the Glue formation rule checks
+                                       // `e : Equiv (Pi ω A A) (Pi 1 A A)` — and the grade-laundering this probe targets is now
+                                       // caught *there*: any equivalence's forward map would have to have type
+                                       // `Pi ω A A → Pi 1 A A`, and the identity's `λx.x` (or any coercion) cannot, because
+                                       // `Pi ω A A` and `Pi 1 A A` are not convertible. So supplying the identity equivalence
+                                       // (a real `Equiv (Pi ω) (Pi ω)`, not an `Equiv (Pi ω) (Pi 1)`) is rejected at formation.
+                                       // The transp-time grade-skeleton guard (obligation 1.3.2) remains in `Term::Transp` as
+                                       // defense-in-depth for any exotic cross-grade equivalence that might exist.
         let family = Term::Glue {
             base: Rc::new(tgt_pi.clone()),
             cofib: Cofib::Eq0(crate::term::Interval::Dim(0)),
             ty: Rc::new(src_pi),
-            equiv: Rc::new(u(0)),
+            equiv: Rc::new(id_equiv_term()),
         };
         let base = Term::Lam(Rc::new(Term::Pair(
             Rc::new(Term::Var(0)),
@@ -5428,18 +5498,11 @@ mod tests {
             cofib: Cofib::Bot,
             base: Rc::new(base),
         };
-        match check_top(term, tgt_pi) {
-            Err(TypeError::BadCubical(msg)) => {
-                assert!(
-                    msg.contains("grade") || msg.contains("1.3.2"),
-                    "rejection should explain the grade-skeleton mismatch, got: {msg}"
-                );
-            }
-            other => panic!(
-                "a Transp whose Glue line changes a Pi's grade must be rejected (obligation \
-                 1.3.2 laundering), got {other:?}"
-            ),
-        }
+        assert!(
+            check_top(term, tgt_pi).is_err(),
+            "a Transp whose Glue line changes a Pi's grade must be rejected — the equivalence's \
+             forward map cannot be typed `Pi ω A A → Pi 1 A A` (obligation 1.3.2 laundering)"
+        );
     }
 
     /// The accept twin: the *same* Glue line shape, but with BOTH faces declared at grade `ω` (a
@@ -5458,11 +5521,13 @@ mod tests {
         }
         let src_pi = pi_g(Grade::Omega);
         let tgt_pi = pi_g(Grade::Omega);
+        // Both faces are the *same* type `Pi ω A A`, so the identity equivalence `id-equiv (Pi ω A A)`
+        // is a genuine `Equiv src_pi tgt_pi` and the K3 Glue formation check accepts it.
         let family = Term::Glue {
             base: Rc::new(tgt_pi.clone()),
             cofib: Cofib::Eq0(crate::term::Interval::Dim(0)),
             ty: Rc::new(src_pi),
-            equiv: Rc::new(u(0)),
+            equiv: Rc::new(id_equiv_term()),
         };
         let base = Term::Lam(Rc::new(Term::Pair(
             Rc::new(Term::Var(0)),
@@ -5476,6 +5541,84 @@ mod tests {
         assert!(
             check_top(term, tgt_pi).is_ok(),
             "a Glue line whose two faces agree in Pi-grade (even if their `A` differed) must still transport"
+        );
+    }
+
+    /// `id-equiv A : Equiv A A` as a kernel term — the parametric body of `std/equiv.bl`'s
+    /// `id-equiv` (which never mentions `A`): the identity function packaged with the
+    /// singleton-contraction proof that every fibre of `idfun` is contractible. Used to feed the
+    /// K3 Glue formation rule a *genuine* equivalence.
+    fn id_equiv_term() -> Term {
+        use crate::term::Interval;
+        // is-equiv proof, in scope `[y]` (y = Var 0):
+        //   pair (pair y (plam i. y))                                  -- centre (y, refl y)
+        //        (lam fib. plam i. pair ((snd fib) @ ~i)
+        //                                (plam j. (snd fib) @ (imax ~i j)))
+        let centre = Term::Pair(
+            Rc::new(Term::Var(0)),                       // y
+            Rc::new(Term::PLam(Rc::new(Term::Var(0)))),  // refl: plam i. y  (y is a term var, unshifted by the dim binder)
+        );
+        let contraction = Term::Lam(Rc::new(
+            // lam fib.  (fib = Var 0)
+            Term::PLam(Rc::new(Term::Pair(
+                // plam i.  (i = Dim 0)
+                Rc::new(Term::PApp(
+                    Rc::new(Term::Snd(Rc::new(Term::Var(0)))), // snd fib
+                    Interval::Neg(Box::new(Interval::Dim(0))), // ~i
+                )),
+                Rc::new(Term::PLam(Rc::new(Term::PApp(
+                    // plam j.  (i = Dim 1, j = Dim 0)
+                    Rc::new(Term::Snd(Rc::new(Term::Var(0)))), // snd fib
+                    Interval::Max(
+                        Box::new(Interval::Neg(Box::new(Interval::Dim(1)))), // ~i
+                        Box::new(Interval::Dim(0)),                          // j
+                    ),
+                )))),
+            ))),
+        ));
+        let is_equiv_proof = Term::Lam(Rc::new(Term::Pair(
+            // lam y. (centre, contraction)
+            Rc::new(centre),
+            Rc::new(contraction),
+        )));
+        Term::Pair(
+            Rc::new(Term::Lam(Rc::new(Term::Var(0)))), // f = lam x. x
+            Rc::new(is_equiv_proof),
+        )
+    }
+
+    /// K3 positive: a genuine `id-equiv A : Equiv A A` checks against the kernel's `equiv_type(A, A)`
+    /// — proving the kernel-constructed CCHM equivalence type matches `std/equiv.bl` definitionally,
+    /// so the `Glue` formation rule's new check accepts every real equivalence (the whole cubical
+    /// corpus rests on this).
+    #[test]
+    fn equiv_type_accepts_the_identity_equivalence() {
+        let a = Term::IntTy; // any `Type 0`
+        assert!(
+            check_top(id_equiv_term(), equiv_type(&a, &a)).is_ok(),
+            "id-equiv must check against the kernel's equiv_type(A, A)"
+        );
+    }
+
+    /// K3 red: the `Glue` formation rule must reject an `equiv` that is not an equivalence. `λx.x`
+    /// is not even a pair, so `kan::transp_glue`'s `vsnd` would panic on it during reduction; the
+    /// checker must reject it up front, at formation.
+    #[test]
+    fn glue_rejects_a_non_equivalence_equiv() {
+        let glue = Term::Glue {
+            base: Rc::new(Term::IntTy),
+            cofib: Cofib::Eq1(crate::term::Interval::Dim(0)),
+            ty: Rc::new(Term::IntTy),
+            equiv: Rc::new(Term::Lam(Rc::new(Term::Var(0)))), // λx.x — not an `Equiv IntTy IntTy`
+        };
+        let term = Term::Transp {
+            family: Rc::new(glue),
+            cofib: Cofib::Bot,
+            base: Rc::new(Term::IntLit(0)),
+        };
+        assert!(
+            check_top(term, Term::IntTy).is_err(),
+            "a Glue whose equiv is not an equivalence must be rejected at formation"
         );
     }
 
