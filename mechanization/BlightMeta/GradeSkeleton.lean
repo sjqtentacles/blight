@@ -119,4 +119,50 @@ theorem kanLineGradeSkeletonEq_mismatched_heads_unconstrained (ρ : Grade) (dom 
       kanLineGradeSkeletonEq (.arr ρ dom cod) .bool = true :=
   ⟨rfl, rfl⟩
 
+/-- **P3 (v0.1 roadmap): a heterogeneous transp *typing rule*, one genuinely dependent Kan case.**
+    `Calculus.lean`'s `transp` transports along a *constant* family (a single `Ty A`); this judgement
+    is the increment past it — a transp along a genuinely two-endpoint type line `A0 ⇝ A1` (with
+    `A0 ≠ A1` the non-constant, "dependent" case), transporting a `base : A0` to type `A1`. It is the
+    mechanized twin of the kernel probes `transp_heterogeneous_pi_grade_glue_line_{rejected,accepted}`
+    at the *transp-term* level where those probes live — one level up from the grade-skeleton *guard*
+    `kanLineGradeSkeletonEq` mechanized above. The rule is **admissible only when the line's grade
+    skeleton matches** (`hskel`), the exact side-condition `check.rs`'s `Transp` rule imposes
+    (obligation 1.3.2); it charges `base` at the ambient rate and leaves `Γ`/`σ`/`φ` unchanged,
+    exactly like `Calculus.HasType.transp`. It does not model the underlying `Glue`/`ua` line the
+    kernel probe builds its endpoints from (that univalence machinery is the deferred cubical corner,
+    per this file's and `Dependent.lean`'s module docs) — only the grade-skeleton-gated transport it
+    reduces to, which is the entire soundness content obligation 1.3.2 is about. -/
+inductive HasTranspLine : List Ty → Nat → Ty → Ty → Tm → Grade → Usage → Prop where
+  | transpLine {Γ d A0 A1 base σ φ}
+      (hbase : HasType Γ d base A0 σ φ) (hskel : kanLineGradeSkeletonEq A0 A1 = true) :
+      HasTranspLine Γ d A0 A1 base σ φ
+
+/-- **Reject twin** (mirrors `transp_heterogeneous_pi_grade_glue_line_rejected`): a transp along a
+    line whose two `Π`-endpoints differ only in declared grade (`Π_ω ⇝ Π_1`) is *inadmissible* — no
+    derivation exists, for any base — because the grade-skeleton guard declines it. This is the
+    laundering attack (obligation 1.3.2), now excluded at the transp-typing level, not just the guard. -/
+theorem hasTranspLine_grade_heterogeneous_rejected (base : Tm) :
+    ¬ ∃ σ φ, HasTranspLine [] 0 (.arr .omega .bool .bool) (.arr .one .bool .bool) base σ φ := by
+  rintro ⟨σ, φ, h⟩
+  cases h with
+  | transpLine _ hskel => exact absurd hskel (by decide)
+
+/-- **Accept twin** (mirrors `transp_homogeneous_pi_grade_glue_line_accepted`): the same `Π`-former
+    shape at both ends, agreeing in grade (`Π_ω ⇝ Π_ω`), *is* admissible — confirming the rejection
+    above discriminates on the grade mismatch, not on `Π`-headed lines wholesale. Witnessed by an
+    actual transported term (`lam ff : Π_ω bool bool`). -/
+theorem hasTranspLine_grade_homogeneous_accepted :
+    ∃ σ φ, HasTranspLine [] 0 (.arr .omega .bool .bool) (.arr .omega .bool .bool) (.lam .ff) σ φ :=
+  ⟨Grade.one, _, HasTranspLine.transpLine (HasType.lam HasType.ff (by decide)) (by decide)⟩
+
+/-- **Soundness of the rule** (the transp-level form of `grade_skeleton_preserved_by_transp`): a
+    heterogeneous transp between two `Π`-endpoints can only ever be admitted when those endpoints
+    already agree in declared grade — so the transported value's usage-discipline grade cannot change
+    by crossing the line. This is exactly why the rule is sound: a downstream `app` reading the target
+    endpoint's grade reads the same grade the source was checked at. -/
+theorem hasTranspLine_preserves_pi_grade {Γ d} {ρ0 ρ1 : Grade} {dom0 cod0 dom1 cod1 base σ φ}
+    (h : HasTranspLine Γ d (.arr ρ0 dom0 cod0) (.arr ρ1 dom1 cod1) base σ φ) : ρ0 = ρ1 := by
+  cases h with
+  | transpLine _ hskel => exact grade_skeleton_preserved_by_transp hskel
+
 end BlightMeta

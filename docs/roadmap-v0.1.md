@@ -714,15 +714,24 @@ posed are now definitively answered with zero-`sorryAx` Lean.
 - **Exit — MET:** substitution lemma proved + `preservation` question settled (false), both zero
   `sorryAx`; `Dependent.lean`'s header updated.
 
-### [ ] P3 — Dependent Kan increment (scoped)
+### [x] P3 — Dependent Kan increment (scoped)
 
 Constant-family Kan (Calculus.lean) → one genuinely dependent case: `transp` over a Π line with
 a graded binder — the mechanized twin of the kernel probes
 `transp_heterogeneous_pi_grade_glue_line_{rejected,accepted}` (the remaining half of obligation
 1.3.2).
 
-- **Exit:** the obligation table in [metatheory.md](metatheory.md) §1.3 cites the Lean lemma,
-  not only kernel tests.
+- **DONE (2026-07-04):** `HasTranspLine` in `GradeSkeleton.lean` — an actual *typing rule* for a
+  heterogeneous transp along a genuinely two-endpoint type line `A0 ⇝ A1` (past `Calculus.lean`'s
+  constant family), gated by the grade-skeleton guard. Twins `hasTranspLine_grade_heterogeneous_
+  rejected` (no derivation for a `Π_ω ⇝ Π_1` line) / `hasTranspLine_grade_homogeneous_accepted`
+  mirror the kernel probes at the transp-term level; `hasTranspLine_preserves_pi_grade` is the rule's
+  soundness. All three `#print axioms` = `[propext]` only, no `sorryAx`. Standalone (no
+  `Calculus.HasType` ripple). The prior grade-skeleton *guard* mechanization
+  (`grade_skeleton_preserved_by_transp` et al.) was already in place; this lifts it to the transp
+  level. The underlying `Glue`/`ua` line remains the deliberately-deferred cubical corner.
+- **Exit — MET:** [metatheory.md](metatheory.md) §1.3 now cites the Lean lemma (`HasTranspLine` +
+  its twins), not only kernel tests.
 
 ### [ ] P4 — Decision checkpoint: the fused-theory bet
 

@@ -165,8 +165,22 @@ attack described above, now an independent Lean proof rather than solely a Rust 
 test pair. `grade_skeleton_preserved_by_transp_nested` extends this to a `Π`-under-`Π` line;
 `kanLineGradeSkeletonEq_heterogeneous_pi_rejected`/`_homogeneous_pi_accepted` are `decide`-checked
 twins of `transp_heterogeneous_pi_grade_glue_line_rejected`/
-`transp_homogeneous_pi_grade_glue_line_accepted` above. See
-[docs/metatheory-mechanized.md](metatheory-mechanized.md) for the full correspondence entry.
+`transp_homogeneous_pi_grade_glue_line_accepted` above.
+
+**Lifted to the transp-typing level (P3, v0.1 roadmap).** The above mechanize the grade-skeleton
+*guard*; `HasTranspLine` (same file) is the increment past `Calculus.lean`'s constant-family
+`transp` — an actual *typing rule* for a heterogeneous transp along a genuinely two-endpoint type
+line `A0 ⇝ A1`, admissible only when the line's grade skeleton matches. Its reject/accept twins
+`hasTranspLine_grade_heterogeneous_rejected` (no derivation exists for a `Π_ω ⇝ Π_1` line, any base)
+/ `hasTranspLine_grade_homogeneous_accepted` are the direct mechanized twins of the kernel's
+`transp_heterogeneous_pi_grade_glue_line_{rejected,accepted}` probes at the transp-term level where
+those probes live, and `hasTranspLine_preserves_pi_grade` is the rule's own soundness (a heterogeneous
+transp cannot change a `Π`'s grade). All three rest on `[propext]` only (no `sorryAx`). What remains
+deliberately deferred is the underlying `Glue`/`ua` line the kernel probe *builds* its endpoints from
+— the univalence/heterogeneous-cubical corner scoped out of the whole mechanization — not the
+grade-skeleton-gated transport those endpoints reduce to, which is the entire soundness content of
+obligation 1.3.2. See [docs/metatheory-mechanized.md](metatheory-mechanized.md) for the full
+correspondence entry.
 
 **Committed degradation path (unchanged from spec §10.3).** If the unified story cannot be proven,
 Blight *stratifies*: the cubical equality machinery lives in the unrestricted (`ω`) fragment where
