@@ -34,17 +34,17 @@ use std::rc::Rc;
 std::thread_local! {
     /// `None` = unmetered (the default; every existing call site is unaffected). `Some(0)` means
     /// the budget is exhausted *this step* — checked and decremented at each tick.
-    static BUDGET: std::cell::Cell<Option<u64>> = std::cell::Cell::new(None);
+    static BUDGET: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 
     /// Arc N / N5 instrumentation: how many induction hypotheses `do_elim` has computed on this
     /// thread. Same design as `BUDGET`/`tick()`: an always-on thread-local `Cell` bump (one add
     /// per *recursive constructor argument*, dwarfed by the `do_elim` call it sits in), read and
     /// reset only by the N5 scaling tests.
-    static IH_COMPUTED: std::cell::Cell<u64> = std::cell::Cell::new(0);
+    static IH_COMPUTED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 
     /// Arc N / N5: how many induction hypotheses `do_elim` *skipped* because the receiving
     /// method provably discards its IH binder (see [`uses_binder`]) — the N5 payoff, observable.
-    static IH_DISCARDED: std::cell::Cell<u64> = std::cell::Cell::new(0);
+    static IH_DISCARDED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Read and reset this thread's [`IH_COMPUTED`] counter (arc N / N5 instrumentation). The rung-0
@@ -100,6 +100,9 @@ fn tick() {
 /// *process-global*, so `run_metered` itself cannot safely swap the hook per-call without racing
 /// concurrent panics on other threads; embedding binaries (the REPL/LSP) that call this repeatedly
 /// should install [`quiet_budget_panics`] exactly once at process start-up instead.
+// `Err(())` has exactly one meaning at this boundary — the budget was exhausted — and every
+// caller matches on it as such; a dedicated error type would be a name for a single unit fact.
+#[allow(clippy::result_unit_err)]
 pub fn run_metered<T>(budget: u64, f: impl FnOnce() -> T) -> Result<T, ()> {
     let previous = BUDGET.replace(Some(budget));
     struct RestoreOnDrop(Option<u64>);

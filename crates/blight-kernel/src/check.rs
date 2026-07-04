@@ -5363,9 +5363,8 @@ mod tests {
             // Ascribe against a deliberately wrong type (Nat, not the Path it actually proves) —
             // ill-typed regardless of budget.
             let wrong_ty = nat_ty();
-            match check_top_metered(sig, term, wrong_ty, 5_000_000) {
-                Ok(p) => panic!("must not accept an ill-typed term even with ample budget: {p:?}"),
-                Err(_) => {}
+            if let Ok(p) = check_top_metered(sig, term, wrong_ty, 5_000_000) {
+                panic!("must not accept an ill-typed term even with ample budget: {p:?}");
             }
         });
     }

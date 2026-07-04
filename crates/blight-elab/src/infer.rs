@@ -25,29 +25,6 @@ pub fn infer_type_str(env: &ElabEnv, expr_src: &str) -> Result<String, String> {
     Ok(crate::pretty::pretty_term(&ty_term))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::program::Program;
-
-    #[test]
-    fn infers_the_type_of_a_global() {
-        let mut env = ElabEnv::new();
-        {
-            let mut prog = Program::new(&mut env);
-            prog.run("(defdata Nat () (Zero) (Succ (n Nat)))\n(define one (the Nat (Succ Zero)))")
-                .expect("setup");
-        }
-        assert_eq!(infer_type_str(&env, "one").unwrap(), "Nat");
-    }
-
-    #[test]
-    fn reports_an_error_for_an_unbound_name() {
-        let env = ElabEnv::new();
-        assert!(infer_type_str(&env, "nope").is_err());
-    }
-}
-
 /// Evaluate `expr_src` in `env` and render the resulting *value* re-sugared (decimals post-E1) —
 /// the REPL's bare-expression path (E9). Elaborates, infers (so the expression must be
 /// inferable, which applications of typed globals are), evaluates under the metering budget
@@ -71,4 +48,27 @@ pub fn eval_value_str(env: &ElabEnv, expr_src: &str) -> Result<String, String> {
     })
     .map_err(|_| "evaluation exceeded the step budget (possibly divergent)".to_string())?;
     Ok(crate::pretty::pretty_term(&nf))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::program::Program;
+
+    #[test]
+    fn infers_the_type_of_a_global() {
+        let mut env = ElabEnv::new();
+        {
+            let mut prog = Program::new(&mut env);
+            prog.run("(defdata Nat () (Zero) (Succ (n Nat)))\n(define one (the Nat (Succ Zero)))")
+                .expect("setup");
+        }
+        assert_eq!(infer_type_str(&env, "one").unwrap(), "Nat");
+    }
+
+    #[test]
+    fn reports_an_error_for_an_unbound_name() {
+        let env = ElabEnv::new();
+        assert!(infer_type_str(&env, "nope").is_err());
+    }
 }

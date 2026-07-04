@@ -12,10 +12,10 @@ std::thread_local! {
     /// Arc N / N5 instrumentation, mirroring the kernel's counter *independently* (the two-engine
     /// discipline applies to instrumentation too): how many induction hypotheses this engine's
     /// `do_elim` has computed on this thread. Read/reset only by the N5 scaling tests.
-    static IH_COMPUTED: std::cell::Cell<u64> = std::cell::Cell::new(0);
+    static IH_COMPUTED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 
     /// Arc N / N5: IHs *skipped* because the receiving method provably discards its binder.
-    static IH_DISCARDED: std::cell::Cell<u64> = std::cell::Cell::new(0);
+    static IH_DISCARDED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Read and reset this thread's IH counter (arc N / N5; see the kernel twin
