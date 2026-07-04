@@ -19,11 +19,16 @@ golden, llvm bit-identity where relevant, mutants over new logic, plus a red-fir
   constructor (`mkbox : (A:Univ0)->(x:A)->BoxT`). Both fixed together by threading `arg_env`
   exactly as the proven checking-mode path (`check.rs:2040-2081`) does. *Fixed 2026-07-03.*
 
-- [ ] **K3 — `Glue` formation never checks `equiv` is an equivalence** (`check.rs:843`). The
-  rule only infers `equiv`'s type; `transp_glue` then blindly projects `vfst`/`vsnd`. An
-  arbitrary term in the `equiv` slot lets transport produce a value of the wrong type
-  (`Bool` constructor at type `Nat`) or panic `snd: not a pair`. Fix: check `equiv` against the
-  equivalence type between `ty` and `base` (an `isEquiv`/`Equiv` shape) before accepting.
+- [x] **K3 — `Glue` formation never checks `equiv` is an equivalence** (`check.rs:843`). The
+  rule only inferred `equiv`'s type; `transp_glue` blindly projects `vfst`/`vsnd`, so a mis-typed
+  slot laundered a value into the wrong type or panicked `snd: not a pair`. *Fixed 2026-07-03
+  (55525ab):* new `equiv_type(a,b)` constructs the fully-unfolded CCHM `Equiv ty base` (matching
+  `std/equiv.bl`), and the rule checks `equiv` against it in the 0-fragment. Also front-runs the
+  grade-laundering guard (1.3.2 — the forward map can't be typed `Πω→Π1`), which stays as
+  defense-in-depth. Validated by `equiv_type_accepts_the_identity_equivalence` (a real `id-equiv`
+  checks) + red pin + rewired grade tests; kernel 178/178; workspace 873/873 incl. all
+  `ua`/unglue/univalence; verdict golden byte-identical (ua forms Glue over free-var endpoints);
+  mutants 0-missed. **The hardest fix in the audit.**
 
 - [x] **K4 — strict-positivity check misses `EffTy`/`Delay`/`PathP`/… wrappers + unwired**
   (`signature.rs:254`). `mentions_data` recursed only through `Data/Pi/Sigma/App/Lam/Fst/Snd/Ann`
