@@ -465,9 +465,56 @@ premise, exactly what spec §4.4 claims for continuation multiplicity: `handle_a
 `handle_linear_at_most_once` (a `1`-graded one's continuation usage is provably `0` or `1`, never
 `ω`). This is *not* the open normalization/decidability proof above — it is the narrower, already-
 enforced *typing* discipline, now backed by an independent proof rather than solely by the
-`demand_k.leq(cont_grade)` check and its accept/reject tests. See
+`demand_k.leq(cont_grade)` check and its accept/reject tests.
+
+**The operational layer is now mechanized too (P1, v0.1), with a sharp negative result.**
+`Effects.lean`'s second half adds a deep-handler small-step semantics (one-hole evaluation contexts;
+`handle_perform` capturing the continuation as `k = lam (handle E[var 0] retC opC)`), and proves
+`progress`, `preservation_core` (the type-preserving fragment — every step *except* `handle_perform`),
+and the *operational* upgrade of `handle_linear_at_most_once` (`resume_once_operational`: the captured
+continuation is resumed at most once at the actual redex). But it also machine-checks
+`handle_perform_not_preserving`: the deep-handler reduction does **not** preserve types against this
+static presentation, because the `handle` rule types the continuation binder at `opCod` (a *value*)
+rather than `opCod → B` (a *function*) — so a reduct can be a `lam` where a non-arrow type was
+expected. The grade discipline stays sound; the continuation *typing* is the simplification that
+blocks subject reduction (the fix: bind `k` at `opCod → B`). This is one of the two machine-checked
+negative results feeding the checkpoint in §2.6. See
 [docs/metatheory-mechanized.md](metatheory-mechanized.md) for the full scope and simplifications
-(single operation, closed single-label row, no operational semantics for `Handle`/`Op`).
+(single operation, closed single-label row).
+
+### 2.6 The fused-theory checkpoint (P4)
+
+The v0.1 proof track (P1–P3) was a timeboxed probe of the two "research-bet" corners — quantities ×
+cubical (§1, spec §10.3) and graded effects × normalization (§2, spec §10.4). Its verdict, stated
+plainly and backed by machine-checked Lean rather than prose: **the *unified* fused subject-reduction
+/ normalization bet (obligation 1.3.1) does not go through as stated, and Blight commits to the
+stratified theory the spec always held in reserve.** This is not a retreat under time pressure — it
+is a *data-driven* decision, because the proof track produced two concrete machine-checked
+*negative* results that pinpoint exactly why the naive fusion fails:
+
+- **Dependent subject reduction is false without a conversion rule** (P2, `Dependent.lean`'s
+  `preservation_false`, `#print axioms` = `[propext, Quot.sound]`). For a genuinely dependent `Π`,
+  CBV argument reduction changes the codomain-instantiated type (`subst0 a B ≠ subst0 a' B`), and a
+  syntax-directed calculus with no conversion rule cannot recover it.
+- **Deep-handler effect subject reduction is false against a value-typed continuation** (P1,
+  `Effects.lean`'s `handle_perform_not_preserving`, `[propext]`). The static `handle` rule types the
+  continuation as a value (`opCod`), not a function (`opCod → B`), so the faithful reduction is not
+  type-preserving.
+
+What **is** machine-checked and stands (all zero-`sorryAx`): SN + canonicity for the constant-family
+Kan + graded fragment (`Reducibility.lean`); the grade-skeleton preservation across Kan lines and the
+heterogeneous transp-line typing rule (`GradeSkeleton.lean` + P3's `HasTranspLine`) — obligation
+1.3.2, the soundness-critical quantities × cubical corner; the dependent-`Π` *substitution* lemma
+(P2); and the effect grade-safety corollaries plus operational `progress`/resume-once (P1). What
+remains **pinned by tests, not mechanized**: the kernel's full heterogeneous cubical Kan table and
+`ua` computation (the `Glue`/univalence corner deliberately outside the mechanized fragment). What is
+**stratified away** (the committed fallback, now *adopted as the theory*, per §1.3 and §2.5):
+interval variables carry no grade (`interval_var_carries_no_grade_in_usage_vector`), quantities live
+in the unrestricted (`ω`) fragment, and effects stay a tower construction over the pure kernel — so
+the trusted core never takes the unified-fusion bet. The two negative results above are precisely
+*why* that stratification is the right call, and exactly what a v0.2 attempt at the unified theory
+would have to add first (a conversion relation; a first-class continuation type). The open obligation
+1.3.1 is retired from "open bet" to "stratified, with the obstruction machine-characterized."
 
 ---
 

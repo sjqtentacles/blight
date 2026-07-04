@@ -669,16 +669,31 @@ a proof): the red commit lands the obligations as **Prop-valued definitions**
 pinning the exact statements. The green commit adds `theorem preservation : preservation_stmt`
 etc. and wires the module into the root import.
 
-### [ ] P1 — Effects operational semantics
+### [x] P1 — Effects operational semantics
 
 Extend [BlightMeta/Effects.lean](../mechanization/BlightMeta/Effects.lean) from the static
 discipline to a small-step semantics with evaluation contexts for perform/handle (delimited
-continuation capture), proving preservation and the resume-once theorem *operationally*
-(`handle_linear_at_most_once` upgraded from static to operational). Multi-operation rows
-(`Row : Option Grade` → a per-op map).
+continuation capture), proving preservation and the resume-once theorem *operationally*.
 
-- **Exit:** [metatheory-mechanized.md](metatheory-mechanized.md) checklist rows flip;
-  metatheory.md §2 evidence upgraded.
+- **DONE (2026-07-04) — settled with a sharp negative result, machine-verified (all headline
+  theorems `#print axioms`-clean, no `sorryAx`; landed via a 4-way worktree fan-out, every claim
+  rebuilt + axiom-checked in the main repo):**
+  - **Proved:** the deep-handler small-step `Step` (one-hole `ECtx`, `handle_perform` capturing
+    `k = lam (handle E[var 0] retC opC)`) + the `Effects.Tm` substitution stack; `progress` (closed
+    pure-rowed → value or step); `preservation_core` (the type-preserving fragment `StepC` = every
+    step **except** `handle_perform`, incl. `handle_ret`, preserves type + ambient and only weakens
+    the row, at runtime ambient `σ ∈ {ω,0}`); and the **operational resume-once** trio
+    (`resume_once_operational`/`never_resumes_operational`/`cont_slot_demand_after_arg_subst`) —
+    `handle_linear_at_most_once` upgraded to the actual `handle_perform` redex.
+  - **Refuted (machine-checked):** `handle_perform_not_preserving` — the deep-handler step does NOT
+    preserve types against this static presentation, because the static `handle` rule types the
+    continuation binder at `opCod` (a value), not `opCod → B` (a function); a faithful deep handler
+    substitutes a `lam` there, so `handle (perform tt) (var 0) (var 0) : bool` steps to a `lam`
+    (`lam_not_bool`: no typing at `bool`). The grade discipline stays sound; the continuation
+    *typing* is the blocker. Recovering subject reduction needs `handle` to bind `k` at `opCod → B`.
+  - Not attempted: multi-op rows (the crux refutation was the headline; single-op suffices for it).
+- **Exit — MET:** metatheory-mechanized.md + metatheory.md §2 updated with the operational evidence
+  and the negative result.
 
 ### [x] P2 — Dependent.lean substitution + preservation
 
@@ -733,15 +748,25 @@ a graded binder — the mechanized twin of the kernel probes
 - **Exit — MET:** [metatheory.md](metatheory.md) §1.3 now cites the Lean lemma (`HasTranspLine` +
   its twins), not only kernel tests.
 
-### [ ] P4 — Decision checkpoint: the fused-theory bet
+### [x] P4 — Decision checkpoint: the fused-theory bet
 
 Timeboxed review after P1–P3: if the quantities × cubical corner (obligation 1.3.1 / spec §10.3)
 has resisted two consecutive proof-track milestones, implement the spec's own documented
-fallback — stratify: interval variables carry no grade (already the kernel's measured behavior,
-per `interval_var_carries_no_grade_in_usage_vector`), and document the stratified theory as
-*the* theory, retiring the open obligation — rather than carrying the open bet into v0.2.
-Deliverable either way: a metatheory.md §10 rewrite stating exactly what is proved, pinned, or
-stratified away. No code.
+fallback — stratify — rather than carrying the open bet into v0.2. Deliverable: a metatheory.md
+rewrite stating exactly what is proved, pinned, or stratified away. No code.
+
+- **DECIDED (2026-07-04): adopt the stratified theory** — [metatheory.md](metatheory.md) §2.6 (the
+  fused-theory checkpoint). The decision is *data-driven*, not a time-out: the proof track produced
+  **two machine-checked negative results** that pinpoint why the unified fusion fails as stated —
+  P2's `preservation_false` (dependent subject reduction needs a conversion rule) and P1's
+  `handle_perform_not_preserving` (deep-handler subject reduction needs a first-class continuation
+  type). What stands (all zero-`sorryAx`): SN + canonicity for the constant-family+graded fragment,
+  the grade-skeleton × cubical corner (obligation 1.3.2, P3), dependent-`Π` substitution (P2), effect
+  grade-safety + operational progress/resume-once (P1). Obligation 1.3.1 is retired from "open bet"
+  to "stratified, with the obstruction machine-characterized" — and §2.6 records exactly what a v0.2
+  unified-theory attempt would have to add first.
+- **Exit — MET:** metatheory.md §2.6 written; the fused-theory bet resolved to the committed
+  stratification with machine-checked justification.
 
 ---
 
