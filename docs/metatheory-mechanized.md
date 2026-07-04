@@ -110,12 +110,14 @@ See `Progress.lean`'s module doc for the full argument.
   (P2; `subst_subst_comm` prerequisite + `subst_lemma`/`subst_lemma_tele`, `#print axioms subst_lemma`
   = `[propext, Classical.choice, Quot.sound]`, no `sorryAx`) — over an explicit telescope `Δ ++ A'::Γ`,
   since the `ctxInsert` formulation provably cannot do the `lam` case (it head-shifts the domain).
-  What remains open is **`preservation`** itself, and it is subtler than first thought: a fan-out
-  first reported it *false* (the `app2` argument-congruence case), but that counterexample was
-  refuted by machine-checked verification — `lam` codomains are non-unique and `app2` needs a *value*
-  (always a `lam`), so the stepped term recovers the original type via a different codomain. So
-  `preservation`'s `app2` case is a proof-engineering obstruction (re-derive the value at an adjusted
-  codomain), and its true status is a genuine open question — see `Dependent.lean`'s module doc.
+  **`preservation` is proved FALSE** (`preservation_false`, `#print axioms` = `[propext, Quot.sound]`):
+  subject reduction genuinely fails for this syntax-directed, conversion-free `HasType`. The
+  counterexample (settled by an adversarial fan-out after a first, *wrong*, "false" counterexample was
+  machine-refuted and a "probably true" reading was also wrong): with `Γ = [Π(x:bool).x]`,
+  `f = lam (app (var 1) (var 0)) : Π ρ bool (var 0)` has a rigid var/app-headed body, so
+  `app f (ite tt tt ff) : ite tt tt ff` steps to `app f tt : tt`, and both domain and codomain are
+  pinned (no `lam`-flexibility rescue). Recovering it needs a conversion rule or type well-formedness —
+  see `Dependent.lean`'s module doc.
 - **Effect/handler grade safety (the graded-row discharge) is now mechanized in a scoped form**
   (Wave 8 / M10, `Effects.lean`): a single fixed operation, a single-label closed row, no row-
   variable effect polymorphism, and lambda bodies required pure (see that file's module doc for

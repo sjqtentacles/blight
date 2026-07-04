@@ -82,18 +82,26 @@
   forcing the lam's arbitrary domain into `image(shiftAbove k)`; so the lemma is stated over an
   explicit telescope `Δ ++ A' :: Γ` with a *pre-shifted* substitute, which resolves it cleanly.
 
-  **Open + subtle (`preservation` itself)**: NOT delivered, and — importantly — NOT because it is
-  false. A first-pass fan-out concluded `preservation` is false via the `app2` (argument-congruence)
-  case: when `a ↝ a'`, `HasType.app` types `app f a'` at `subst0 a' B`, not the required `subst0 a B`.
-  **That counterexample is refuted** (machine-checked): because `lam` carries no domain annotation, a
-  *value*'s `pi`-type codomain is non-unique, and `app2` requires `Value f` (always a `lam`, never a
-  rigid neutral — the shape the textbook subject-reduction-failure example needs), so the stepped term
-  recovers the original type via a *different* codomain (verified: `app (lam (lam tt)) tt` checks at
-  `pi 1 (app (lam tt) tt) bool`). So the `app2` obstruction is a proof-engineering one (re-derive the
-  value at an adjusted codomain `B''` with `subst0 a' B'' = subst0 a B`, exploiting the flexibility),
-  and `preservation`'s true status is a genuine open question tracked as P2's tail — NOT the trivial
-  win nor the trivial loss it first appeared. This corrects this file's earlier framing (which implied
-  Π preservation is straightforward once the β-case type lines up).
+  **Settled: `preservation` is FALSE** for this fragment — proved as `preservation_false` below,
+  `#print axioms` = `[propext, Quot.sound]`, no `sorryAx`. The route there is instructive, because the
+  question is genuinely subtle (it took two adversarial fan-outs plus hand-verification to pin down):
+  * A first fan-out concluded false via `app2` (argument congruence): when `a ↝ a'`, `HasType.app`
+    types `app f a'` at `subst0 a' B`, not the required `subst0 a B`. Its *concrete* counterexample
+    was **wrong** — refuted (machine-checked): `lam` carries no domain annotation, so a value's
+    `pi`-codomain is non-unique and `app2`'s `Value f` is always a `lam`, so a *lam-headed* body lets
+    the stepped term recover the original type via a different codomain (`app (lam (lam tt)) tt` checks
+    at `pi 1 (app (lam tt) tt) bool`).
+  * But that flexibility is *insufficient*, not a rescue. The real counterexample (`preservation_false`)
+    uses a **rigid, var/app-headed** body under a context that supplies a dependent function: with
+    `Γ = [Π(x:bool).x]`, `f = lam (app (var 1) (var 0)) : Π ρ bool (var 0)` — a function whose result
+    *type is its argument*. `app f (ite tt tt ff) : ite tt tt ff` steps (`app2`, `f` a value) to
+    `app f tt`, whose only type is `subst0 tt (var 0) = tt ≠ ite tt tt ff`. The domain is pinned by
+    `tt`'s rigidity and the codomain by the lam-free body, so no flexibility remains. See
+    `preservation_false` and its `body_ty_inv`/`ctr_bad` for the machine-checked argument.
+  So subject reduction genuinely fails for this syntax-directed, conversion-free `HasType` — to
+  recover it one must add a conversion rule (or a type-well-formedness discipline restricting such
+  contexts). This corrects an earlier hedge in this doc that speculated Π preservation was merely a
+  proof-engineering matter: it is a true metatheoretic obstruction.
 -/
 
 import BlightMeta.Weakening
@@ -1365,6 +1373,145 @@ theorem subst_lemma {A' : Expr} {Γ : List Expr} {a : Expr} {π : Grade} {φa : 
     show shiftBy 0 0 a = a; exact shiftBy_zero a 0
   rw [hnil, hsa] at hφ'
   exact ⟨φ', hφ'⟩
+
+
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════
+-- PRESERVATION IS FALSE for this syntax-directed, conversion-free dependent HasType — settling the
+-- module doc's "Open + subtle" tail. This CORRECTS the doc's own hedge (which speculated the `app2`
+-- obstruction was merely proof-engineering, savable via lam's non-unique codomain): it is not. The
+-- flexibility lam's missing domain annotation grants is *real* but *insufficient*, and the reason is
+-- sharp — see `bad_ty`.
+--
+-- Counterexample.  Take Γ = [P] where P := (x:bool) → x  (a dependent function type sitting in the
+-- context as a "type family" whose codomain is its own bound value, used as a classifier).
+-- Let  f := lam (app (var 1) (var 0)).  In context bool::Γ = [bool, P], its body
+-- `app (var 1) (var 0)` applies the context entry P (var 1) to the λ-bound bool (var 0), so by
+-- `HasType.app` its type is  subst0 (var 0) (codomain of P) = subst0 (var 0) (var 0) = var 0.
+-- Hence f : Π ρ bool (var 0):  a dependent function whose result TYPE is literally its argument.
+-- Now app f a : subst0 a (var 0) = a — the term's type IS its (untyped-as-classifier) argument.
+--
+-- Take a := ite tt tt ff  (steps to a' := tt, both : bool).  Then
+--   app f a  : a  = ite tt tt ff
+--   app f a  ↝  app f a'   (`Step.app2`, since `Value f = Value.lam`)
+-- but the only type app f a' = app f tt can carry is  subst0 tt (var 0) = tt ≠ ite tt tt ff.
+--
+-- WHY LAM'S NON-UNIQUE CODOMAIN DOES NOT SAVE IT (the flexibility the prior refutation exploited to
+-- kill the *naive* counterexample):  app f tt could a priori retype f = lam body at a DIFFERENT
+-- domain/codomain (lam carries no domain annotation).  But the argument tt is RIGID (`tt_ty_inv`: tt
+-- types only at bool), pinning the domain to bool; and with the domain fixed to bool,
+-- body = app (var 1) (var 0) has a RIGID type (`body_ty_inv`: its head var 1 looks up P from the
+-- context and its argument var 0 looks up bool, both forced by `ctxGet` — there is no lam anywhere in
+-- the body to introduce slack).  So subst0 tt (var 0) = tt is the ONLY possible type of app f tt, and
+-- it is ≠ ite tt tt ff.  The savable case needs the codomain-determining subterm to itself be a lam
+-- (as in the doc's `app (lam (lam tt)) tt` example); a var/app-headed body defeats it.
+-- `#print axioms preservation_false` = [propext, Quot.sound] — no sorryAx.
+-- ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+private abbrev CtrP : Expr := pi Grade.one bool (var 0)
+private abbrev CtrGam : List Expr := [CtrP]
+private abbrev ctrBody : Expr := app (var 1) (var 0)
+private abbrev ctrF : Expr := lam ctrBody
+private abbrev ctrA : Expr := ite tt tt ff
+private abbrev ctrA' : Expr := tt
+
+/-- Inversion: `tt` only types at `bool`. -/
+private theorem tt_ty_inv {Γ : List Expr} {A : Expr} {σ : Grade} {φ : Usage}
+    (h : HasType Γ tt A σ φ) : A = bool := by
+  cases h; rfl
+
+/-- Inversion: `var i` types at `ctxGet Γ i` (the lookup that produced it). -/
+private theorem var_ty_inv {Γ : List Expr} {i : Nat} {A : Expr} {σ : Grade} {φ : Usage}
+    (h : HasType Γ (var i) A σ φ) : ctxGet Γ i = some A := by
+  cases h with
+  | var hlk => exact hlk
+
+/-- Generic `app` inversion, packaged existentially so the conclusion type becomes a plain
+    equality (`A = subst0 aa B`) rather than a dependent-elimination constraint on a concrete
+    index. -/
+private theorem app_ty_inv {Γ : List Expr} {g aa A : Expr} {σ : Grade} {φ : Usage}
+    (h : HasType Γ (app g aa) A σ φ) :
+    ∃ ρ Adom B φf φa, HasType Γ g (pi ρ Adom B) σ φf ∧
+      HasType Γ aa Adom (σ.mul ρ) φa ∧ A = subst0 aa B := by
+  cases h with
+  | app hf ha => exact ⟨_, _, _, _, _, hf, ha, rfl⟩
+
+/-- Generic `lam` inversion (packaged existentially). -/
+private theorem lam_ty_inv {Γ : List Expr} {bd A : Expr} {σ : Grade} {φ : Usage}
+    (h : HasType Γ (lam bd) A σ φ) :
+    ∃ ρ Adom B δ rest, HasType (Adom :: Γ) bd B σ (δ :: rest) ∧ δ ≤ ρ ∧
+      A = pi ρ Adom B := by
+  cases h with
+  | lam hbody hle => exact ⟨_, _, _, _, _, hbody, hle, rfl⟩
+
+/-- In context `[bool, CtrP]`, the counterexample body `app (var 1) (var 0)` has type FORCED to
+    `var 0` — the crux fact that kills lam's flexibility. Both heads (`var 1`, `var 0`) resolve
+    through `ctxGet` with no lam in sight, so the codomain of `f` is rigid. -/
+private theorem body_ty_inv {B : Expr} {σ : Grade} {φ : Usage}
+    (h : HasType [bool, CtrP] ctrBody B σ φ) : B = var 0 := by
+  obtain ⟨ρ, Adom, Bc, φf, φa, hf, ha, heq⟩ := app_ty_inv h
+  have h1 := var_ty_inv hf
+  have hP : ctxGet [bool, CtrP] 1 = some (pi Grade.one bool (var 0)) := rfl
+  rw [hP] at h1
+  injection h1 with h1'
+  injection h1' with _ hdom hcod
+  subst hcod
+  rw [heq]; rfl
+
+/-- POSITIVE half: `app ctrF ctrA` is well-typed at type `ctrA` (= `ite tt tt ff`). -/
+private theorem ctr_good : ∃ φ, HasType CtrGam (app ctrF ctrA) ctrA Grade.one φ := by
+  have hf : HasType [bool, CtrP] (var 1) (pi Grade.one bool (var 0)) Grade.one _ :=
+    HasType.var (Γ := [bool, CtrP]) (i := 1) (σ := Grade.one) (A := pi Grade.one bool (var 0)) rfl
+  have haBody : HasType [bool, CtrP] (var 0) bool (Grade.one.mul Grade.one) _ :=
+    HasType.var (Γ := [bool, CtrP]) (i := 0) (σ := Grade.one.mul Grade.one) (A := bool) rfl
+  have hbody := HasType.app hf haBody
+  have hlen : _ := HasType.usage_length hbody
+  obtain ⟨δ, rest, hcons⟩ :
+      ∃ δ rest, (Usage.add (Usage.unit 1 [bool, CtrP].length Grade.one)
+        (Usage.unit 0 [bool, CtrP].length (Grade.one.mul Grade.one))) = δ :: rest := by
+    generalize hg : (Usage.add (Usage.unit 1 [bool, CtrP].length Grade.one)
+      (Usage.unit 0 [bool, CtrP].length (Grade.one.mul Grade.one))) = φb
+    rw [hg] at hlen
+    cases φb with
+    | nil => simp at hlen
+    | cons x xs => exact ⟨x, xs, rfl⟩
+  have hbody' : HasType [bool, CtrP] ctrBody (var 0) Grade.one (δ :: rest) := by
+    rw [← hcons]; exact hbody
+  have hfLam : HasType CtrGam ctrF (pi Grade.omega bool (var 0)) Grade.one rest :=
+    HasType.lam (ρ := Grade.omega) hbody' (by cases δ <;> decide)
+  have ha : HasType CtrGam ctrA bool (Grade.one.mul Grade.omega) _ :=
+    HasType.ite HasType.tt HasType.tt HasType.ff
+  exact ⟨_, HasType.app hfLam ha⟩
+
+/-- The step that changes the type: `app ctrF ctrA ↝ app ctrF ctrA'` (argument congruence, legal
+    because `ctrF` is a value). -/
+private theorem ctr_step : Step (app ctrF ctrA) (app ctrF ctrA') := Step.app2 Value.lam Step.ite_tt
+
+/-- NEGATIVE half: the stepped term `app ctrF ctrA'` has NO typing at `ctrA` — proved by full
+    inversion (domain pinned by `tt`'s rigidity via `tt_ty_inv`, codomain pinned by the rigid body
+    via `body_ty_inv`), so its only possible type `subst0 tt (var 0) = tt ≠ ite tt tt ff`. -/
+private theorem ctr_bad : ¬ ∃ φ, HasType CtrGam (app ctrF ctrA') ctrA Grade.one φ := by
+  rintro ⟨φ, h⟩
+  obtain ⟨ρ, Adom, B, φf, φa, hf, ha, heq⟩ := app_ty_inv h
+  have hAdom : Adom = bool := tt_ty_inv ha
+  subst hAdom
+  obtain ⟨ρ2, Adom2, B2, δ, rest, hbody, hle, hpieq⟩ := lam_ty_inv hf
+  injection hpieq with _ hdomeq hcodeq
+  subst hdomeq
+  subst hcodeq
+  have hB : B = var 0 := body_ty_inv hbody
+  subst hB
+  exact absurd heq (by decide)
+
+/-- **Preservation FAILS** for the dependent-`Π` fragment's syntax-directed, conversion-free
+    `HasType`/`Step`: there is a well-typed term (`app ctrF ctrA`, of type `ctrA`) that steps
+    (`ctr_step`) to a term (`app ctrF ctrA'`) with no typing at the same type (`ctr_bad`). This is
+    the exact canonical `preservation` statement the roadmap asks about, negated. -/
+theorem preservation_false :
+    ¬ (∀ {Γ : List Expr} {e e' A : Expr} {σ : Grade} {φ : Usage},
+        HasType Γ e A σ φ → Step e e' → ∃ φ', HasType Γ e' A σ φ') := by
+  intro pres
+  obtain ⟨φ, hgood⟩ := ctr_good
+  exact ctr_bad (pres hgood ctr_step)
 
 end Dep
 end BlightMeta

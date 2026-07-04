@@ -680,10 +680,11 @@ continuation capture), proving preservation and the resume-once theorem *operati
 - **Exit:** [metatheory-mechanized.md](metatheory-mechanized.md) checklist rows flip;
   metatheory.md §2 evidence upgraded.
 
-### [~] P2 — Dependent.lean substitution + preservation
+### [x] P2 — Dependent.lean substitution + preservation
 
-The substitution lemma is **done + machine-verified**; `preservation` itself is a genuine open
-subtlety (below). Same red protocol.
+**Settled + machine-verified.** The substitution lemma is **proved**; `preservation` is **proved
+false** for this fragment (a real metatheoretic finding, not a gap). Both questions the milestone
+posed are now definitively answered with zero-`sorryAx` Lean.
 
 - **Prerequisite (2026-07-04, `10596c9`):** `Expr.subst_subst_comm`, the substitution/substitution
   commutation lemma, plus its cancellation helper. `#print axioms` = `[propext, Quot.sound]`, no
@@ -694,17 +695,24 @@ subtlety (below). Same red protocol.
   axioms subst_lemma` = `[propext, Classical.choice, Quot.sound]`, no `sorryAx`. Found en route (via
   a 5-way independent worktree fan-out): the `ctxInsert` formulation provably cannot do the `lam`
   case (it head-shifts the domain), so the lemma is stated over an explicit telescope `Δ ++ A'::Γ`.
-- **`preservation` — OPEN, and subtler than it first looked.** A first fan-out concluded it is
-  *false* (the `app2` argument-congruence case: `app f a'` types at `subst0 a' B`, not the required
-  `subst0 a B`). **That counterexample was refuted by independent verification** (machine-checked):
-  `lam` has no domain annotation, so a *value*'s `pi`-codomain is non-unique, and `app2` needs
-  `Value f` (always a `lam`), so the stepped term recovers the original type via a different codomain
-  (`app (lam (lam tt)) tt` checks at `pi 1 (app (lam tt) tt) bool`). So `app2` is a proof-engineering
-  obstruction (re-derive the value at an adjusted codomain), and preservation's true status is open —
-  NOT the trivial loss the agents reported. **Correction:** an earlier note here claimed dependent-Π
-  preservation needs no conversion relation; that was premature — the `app2` case is genuinely
-  non-trivial, whether or not it ultimately needs conversion.
-- **Exit:** `preservation` proved (or a valid, refutation-surviving counterexample), zero `sorryAx`.
+- **`preservation` — PROVED FALSE (2026-07-04):** `preservation_false` in `Dependent.lean`, `#print
+  axioms` = `[propext, Quot.sound]`, no `sorryAx`. Subject reduction genuinely fails for this
+  syntax-directed, conversion-free `HasType` via the `app2` (argument-congruence) case. Settling it
+  took **two adversarial fan-outs plus hand-verification**, because the question is subtle:
+  - Fan-out #1 said "false" with a *wrong* counterexample — **refuted** (machine-checked): `lam` has
+    no domain annotation, so a value's `pi`-codomain is non-unique and `app2`'s `Value f` is always a
+    `lam`; a *lam-headed* body lets the stepped term recover the original type (`app (lam (lam tt)) tt`
+    checks at `pi 1 (app (lam tt) tt) bool`). I initially concluded from this that preservation was
+    probably *true* — also wrong.
+  - Fan-out #2 (adversarial, provers vs refuters) found the *real* counterexample: with
+    `Γ = [Π(x:bool).x]` (a dependent function in the context), `f = lam (app (var 1) (var 0)) :
+    Π ρ bool (var 0)` has a **rigid, var/app-headed** body, so its codomain is forced;
+    `app f (ite tt tt ff) : ite tt tt ff` steps to `app f tt : tt ≠ ite tt tt ff`, and the domain
+    (via `tt`) + codomain (lam-free body) are both pinned, so no flexibility rescues it.
+  Recovering subject reduction needs a conversion rule (or type well-formedness restricting such
+  contexts) — a real result, arguably more informative than a bare preservation proof would have been.
+- **Exit — MET:** substitution lemma proved + `preservation` question settled (false), both zero
+  `sorryAx`; `Dependent.lean`'s header updated.
 
 ### [ ] P3 — Dependent Kan increment (scoped)
 
