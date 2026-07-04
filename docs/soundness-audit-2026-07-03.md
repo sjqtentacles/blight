@@ -97,10 +97,20 @@ root cause, follow-up below).**
   (the "trans-chain rhs boundary" case). Verdict golden re-blessed — exactly that one line changed
   (diff-reviewed: no `Ok→Rejected` regression). Differential + proptest harnesses still green
   (kernel-accept ⇒ recheck agrees/declines).
-  **NOTE — flat_esc.bl::main did NOT flip** (still `Rejected`): its "nested Pair-match inference"
-  failure has a *different* root cause than Ann-reflection. Needs separate investigation (likely an
-  inference/`from_kernel`/match-compilation issue, not eval reflection). Tracked as a follow-up
-  below.
+  **NOTE — flat_esc.bl::main did NOT flip** (still `Rejected`) — a *separate* open follow-up
+  (false-`Reject`, so safe: recheck is merely too strict). **Diagnosis (2026-07-03):** the exact
+  rejection is `type mismatch: inferred Pair Nat Nat but expected Nat`. It reproduces on a
+  *single-level* match over a parameterized `Pair (Pair Nat Nat) Nat` (a function-call scrutinee, so
+  the Elim doesn't iota-reduce away) — not specific to nesting. The elaborated method term for the
+  `mk-pair` branch applies a `(the (Π(w:Pair Nat Nat).Nat) …)` to `Var(0)`, i.e. it uses the
+  *innermost* binder as the *first* constructor arg (`A = Pair Nat Nat`); but recheck's `method_type`
+  binds `Var(0)` to the *second* arg (`B = Nat`) — an arg-order mismatch between recheck's
+  `method_type` telescope and the elaborator's compiled method. The kernel accepts because it checks
+  `main` via the abstract `pair-fst`/`pair-snd` projection helpers (never a concrete-param `mk-pair`
+  Elim in `main` itself), so it never hits this concrete path. **Fix location:** recheck
+  `typecheck.rs` `method_type`/non-indexed Elim method checking (parameterized, non-indexed families)
+  — reconcile the method telescope's arg order with the elaborator's compiled-match convention.
+  NOT a soundness hole; NOT a kernel bug.
 
 - [x] **R-P4 — `transp_pi` codomain line uses constant `x1` instead of the transport fill**
   (`recheck/kan.rs`). *Resolved-by-K5 (no code needed):* the K5 kernel fix (2695749) rejects every
