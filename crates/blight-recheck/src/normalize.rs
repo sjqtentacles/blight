@@ -647,7 +647,13 @@ fn quote_interval(dlvl: usize, r: &RInterval) -> RInterval {
     match nf_interval(r) {
         RInterval::I0 => RInterval::I0,
         RInterval::I1 => RInterval::I1,
-        RInterval::Dim(k) => RInterval::Dim(dlvl.saturating_sub(1).saturating_sub(k)),
+        // Injective level→index conversion (`dlvl - k - 1`), matching the kernel's `quote_interval`
+        // (`kernel/normalize.rs`). `wrapping_sub` keeps it injective even when a dimension escaped
+        // its binder (`k >= dlvl`, reachable via `family_is_constant`'s conv at `dlvl = 0`): the
+        // wrapped values stay distinct, so `conv` never equates distinct stuck path apps. The
+        // previous `saturating_sub` collapsed every escaped level to `Dim(0)` — a false-`Ok`
+        // (soundness audit 2026-07-03, R-P1). For the valid case `k < dlvl` both agree (`dlvl-k-1`).
+        RInterval::Dim(k) => RInterval::Dim(dlvl.wrapping_sub(k).wrapping_sub(1)),
         RInterval::Min(a, b) => RInterval::Min(
             Box::new(quote_interval(dlvl, &a)),
             Box::new(quote_interval(dlvl, &b)),
@@ -705,6 +711,29 @@ mod rp3_tests {
             RInterval::I1,
         );
         assert!(matches!(eval(&sig, &env, &term), RValue::Univ(7)));
+    }
+}
+
+#[cfg(test)]
+mod rp1_tests {
+    use super::*;
+
+    /// R-P1 (soundness audit 2026-07-03): `quote_interval` must be injective. `family_is_constant`
+    /// (`kan.rs`) convs at `dlvl = 0`, so a stuck path application carrying a dimension level from
+    /// an outer scope is quoted with `k >= dlvl`. `dlvl.saturating_sub(1).saturating_sub(k)`
+    /// collapsed all such to `Dim(0)` — so `conv` equated distinct stuck path apps (a genuinely
+    /// non-constant family judged constant → mis-reduction → false-`Ok`). The valid in-scope case
+    /// (`k < dlvl`) is unchanged; only the escaped case is repaired to stay injective.
+    #[test]
+    fn quote_interval_is_injective_on_escaped_dims() {
+        assert_ne!(
+            quote_interval(0, &RInterval::Dim(0)),
+            quote_interval(0, &RInterval::Dim(1)),
+            "distinct escaped dimensions must quote to distinct indices"
+        );
+        // In-scope quoting is unaffected: k < dlvl still gives dlvl - k - 1.
+        assert_eq!(quote_interval(2, &RInterval::Dim(0)), RInterval::Dim(1));
+        assert_eq!(quote_interval(2, &RInterval::Dim(1)), RInterval::Dim(0));
     }
 }
 
