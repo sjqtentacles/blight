@@ -772,15 +772,41 @@ impl Checker {
                             "Transp with φ = ⊤ requires a constant type line".into(),
                         ));
                     }
-                } else if !conv(ctx.len(), &a0, &a1)
-                    && !kan_line_grade_skeleton_eq(ctx.len(), &a0, &a1)
-                {
-                    return Err(TypeError::BadCubical(
-                        "Transp along a non-constant type line whose Pi-formers disagree in \
-                         grade would launder the base's usage discipline (obligation 1.3.2, \
-                         docs/metatheory.md §1.3)"
-                            .into(),
-                    ));
+                } else if !conv(ctx.len(), &a0, &a1) {
+                    // A genuinely non-constant type line. The grade-skeleton check below is now
+                    // *defense-in-depth*: since K3 rejects a grade-laundering `Glue` at *formation*
+                    // (no `Equiv (Πω) (Π1)` exists) and the K5 Π-open-line check below rejects every
+                    // non-constant Π line, no reachable path relies on it alone — but its soundness
+                    // content is independently mechanized (`GradeSkeleton.lean`) and it is cheap, so
+                    // it stays. (This is why no unit test exercises this exact branch in isolation.)
+                    if !kan_line_grade_skeleton_eq(ctx.len(), &a0, &a1) {
+                        return Err(TypeError::BadCubical(
+                            "Transp along a non-constant type line whose Pi-formers disagree in \
+                             grade would launder the base's usage discipline (obligation 1.3.2, \
+                             docs/metatheory.md §1.3)"
+                                .into(),
+                        ));
+                    }
+                    // K5 (soundness audit 2026-07-03): `kan::transp_pi` transports only Kan lines
+                    // whose component lines are constant; a genuinely heterogeneous `Pi`-headed
+                    // line (e.g. `i. Π(x:A). q@i` with `q : Path (Univ 0) B C`) later panics in
+                    // `transp_pi`'s `quote_value_at(1, 0, …)` on a level underflow. Reject it here.
+                    // The head of the *open* line is what `kan::transp` dispatches on — a `ua`-over-Π
+                    // line has `Π` *endpoints* but a `Glue`-headed open line (soundly handled by
+                    // `transp_glue`), so we inspect the open line, not `a0`/`a1`.
+                    let open = eval(
+                        &self.env_for(ctx).extend_dim(crate::term::Interval::Dim(0)),
+                        family,
+                    );
+                    if matches!(open, Value::Pi(..)) {
+                        return Err(TypeError::BadCubical(
+                            "Transp along a genuinely heterogeneous Π type line is out of scope: \
+                             only Kan lines whose component (domain/codomain) lines are constant \
+                             transport in M0 (a ua/Glue line transports via its equivalence \
+                             instead). See kan::transp_pi."
+                                .into(),
+                        ));
+                    }
                 }
                 Ok((a1, row, usage))
             }
@@ -5691,6 +5717,41 @@ mod tests {
             result.is_ok(),
             "a cofibration mentioning exactly the maximum dimension count must still be checked, \
              not rejected"
+        );
+    }
+
+    /// Soundness audit K5: `transp_pi` handles only Kan lines whose component lines are constant;
+    /// a genuinely heterogeneous `Pi`-headed line (its codomain varying through a stuck path
+    /// application) later panics in `transp_pi`'s `quote_value_at(1, 0, …)` (a level underflow),
+    /// having been wrongly accepted by the grade-skeleton allowance. The typing rule must reject
+    /// such a line up front. Here `q : Path (Univ 0) IntTy (Σ IntTy IntTy)` makes the codomain
+    /// line `q @ i` genuinely non-constant.
+    #[test]
+    fn transp_over_heterogeneous_pi_line_is_rejected() {
+        use crate::term::Interval;
+        let sigma_ty = Term::Sigma(Rc::new(Term::IntTy), Rc::new(Term::IntTy));
+        let q_ty = Term::PathP {
+            family: Rc::new(u(0)),
+            lhs: Rc::new(Term::IntTy),
+            rhs: Rc::new(sigma_ty),
+        };
+        let ctx = Context::empty().extend(q_ty, Grade::Omega); // q = Var 0
+        // family `i. Π(x:IntTy). q @ i` — a Pi-headed open line whose codomain genuinely varies.
+        let family = Term::Pi(
+            Grade::Omega,
+            Rc::new(Term::IntTy),
+            Rc::new(Term::PApp(Rc::new(Term::Var(1)), Interval::Dim(0))), // q@i (q = Var 1 under x)
+        );
+        let transp = Term::Transp {
+            family: Rc::new(family),
+            cofib: Cofib::Bot,
+            base: Rc::new(Term::Lam(Rc::new(Term::Var(0)))), // λx.x : Π IntTy IntTy = the i=0 face
+        };
+        let checker = Checker::new(std::rc::Rc::new(Signature::empty()));
+        assert!(
+            checker.infer(&ctx, &transp).is_err(),
+            "transp over a non-constant Pi-headed line must be rejected at typing (transp_pi does \
+             only constant component lines; a heterogeneous one panics at eval)"
         );
     }
 
