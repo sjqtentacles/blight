@@ -1748,17 +1748,31 @@ fn elab_handle(
     body: &Surface,
     return_clause: &(String, Box<Surface>),
     op_clauses: &[(String, String, String, Surface)],
+    expected: Option<&Term>,
 ) -> Result<Term, ElabError> {
+    // The body has the effectful computation's own type `A` (inferred), *not* the handle's result
+    // type — so it stays check-free here.
     let body_c = elab(env, scope, body, None)?;
-    // `return x. r`: one binder `x` (de Bruijn 0 in `r`).
+    // Both clause kinds produce the handle's *result* type `C` (`expected`, when the handle is
+    // ascribed or checked against a declared type). Threading `C` down — weakened past each clause's
+    // binders — is what lets a clause be a bare lambda, i.e. lets a *parameterized* handler
+    // (`handle : S -> A`, threading state through the continuation) elaborate instead of failing
+    // "cannot infer a type" on the un-annotated clause lambda. The kernel already checks clauses
+    // against `C` with `k : opCod -> C` (`check.rs`'s check-mode `Handle`); this just supplies the
+    // same `C` to the elaborator's bidirectional pass. When unascribed (`expected == None`) the
+    // clauses infer exactly as before, so ordinary handlers are unaffected.
+    //
+    // `return x. r`: one binder `x` (de Bruijn 0 in `r`), so `C` is weakened by 1.
     let (ret_name, ret_body) = return_clause;
     let ret_scope = scope.push_var(ret_name);
-    let return_c = elab(env, &ret_scope, ret_body, None)?;
-    // Each `op x k e`: two binders — `x` then `k`, so in `e` `k` is de Bruijn 0, `x` is 1.
+    let ret_expected = expected.map(|c| weaken(c, 1));
+    let return_c = elab(env, &ret_scope, ret_body, ret_expected.as_ref())?;
+    // Each `op x k e`: two binders — `x` then `k`, so in `e` `k` is de Bruijn 0, `x` is 1; `C` by 2.
     let mut op_clauses_c = Vec::with_capacity(op_clauses.len());
     for (op, x_name, k_name, clause_body) in op_clauses {
         let clause_scope = scope.push_var(x_name).push_var(k_name);
-        let clause_c = elab(env, &clause_scope, clause_body, None)?;
+        let clause_expected = expected.map(|c| weaken(c, 2));
+        let clause_c = elab(env, &clause_scope, clause_body, clause_expected.as_ref())?;
         op_clauses_c.push((op.clone(), Rc::new(clause_c)));
     }
     Ok(Term::Handle {
@@ -1798,7 +1812,7 @@ fn try_elab_row_polymorphic_handle(
     else {
         return Ok(None);
     };
-    let handle_term = elab_handle(env, scope, body, return_clause, op_clauses)?;
+    let handle_term = elab_handle(env, scope, body, return_clause, op_clauses, None)?;
     let a_c = elab(env, scope, a, None)?;
     let checker = blight_kernel::Checker::new(std::rc::Rc::new(env.signature().clone()));
     let ctx = blight_kernel::Context::empty();
@@ -2333,7 +2347,7 @@ fn elab(
             body,
             return_clause,
             op_clauses,
-        } => elab_handle(env, scope, body, return_clause, op_clauses),
+        } => elab_handle(env, scope, body, return_clause, op_clauses, expected),
         Surface::Bang(eff, a) => {
             // `E` is `pure`, a single effect name, a closed multi-label list, or `(L.. | r)` — see
             // `parse_row_pattern`. An open tail can only be elaborated here if it was already
@@ -2653,6 +2667,19 @@ fn synth_type(env: &ElabEnv, scope: &Scope, t: &Term) -> Option<Term> {
                 None
             }
         }
+        // A `perform op arg` synthesizes the operation's declared result type `B[arg/x]` (its
+        // codomain, instantiated at the argument). Without this, `synth_type` returns `None` for
+        // effectful terms, so an enclosing `let` binding a performed value — or a handle whose body
+        // performs — cannot ascribe its desugared lambda and fails "cannot infer a type" (the
+        // second half of what blocks a parameterized/state-passing effect handler). Conservative
+        // for parameterized effects (`type_args` present): their result type is over the effect's
+        // own parameter telescope, which we do not reconstruct here.
+        Term::Op {
+            op, type_args, arg, ..
+        } if type_args.is_empty() => env
+            .signature()
+            .op_of(op.as_str())
+            .map(|(_eff, opsig)| subst0_closed(&opsig.result_ty, arg)),
         _ => None,
     }
 }

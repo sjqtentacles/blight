@@ -357,7 +357,7 @@ GLOBAL std/lexer.bl bytes-new Ok
 GLOBAL std/lexer.bl bytes-set Ok
 GLOBAL std/lexer.bl cmp Ok
 GLOBAL std/lexer.bl even Ok
-GLOBAL std/lexer.bl fill-from Declined
+GLOBAL std/lexer.bl fill-from Ok
 GLOBAL std/lexer.bl four-is-even Ok
 GLOBAL std/lexer.bl int-add Ok
 GLOBAL std/lexer.bl int-div Ok
@@ -373,7 +373,7 @@ GLOBAL std/lexer.bl int-zero Ok
 GLOBAL std/lexer.bl is-digit Ok
 GLOBAL std/lexer.bl is-space Ok
 GLOBAL std/lexer.bl max Ok
-GLOBAL std/lexer.bl max-paren-depth Declined
+GLOBAL std/lexer.bl max-paren-depth Ok
 GLOBAL std/lexer.bl min Ok
 GLOBAL std/lexer.bl mult Ok
 GLOBAL std/lexer.bl mult-two-three-is-six Ok
@@ -393,9 +393,9 @@ GLOBAL std/lexer.bl paren-step Ok
 GLOBAL std/lexer.bl plus Ok
 GLOBAL std/lexer.bl plus-two-three-is-five Ok
 GLOBAL std/lexer.bl pred Ok
-GLOBAL std/lexer.bl scan-depth Declined
+GLOBAL std/lexer.bl scan-depth Ok
 GLOBAL std/lexer.bl show Ok
-GLOBAL std/lexer.bl string->bytes Declined
+GLOBAL std/lexer.bl string->bytes Ok
 GLOBAL std/lexer.bl string-append Ok
 GLOBAL std/lexer.bl string-eq Ok
 GLOBAL std/lexer.bl string-length Ok
@@ -608,7 +608,7 @@ GLOBAL std/parser.bl cmp Ok
 GLOBAL std/parser.bl concat Ok
 GLOBAL std/parser.bl count-atoms Ok
 GLOBAL std/parser.bl even Ok
-GLOBAL std/parser.bl fill-from Declined
+GLOBAL std/parser.bl fill-from Ok
 GLOBAL std/parser.bl filter Ok
 GLOBAL std/parser.bl finish Ok
 GLOBAL std/parser.bl flush Ok
@@ -634,7 +634,7 @@ GLOBAL std/parser.bl list->sexp Ok
 GLOBAL std/parser.bl list-if Ok
 GLOBAL std/parser.bl map Ok
 GLOBAL std/parser.bl max Ok
-GLOBAL std/parser.bl max-paren-depth Declined
+GLOBAL std/parser.bl max-paren-depth Ok
 GLOBAL std/parser.bl maybe Ok
 GLOBAL std/parser.bl maybe-bind Ok
 GLOBAL std/parser.bl maybe-map Ok
@@ -659,7 +659,7 @@ GLOBAL std/parser.bl paren-step Ok
 GLOBAL std/parser.bl paren-tok Ok
 GLOBAL std/parser.bl parse-go Ok
 GLOBAL std/parser.bl parse-init Ok
-GLOBAL std/parser.bl parse-string Declined
+GLOBAL std/parser.bl parse-string Ok
 GLOBAL std/parser.bl parse-tokens Ok
 GLOBAL std/parser.bl plus Ok
 GLOBAL std/parser.bl plus-two-three-is-five Ok
@@ -668,12 +668,12 @@ GLOBAL std/parser.bl pstate-error Ok
 GLOBAL std/parser.bl push-atom Ok
 GLOBAL std/parser.bl reverse Ok
 GLOBAL std/parser.bl reverse-onto Ok
-GLOBAL std/parser.bl scan-depth Declined
+GLOBAL std/parser.bl scan-depth Ok
 GLOBAL std/parser.bl sexp-atoms Ok
 GLOBAL std/parser.bl show Ok
 GLOBAL std/parser.bl step-acc Ok
 GLOBAL std/parser.bl step-emit Ok
-GLOBAL std/parser.bl string->bytes Declined
+GLOBAL std/parser.bl string->bytes Ok
 GLOBAL std/parser.bl string-append Ok
 GLOBAL std/parser.bl string-eq Ok
 GLOBAL std/parser.bl string-length Ok
@@ -681,8 +681,8 @@ GLOBAL std/parser.bl string-map Ok
 GLOBAL std/parser.bl string-reverse Ok
 GLOBAL std/parser.bl string-shift Ok
 GLOBAL std/parser.bl sub Ok
-GLOBAL std/parser.bl tok-go Declined
-GLOBAL std/parser.bl tokenize Declined
+GLOBAL std/parser.bl tok-go Ok
+GLOBAL std/parser.bl tokenize Ok
 FILE std/path.bl forms=9 declared=9 checked=0
 GLOBAL std/path.bl Equiv Ok
 GLOBAL std/path.bl equiv-fun Ok
@@ -1364,7 +1364,7 @@ GLOBAL spore_reader.bl band Ok
 GLOBAL spore_reader.bl banf-size Ok
 GLOBAL spore_reader.bl bc-lets Ok
 GLOBAL spore_reader.bl bcheck Ok
-GLOBAL spore_reader.bl bcheck-string Declined
+GLOBAL spore_reader.bl bcheck-string Ok
 GLOBAL spore_reader.bl bcompile Ok
 GLOBAL spore_reader.bl bcout-atom Ok
 GLOBAL spore_reader.bl bcout-counter Ok
@@ -1383,7 +1383,7 @@ GLOBAL spore_reader.bl bshift Ok
 GLOBAL spore_reader.bl bshift-var Ok
 GLOBAL spore_reader.bl bsig-size Ok
 GLOBAL spore_reader.bl bsize Ok
-GLOBAL spore_reader.bl bsource->bsurf Declined
+GLOBAL spore_reader.bl bsource->bsurf Ok
 GLOBAL spore_reader.bl bsubst Ok
 GLOBAL spore_reader.bl bsubst-var Ok
 GLOBAL spore_reader.bl btm-size Ok
@@ -1428,7 +1428,7 @@ GLOBAL spore_reader.bl demo-bad-sig Ok
 GLOBAL spore_reader.bl demo-id Ok
 GLOBAL spore_reader.bl demo-id-sig Ok
 GLOBAL spore_reader.bl even Ok
-GLOBAL spore_reader.bl fill-from Declined
+GLOBAL spore_reader.bl fill-from Ok
 GLOBAL spore_reader.bl filter Ok
 GLOBAL spore_reader.bl finish Ok
 GLOBAL spore_reader.bl flush Ok
@@ -1461,7 +1461,7 @@ GLOBAL spore_reader.bl lookup-name-found Ok
 GLOBAL spore_reader.bl lookup-var Ok
 GLOBAL spore_reader.bl map Ok
 GLOBAL spore_reader.bl max Ok
-GLOBAL spore_reader.bl max-paren-depth Declined
+GLOBAL spore_reader.bl max-paren-depth Ok
 GLOBAL spore_reader.bl maybe Ok
 GLOBAL spore_reader.bl maybe-anf-size Ok
 GLOBAL spore_reader.bl maybe-bind Ok
@@ -1491,7 +1491,7 @@ GLOBAL spore_reader.bl paren-step Ok
 GLOBAL spore_reader.bl paren-tok Ok
 GLOBAL spore_reader.bl parse-go Ok
 GLOBAL spore_reader.bl parse-init Ok
-GLOBAL spore_reader.bl parse-string Declined
+GLOBAL spore_reader.bl parse-string Ok
 GLOBAL spore_reader.bl parse-tokens Ok
 GLOBAL spore_reader.bl pipe-bad-anf Ok
 GLOBAL spore_reader.bl pipe-bad-none Ok
@@ -1510,7 +1510,7 @@ GLOBAL spore_reader.bl resolve-ty Ok
 GLOBAL spore_reader.bl resolve-ty-fuel Ok
 GLOBAL spore_reader.bl reverse Ok
 GLOBAL spore_reader.bl reverse-onto Ok
-GLOBAL spore_reader.bl scan-depth Declined
+GLOBAL spore_reader.bl scan-depth Ok
 GLOBAL spore_reader.bl sexp-atoms Ok
 GLOBAL spore_reader.bl show Ok
 GLOBAL spore_reader.bl sig-arrow-view Ok
@@ -1518,7 +1518,7 @@ GLOBAL spore_reader.bl sig-arrow-view2 Ok
 GLOBAL spore_reader.bl split-arrow Ok
 GLOBAL spore_reader.bl step-acc Ok
 GLOBAL spore_reader.bl step-emit Ok
-GLOBAL spore_reader.bl string->bytes Declined
+GLOBAL spore_reader.bl string->bytes Ok
 GLOBAL spore_reader.bl string-append Ok
 GLOBAL spore_reader.bl string-eq Ok
 GLOBAL spore_reader.bl string-length Ok
@@ -1527,8 +1527,8 @@ GLOBAL spore_reader.bl string-reverse Ok
 GLOBAL spore_reader.bl string-shift Ok
 GLOBAL spore_reader.bl sub Ok
 GLOBAL spore_reader.bl sv-flat Ok
-GLOBAL spore_reader.bl tok-go Declined
-GLOBAL spore_reader.bl tokenize Declined
+GLOBAL spore_reader.bl tok-go Ok
+GLOBAL spore_reader.bl tokenize Ok
 GLOBAL spore_reader.bl uanf Ok
 GLOBAL spore_reader.bl uanf-app Ok
 GLOBAL spore_reader.bl uanf-lam Ok
@@ -1603,7 +1603,7 @@ GLOBAL examples/actor_pingpong.bl four-is-even Ok
 GLOBAL examples/actor_pingpong.bl from-maybe Ok
 GLOBAL examples/actor_pingpong.bl length Ok
 GLOBAL examples/actor_pingpong.bl list-if Ok
-GLOBAL examples/actor_pingpong.bl main Declined
+GLOBAL examples/actor_pingpong.bl main Ok
 GLOBAL examples/actor_pingpong.bl map Ok
 GLOBAL examples/actor_pingpong.bl max Ok
 GLOBAL examples/actor_pingpong.bl maybe Ok
@@ -1646,7 +1646,7 @@ GLOBAL examples/array_scratch.bl int-pred Ok
 GLOBAL examples/array_scratch.bl int-sub Ok
 GLOBAL examples/array_scratch.bl int-succ Ok
 GLOBAL examples/array_scratch.bl int-zero Ok
-GLOBAL examples/array_scratch.bl main Declined
+GLOBAL examples/array_scratch.bl main Ok
 GLOBAL examples/array_scratch.bl max Ok
 GLOBAL examples/array_scratch.bl min Ok
 GLOBAL examples/array_scratch.bl mult Ok
@@ -1786,7 +1786,7 @@ GLOBAL examples/bytes_scratch.bl int-pred Ok
 GLOBAL examples/bytes_scratch.bl int-sub Ok
 GLOBAL examples/bytes_scratch.bl int-succ Ok
 GLOBAL examples/bytes_scratch.bl int-zero Ok
-GLOBAL examples/bytes_scratch.bl main Declined
+GLOBAL examples/bytes_scratch.bl main Ok
 GLOBAL examples/bytes_scratch.bl max Ok
 GLOBAL examples/bytes_scratch.bl min Ok
 GLOBAL examples/bytes_scratch.bl mult Ok
@@ -1851,7 +1851,7 @@ GLOBAL examples/clock_scratch.bl int-pred Ok
 GLOBAL examples/clock_scratch.bl int-sub Ok
 GLOBAL examples/clock_scratch.bl int-succ Ok
 GLOBAL examples/clock_scratch.bl int-zero Ok
-GLOBAL examples/clock_scratch.bl main Declined
+GLOBAL examples/clock_scratch.bl main Ok
 FILE examples/collatz_steps.bl forms=26 declared=23 checked=3
 GLOBAL examples/collatz_steps.bl and Ok
 GLOBAL examples/collatz_steps.bl collatz Ok
@@ -1918,7 +1918,7 @@ GLOBAL examples/echo.bl cmp Ok
 GLOBAL examples/echo.bl even Ok
 GLOBAL examples/echo.bl four-is-even Ok
 GLOBAL examples/echo.bl get-line Ok
-GLOBAL examples/echo.bl main Declined
+GLOBAL examples/echo.bl main Ok
 GLOBAL examples/echo.bl max Ok
 GLOBAL examples/echo.bl min Ok
 GLOBAL examples/echo.bl mult Ok
@@ -2155,7 +2155,7 @@ GLOBAL examples/file_roundtrip.bl cmp Ok
 GLOBAL examples/file_roundtrip.bl even Ok
 GLOBAL examples/file_roundtrip.bl four-is-even Ok
 GLOBAL examples/file_roundtrip.bl get-line Ok
-GLOBAL examples/file_roundtrip.bl main Declined
+GLOBAL examples/file_roundtrip.bl main Ok
 GLOBAL examples/file_roundtrip.bl max Ok
 GLOBAL examples/file_roundtrip.bl min Ok
 GLOBAL examples/file_roundtrip.bl mult Ok
@@ -2333,7 +2333,7 @@ GLOBAL examples/game/guess.bl console-if Ok
 GLOBAL examples/game/guess.bl even Ok
 GLOBAL examples/game/guess.bl four-is-even Ok
 GLOBAL examples/game/guess.bl get-line Ok
-GLOBAL examples/game/guess.bl main Declined
+GLOBAL examples/game/guess.bl main Ok
 GLOBAL examples/game/guess.bl max Ok
 GLOBAL examples/game/guess.bl min Ok
 GLOBAL examples/game/guess.bl mult Ok
@@ -2346,7 +2346,7 @@ GLOBAL examples/game/guess.bl or Ok
 GLOBAL examples/game/guess.bl pair-fst Ok
 GLOBAL examples/game/guess.bl pair-snd Ok
 GLOBAL examples/game/guess.bl pair-swap Ok
-GLOBAL examples/game/guess.bl play Declined
+GLOBAL examples/game/guess.bl play Ok
 GLOBAL examples/game/guess.bl plus Ok
 GLOBAL examples/game/guess.bl plus-two-three-is-five Ok
 GLOBAL examples/game/guess.bl pred Ok
@@ -2419,7 +2419,7 @@ GLOBAL examples/greet.bl cmp Ok
 GLOBAL examples/greet.bl even Ok
 GLOBAL examples/greet.bl four-is-even Ok
 GLOBAL examples/greet.bl get-line Ok
-GLOBAL examples/greet.bl main Declined
+GLOBAL examples/greet.bl main Ok
 GLOBAL examples/greet.bl max Ok
 GLOBAL examples/greet.bl min Ok
 GLOBAL examples/greet.bl mult Ok
@@ -3078,7 +3078,7 @@ GLOBAL examples/paren_depth.bl bytes-new Ok
 GLOBAL examples/paren_depth.bl bytes-set Ok
 GLOBAL examples/paren_depth.bl cmp Ok
 GLOBAL examples/paren_depth.bl even Ok
-GLOBAL examples/paren_depth.bl fill-from Declined
+GLOBAL examples/paren_depth.bl fill-from Ok
 GLOBAL examples/paren_depth.bl four-is-even Ok
 GLOBAL examples/paren_depth.bl int-add Ok
 GLOBAL examples/paren_depth.bl int-div Ok
@@ -3093,9 +3093,9 @@ GLOBAL examples/paren_depth.bl int-succ Ok
 GLOBAL examples/paren_depth.bl int-zero Ok
 GLOBAL examples/paren_depth.bl is-digit Ok
 GLOBAL examples/paren_depth.bl is-space Ok
-GLOBAL examples/paren_depth.bl main Declined
+GLOBAL examples/paren_depth.bl main Ok
 GLOBAL examples/paren_depth.bl max Ok
-GLOBAL examples/paren_depth.bl max-paren-depth Declined
+GLOBAL examples/paren_depth.bl max-paren-depth Ok
 GLOBAL examples/paren_depth.bl min Ok
 GLOBAL examples/paren_depth.bl mult Ok
 GLOBAL examples/paren_depth.bl mult-two-three-is-six Ok
@@ -3115,10 +3115,10 @@ GLOBAL examples/paren_depth.bl paren-step Ok
 GLOBAL examples/paren_depth.bl plus Ok
 GLOBAL examples/paren_depth.bl plus-two-three-is-five Ok
 GLOBAL examples/paren_depth.bl pred Ok
-GLOBAL examples/paren_depth.bl scan-depth Declined
+GLOBAL examples/paren_depth.bl scan-depth Ok
 GLOBAL examples/paren_depth.bl show Ok
 GLOBAL examples/paren_depth.bl source Ok
-GLOBAL examples/paren_depth.bl string->bytes Declined
+GLOBAL examples/paren_depth.bl string->bytes Ok
 GLOBAL examples/paren_depth.bl string-append Ok
 GLOBAL examples/paren_depth.bl string-eq Ok
 GLOBAL examples/paren_depth.bl string-length Ok
@@ -3150,7 +3150,7 @@ GLOBAL examples/parse_demo.bl cmp Ok
 GLOBAL examples/parse_demo.bl concat Ok
 GLOBAL examples/parse_demo.bl count-atoms Ok
 GLOBAL examples/parse_demo.bl even Ok
-GLOBAL examples/parse_demo.bl fill-from Declined
+GLOBAL examples/parse_demo.bl fill-from Ok
 GLOBAL examples/parse_demo.bl filter Ok
 GLOBAL examples/parse_demo.bl finish Ok
 GLOBAL examples/parse_demo.bl flush Ok
@@ -3174,10 +3174,10 @@ GLOBAL examples/parse_demo.bl is-space Ok
 GLOBAL examples/parse_demo.bl length Ok
 GLOBAL examples/parse_demo.bl list->sexp Ok
 GLOBAL examples/parse_demo.bl list-if Ok
-GLOBAL examples/parse_demo.bl main Declined
+GLOBAL examples/parse_demo.bl main Ok
 GLOBAL examples/parse_demo.bl map Ok
 GLOBAL examples/parse_demo.bl max Ok
-GLOBAL examples/parse_demo.bl max-paren-depth Declined
+GLOBAL examples/parse_demo.bl max-paren-depth Ok
 GLOBAL examples/parse_demo.bl maybe Ok
 GLOBAL examples/parse_demo.bl maybe-bind Ok
 GLOBAL examples/parse_demo.bl maybe-map Ok
@@ -3202,7 +3202,7 @@ GLOBAL examples/parse_demo.bl paren-step Ok
 GLOBAL examples/parse_demo.bl paren-tok Ok
 GLOBAL examples/parse_demo.bl parse-go Ok
 GLOBAL examples/parse_demo.bl parse-init Ok
-GLOBAL examples/parse_demo.bl parse-string Declined
+GLOBAL examples/parse_demo.bl parse-string Ok
 GLOBAL examples/parse_demo.bl parse-tokens Ok
 GLOBAL examples/parse_demo.bl plus Ok
 GLOBAL examples/parse_demo.bl plus-two-three-is-five Ok
@@ -3211,13 +3211,13 @@ GLOBAL examples/parse_demo.bl pstate-error Ok
 GLOBAL examples/parse_demo.bl push-atom Ok
 GLOBAL examples/parse_demo.bl reverse Ok
 GLOBAL examples/parse_demo.bl reverse-onto Ok
-GLOBAL examples/parse_demo.bl scan-depth Declined
+GLOBAL examples/parse_demo.bl scan-depth Ok
 GLOBAL examples/parse_demo.bl sexp-atoms Ok
 GLOBAL examples/parse_demo.bl show Ok
 GLOBAL examples/parse_demo.bl source Ok
 GLOBAL examples/parse_demo.bl step-acc Ok
 GLOBAL examples/parse_demo.bl step-emit Ok
-GLOBAL examples/parse_demo.bl string->bytes Declined
+GLOBAL examples/parse_demo.bl string->bytes Ok
 GLOBAL examples/parse_demo.bl string-append Ok
 GLOBAL examples/parse_demo.bl string-eq Ok
 GLOBAL examples/parse_demo.bl string-length Ok
@@ -3225,8 +3225,8 @@ GLOBAL examples/parse_demo.bl string-map Ok
 GLOBAL examples/parse_demo.bl string-reverse Ok
 GLOBAL examples/parse_demo.bl string-shift Ok
 GLOBAL examples/parse_demo.bl sub Ok
-GLOBAL examples/parse_demo.bl tok-go Declined
-GLOBAL examples/parse_demo.bl tokenize Declined
+GLOBAL examples/parse_demo.bl tok-go Ok
+GLOBAL examples/parse_demo.bl tokenize Ok
 FILE examples/plus_zero_proof.bl forms=17 declared=13 checked=4
 GLOBAL examples/plus_zero_proof.bl and Ok
 GLOBAL examples/plus_zero_proof.bl even Ok
@@ -3717,7 +3717,7 @@ GLOBAL examples/selfhost_check.bl band Ok
 GLOBAL examples/selfhost_check.bl banf-size Ok
 GLOBAL examples/selfhost_check.bl bc-lets Ok
 GLOBAL examples/selfhost_check.bl bcheck Ok
-GLOBAL examples/selfhost_check.bl bcheck-string Declined
+GLOBAL examples/selfhost_check.bl bcheck-string Ok
 GLOBAL examples/selfhost_check.bl bcompile Ok
 GLOBAL examples/selfhost_check.bl bcout-atom Ok
 GLOBAL examples/selfhost_check.bl bcout-counter Ok
@@ -3736,7 +3736,7 @@ GLOBAL examples/selfhost_check.bl bshift Ok
 GLOBAL examples/selfhost_check.bl bshift-var Ok
 GLOBAL examples/selfhost_check.bl bsig-size Ok
 GLOBAL examples/selfhost_check.bl bsize Ok
-GLOBAL examples/selfhost_check.bl bsource->bsurf Declined
+GLOBAL examples/selfhost_check.bl bsource->bsurf Ok
 GLOBAL examples/selfhost_check.bl bsubst Ok
 GLOBAL examples/selfhost_check.bl bsubst-var Ok
 GLOBAL examples/selfhost_check.bl btm-size Ok
@@ -3770,7 +3770,7 @@ GLOBAL examples/selfhost_check.bl char-quote-code Ok
 GLOBAL examples/selfhost_check.bl char-space Ok
 GLOBAL examples/selfhost_check.bl char-ten Ok
 GLOBAL examples/selfhost_check.bl char-two Ok
-GLOBAL examples/selfhost_check.bl check-source Declined
+GLOBAL examples/selfhost_check.bl check-source Ok
 GLOBAL examples/selfhost_check.bl ci-demo-app Ok
 GLOBAL examples/selfhost_check.bl ci-demo-app-anf Ok
 GLOBAL examples/selfhost_check.bl ci-demo-id Ok
@@ -3793,7 +3793,7 @@ GLOBAL examples/selfhost_check.bl digit-char Ok
 GLOBAL examples/selfhost_check.bl digits-to-string Ok
 GLOBAL examples/selfhost_check.bl escape-one Ok
 GLOBAL examples/selfhost_check.bl even Ok
-GLOBAL examples/selfhost_check.bl fill-from Declined
+GLOBAL examples/selfhost_check.bl fill-from Ok
 GLOBAL examples/selfhost_check.bl filter Ok
 GLOBAL examples/selfhost_check.bl finish Ok
 GLOBAL examples/selfhost_check.bl flush Ok
@@ -3833,10 +3833,10 @@ GLOBAL examples/selfhost_check.bl list-if Ok
 GLOBAL examples/selfhost_check.bl lookup-name Ok
 GLOBAL examples/selfhost_check.bl lookup-name-found Ok
 GLOBAL examples/selfhost_check.bl lookup-var Ok
-GLOBAL examples/selfhost_check.bl main Declined
+GLOBAL examples/selfhost_check.bl main Ok
 GLOBAL examples/selfhost_check.bl map Ok
 GLOBAL examples/selfhost_check.bl max Ok
-GLOBAL examples/selfhost_check.bl max-paren-depth Declined
+GLOBAL examples/selfhost_check.bl max-paren-depth Ok
 GLOBAL examples/selfhost_check.bl maybe Ok
 GLOBAL examples/selfhost_check.bl maybe-anf-size Ok
 GLOBAL examples/selfhost_check.bl maybe-bind Ok
@@ -3872,7 +3872,7 @@ GLOBAL examples/selfhost_check.bl paren-step Ok
 GLOBAL examples/selfhost_check.bl paren-tok Ok
 GLOBAL examples/selfhost_check.bl parse-go Ok
 GLOBAL examples/selfhost_check.bl parse-init Ok
-GLOBAL examples/selfhost_check.bl parse-string Declined
+GLOBAL examples/selfhost_check.bl parse-string Ok
 GLOBAL examples/selfhost_check.bl parse-tokens Ok
 GLOBAL examples/selfhost_check.bl pipe-bad-anf Ok
 GLOBAL examples/selfhost_check.bl pipe-bad-none Ok
@@ -3893,7 +3893,7 @@ GLOBAL examples/selfhost_check.bl resolve-ty Ok
 GLOBAL examples/selfhost_check.bl resolve-ty-fuel Ok
 GLOBAL examples/selfhost_check.bl reverse Ok
 GLOBAL examples/selfhost_check.bl reverse-onto Ok
-GLOBAL examples/selfhost_check.bl scan-depth Declined
+GLOBAL examples/selfhost_check.bl scan-depth Ok
 GLOBAL examples/selfhost_check.bl scratch Ok
 GLOBAL examples/selfhost_check.bl sexp-atoms Ok
 GLOBAL examples/selfhost_check.bl show Ok
@@ -3902,7 +3902,7 @@ GLOBAL examples/selfhost_check.bl sig-arrow-view2 Ok
 GLOBAL examples/selfhost_check.bl split-arrow Ok
 GLOBAL examples/selfhost_check.bl step-acc Ok
 GLOBAL examples/selfhost_check.bl step-emit Ok
-GLOBAL examples/selfhost_check.bl string->bytes Declined
+GLOBAL examples/selfhost_check.bl string->bytes Ok
 GLOBAL examples/selfhost_check.bl string-append Ok
 GLOBAL examples/selfhost_check.bl string-eq Ok
 GLOBAL examples/selfhost_check.bl string-length Ok
@@ -3911,8 +3911,8 @@ GLOBAL examples/selfhost_check.bl string-reverse Ok
 GLOBAL examples/selfhost_check.bl string-shift Ok
 GLOBAL examples/selfhost_check.bl sub Ok
 GLOBAL examples/selfhost_check.bl sv-flat Ok
-GLOBAL examples/selfhost_check.bl tok-go Declined
-GLOBAL examples/selfhost_check.bl tokenize Declined
+GLOBAL examples/selfhost_check.bl tok-go Ok
+GLOBAL examples/selfhost_check.bl tokenize Ok
 GLOBAL examples/selfhost_check.bl uanf Ok
 GLOBAL examples/selfhost_check.bl uanf-app Ok
 GLOBAL examples/selfhost_check.bl uanf-lam Ok

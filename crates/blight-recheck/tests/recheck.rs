@@ -1034,6 +1034,54 @@ fn recheck_agrees_on_surface_effect_program() {
     assert_agreement(&env, &proofs, "M7:surface-effects");
 }
 
+/// The elaborator now supports a **parameterized / state-passing handler**: one whose result type
+/// is itself a function `State -> A`, threading the state through the continuation, with each clause
+/// a lambda over that state (`handle : Nat -> Nat`). Before this landed, elaboration failed "cannot
+/// infer a type" on the un-annotated clause lambdas. Two elaborator-only fixes enable it: (a) the
+/// handle's expected result type is flowed into its clauses (so their lambdas *check* against it),
+/// and (b) `synth_type` recognizes `perform` (so a `let` binding a performed value in the handle
+/// body can ascribe its desugared lambda). The kernel already typed `k : opCod -> C` in check mode.
+/// This pins that the shape elaborates, kernel-checks, and — the two-checker guarantee — the
+/// independent re-checker AGREES (`Ok`).
+#[test]
+fn recheck_agrees_on_state_passing_handler() {
+    let src = "\
+(load \"std/nat.bl\")
+(defdata MyUnit () (myu))
+(effect St (getS MyUnit Nat) (putS Nat MyUnit))
+(define prog (Pi ((s0 Nat)) Nat)
+  (handle
+    (let ((a (perform getS myu)))
+      (let ((u (perform putS (Succ a)))) (perform getS myu)))
+    (return x (lam (s) x))
+    (getS u k (lam (s) ((k s) s)))
+    (putS v k (lam (s) ((k myu) v)))))
+";
+    let (env, proofs) = load(src);
+    let sig = env.signature();
+    let mut saw = false;
+    for (name, term, ty) in env.typed_globals() {
+        if name == "prog" {
+            saw = true;
+            let j = Judgement::HasType {
+                term: term.clone(),
+                ty: ty.clone(),
+            };
+            match recheck_judgement(sig, &j) {
+                Ok(()) => {}
+                other => panic!(
+                    "re-checker must ACCEPT the state-passing handler `prog` (soundness/agreement), got {other:?}"
+                ),
+            }
+        }
+    }
+    assert!(
+        saw,
+        "expected the state-passing handler global `prog` to elaborate and re-check"
+    );
+    assert_agreement(&env, &proofs, "state-passing-handler");
+}
+
 /// RED (soundness alarm): a dependent **indexed-motive** eliminator whose result type DEPENDS on
 /// the index. `safe-tail : Π(A:U)(n:Nat)(v:Vec A (Succ n)). Vec A n` drops the head; its motive's
 /// result type is `Vec A n` (it mentions the index), unlike the length-erasing "always Nat" motive

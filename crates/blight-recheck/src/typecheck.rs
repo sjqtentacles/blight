@@ -500,7 +500,7 @@ impl<'a> Recheck<'a> {
                 body,
                 return_clause,
                 op_clauses,
-            } => self.infer_handle(ctx, body, return_clause, op_clauses, sigma),
+            } => self.infer_handle(ctx, body, return_clause, op_clauses, None, sigma),
 
             // ---- primitive machine integers (M11): pure arithmetic ----
             RTerm::IntTy => Ok((RValue::Univ(0), RRow::empty(), Usage::zero(n))),
@@ -558,14 +558,25 @@ impl<'a> Recheck<'a> {
         body: &RTerm,
         return_clause: &RTerm,
         op_clauses: &[(blight_kernel::signature::OpName, Box<RTerm>)],
+        expected: Option<&RValue>,
         sigma: RGrade,
     ) -> RResult<(RValue, RRow, Usage)> {
         // 1. Infer the body's type `A` and row `E_body`.
         let (body_ty, body_row, body_usage) = self.infer(ctx, body, sigma)?;
 
-        // 2. Return clause: bind `x : A`, infer its type `C` and row.
+        // 2. Return clause: bind `x : A`. In *check* mode (`expected` given) the handle's result
+        // type `C` is already known, so check the return clause against it — this is what lets a
+        // *parameterized*/state-passing handler (whose clauses are bare lambdas `λs. …`) re-check
+        // instead of declining, exactly mirroring the kernel's check-mode `Handle` rule
+        // (`check.rs`). In infer mode (`expected == None`) infer `C` from the return clause as before.
         let ctx_ret = ctx.extend(self.sig, body_ty, sigma);
-        let (c_ty, ret_row, ret_usage) = self.infer(&ctx_ret, return_clause, sigma)?;
+        let (c_ty, ret_row, ret_usage) = match expected {
+            Some(c) => {
+                let (row, usage) = self.check(&ctx_ret, return_clause, c, sigma)?;
+                ((*c).clone(), row, usage)
+            }
+            None => self.infer(&ctx_ret, return_clause, sigma)?,
+        };
         // `C` must live at `ctx.len()` (it may not mention the bound `x`); quote it there and
         // re-evaluate in the ambient env so it is reusable under the op clauses' binders.
         let c_term = quote(self.sig, ctx.lvl, ctx.dlvl, &c_ty);
@@ -708,6 +719,29 @@ impl<'a> Recheck<'a> {
                     return Err(reject("path rhs boundary mismatch"));
                 }
                 Ok((body_row, body_usage))
+            }
+            // Check-mode `handle`: the expected type *is* the result type `C` (mirrors the kernel's
+            // check-mode `Handle`, `check.rs`), so the clauses — including a bare return-clause
+            // lambda in a state-passing handler — are checked against it rather than inferred (which
+            // would decline). Sound: this is the same rule the kernel uses; it discharges the body's
+            // handled labels and enforces each clause's continuation-grade exactly as infer mode does.
+            (
+                RTerm::Handle {
+                    body,
+                    return_clause,
+                    op_clauses,
+                },
+                _,
+            ) => {
+                let (_c, row, usage) = self.infer_handle(
+                    ctx,
+                    body,
+                    return_clause,
+                    op_clauses,
+                    Some(expected),
+                    sigma,
+                )?;
+                Ok((row, usage))
             }
             _ => {
                 let (actual, row, usage) = self.infer(ctx, term, sigma)?;
