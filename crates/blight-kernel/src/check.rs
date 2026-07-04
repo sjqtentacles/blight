@@ -4015,6 +4015,79 @@ mod tests {
         );
     }
 
+    /// Soundness audit K4a: a negative occurrence hidden under a *wrapper* former (`EffTy`,
+    /// `Delay`, `PathP`, …) must still be caught. The first-draft `mentions_data` enumerated only a
+    /// handful of formers and silently returned `false` for the rest, admitting a
+    /// non-strictly-positive datatype (hence a fixpoint → inhabitant of `False`). Each probe hides
+    /// `Bad → Bad` (a negative occurrence) under a different wrapper.
+    #[test]
+    fn strict_positivity_rejects_negative_occurrence_under_wrappers() {
+        let bad_name = DataName("Bad".into());
+        let bad = || Term::Data(bad_name.clone(), vec![], vec![]);
+        let neg = || Term::Pi(Grade::Omega, Rc::new(bad()), Rc::new(bad())); // Bad → Bad
+        let sig = Signature::empty();
+        let probes = [
+            ("EffTy", Term::EffTy(crate::row::Row::empty(), Rc::new(neg()))),
+            ("Delay", Term::Delay(Rc::new(neg()))),
+            (
+                "PathP",
+                Term::PathP {
+                    family: Rc::new(neg()),
+                    lhs: Rc::new(bad()),
+                    rhs: Rc::new(bad()),
+                },
+            ),
+        ];
+        for (label, wrapped) in probes {
+            let decl = DataDecl {
+                name: bad_name.clone(),
+                params: vec![],
+                indices: vec![],
+                level: 0,
+                constructors: vec![Constructor {
+                    name: ConName("mk".into()),
+                    args: vec![Arg::NonRec(wrapped)],
+                    result_indices: vec![],
+                }],
+                path_constructors: vec![],
+            };
+            assert!(
+                sig.check_positivity(&decl).is_err(),
+                "a negative occurrence of Bad under {label} must be rejected"
+            );
+        }
+    }
+
+    /// The completeness fix must not over-reject: a constructor whose non-recursive argument types
+    /// never mention the data type (here a plain `Univ 0` field alongside a recursive argument)
+    /// still passes positivity.
+    #[test]
+    fn strict_positivity_accepts_ordinary_constructors() {
+        let decl = DataDecl {
+            name: DataName("D".into()),
+            params: vec![],
+            indices: vec![],
+            level: 1,
+            constructors: vec![
+                Constructor {
+                    name: ConName("c0".into()),
+                    args: vec![],
+                    result_indices: vec![],
+                },
+                Constructor {
+                    name: ConName("c1".into()),
+                    args: vec![Arg::NonRec(u(0)), Arg::Rec(vec![])],
+                    result_indices: vec![],
+                },
+            ],
+            path_constructors: vec![],
+        };
+        assert!(
+            Signature::empty().check_positivity(&decl).is_ok(),
+            "an ordinary constructor (non-recursive fields that don't mention D) is accepted"
+        );
+    }
+
     /// A HIT records its path constructor structurally (spec §2.7). Here a circle-like type with a
     /// point `base` and a loop path constructor; we just assert the signature is well-formed and
     /// the point constructor types.

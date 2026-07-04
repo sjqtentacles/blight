@@ -432,15 +432,24 @@ impl ElabEnv {
             );
             ctor_order.push(cname.clone());
         }
-        self.datas.insert(name.to_string(), ctor_order);
-        self.signature.declare(DataDecl {
+        let decl = DataDecl {
             name: data_name,
             params: param_terms,
             indices: index_terms,
             level: 0,
             constructors: kernel_ctors,
             path_constructors: vec![],
-        });
+        };
+        // Strict-positivity gate (spec §2.7): reject a non-strictly-positive declaration before it
+        // enters the signature — a negative self-occurrence admits a fixpoint and thus an
+        // inhabitant of `False`. Mirrors `declare_effect`'s `check_effect` call; previously the
+        // kernel's `check_positivity` existed but was never invoked on the declaration path
+        // (soundness audit 2026-07-03, K4b).
+        self.signature
+            .check_positivity(&decl)
+            .map_err(ElabError::BadForm)?;
+        self.datas.insert(name.to_string(), ctor_order);
+        self.signature.declare(decl);
         Ok(())
     }
 

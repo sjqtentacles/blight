@@ -249,8 +249,18 @@ impl Signature {
     }
 }
 
-/// Whether a term mentions a given data type by name (a conservative negative-occurrence check
-/// for M0: any non-`Rec` mention is rejected as potentially non-positive).
+/// Whether a term mentions a given data type by name — a conservative negative-occurrence check
+/// (for M0: *any* mention inside a non-`Rec` argument is rejected as potentially non-positive; the
+/// legitimate strictly-positive recursive occurrences are carried structurally by [`Arg::Rec`] and
+/// never reach here). Guarded self-references (under `Later`/`Delay`) are also rejected — sound but
+/// conservative; refining to position-awareness (allowing guarded/codata occurrences) is future
+/// work.
+///
+/// **Exhaustive by design.** The match has no `_` wildcard arm: a newly-added [`Term`] variant will
+/// fail to compile until its positivity handling is decided explicitly. The previous draft used a
+/// `_ => false` catch-all that silently skipped `EffTy`/`Delay`/`PathP`/`Transp`/… — so a negative
+/// self-occurrence hidden under any of those passed the check, admitting a non-strictly-positive
+/// datatype and hence a fixpoint (soundness audit 2026-07-03, K4a).
 fn mentions_data(term: &Term, name: &DataName) -> bool {
     match term {
         Term::Data(d, params, indices) => {
@@ -258,12 +268,81 @@ fn mentions_data(term: &Term, name: &DataName) -> bool {
                 || params.iter().any(|t| mentions_data(t, name))
                 || indices.iter().any(|t| mentions_data(t, name))
         }
-        Term::Pi(_, a, b) | Term::Sigma(a, b) | Term::App(a, b) => {
+        Term::Pi(_, a, b) | Term::Sigma(a, b) | Term::App(a, b) | Term::Ann(a, b) => {
             mentions_data(a, name) || mentions_data(b, name)
         }
-        Term::Lam(b) | Term::Fst(b) | Term::Snd(b) => mentions_data(b, name),
-        Term::Ann(t, ty) => mentions_data(t, name) || mentions_data(ty, name),
-        _ => false,
+        Term::Pair(a, b) => mentions_data(a, name) || mentions_data(b, name),
+        // Single-`Term`-child formers (the child sits at various positions; the `Interval`/`Cofib`/
+        // `Row`/symbol siblings carry no `Term`).
+        Term::Lam(b)
+        | Term::Fst(b)
+        | Term::Snd(b)
+        | Term::PLam(b)
+        | Term::PApp(b, _)
+        | Term::Partial(_, b)
+        | Term::Unglue(b)
+        | Term::EffTy(_, b)
+        | Term::Delay(b)
+        | Term::Now(b)
+        | Term::Later(b)
+        | Term::Force(b)
+        | Term::Foreign { ty: b, .. } => mentions_data(b, name),
+        Term::Con(_, args) | Term::PCon { args, .. } => {
+            args.iter().any(|t| mentions_data(t, name))
+        }
+        Term::Elim {
+            motive,
+            methods,
+            scrutinee,
+            ..
+        } => {
+            mentions_data(motive, name)
+                || methods.iter().any(|t| mentions_data(t, name))
+                || mentions_data(scrutinee, name)
+        }
+        Term::PathP { family, lhs, rhs } => {
+            mentions_data(family, name) || mentions_data(lhs, name) || mentions_data(rhs, name)
+        }
+        Term::System(branches) => branches.iter().any(|b| mentions_data(&b.term, name)),
+        Term::Transp { family, base, .. } => {
+            mentions_data(family, name) || mentions_data(base, name)
+        }
+        Term::HComp {
+            ty, tube, base, ..
+        } => mentions_data(ty, name) || mentions_data(tube, name) || mentions_data(base, name),
+        Term::Comp {
+            family, tube, base, ..
+        } => {
+            mentions_data(family, name) || mentions_data(tube, name) || mentions_data(base, name)
+        }
+        Term::Glue {
+            base, ty, equiv, ..
+        } => mentions_data(base, name) || mentions_data(ty, name) || mentions_data(equiv, name),
+        Term::GlueTerm { partial, base, .. } => {
+            mentions_data(partial, name) || mentions_data(base, name)
+        }
+        Term::Op { type_args, arg, .. } => {
+            type_args.iter().any(|t| mentions_data(t, name)) || mentions_data(arg, name)
+        }
+        Term::Handle {
+            body,
+            return_clause,
+            op_clauses,
+        } => {
+            mentions_data(body, name)
+                || mentions_data(return_clause, name)
+                || op_clauses.iter().any(|(_, e)| mentions_data(e, name))
+        }
+        Term::IntPrim { lhs, rhs, .. } => {
+            mentions_data(lhs, name) || mentions_data(rhs, name)
+        }
+        // Leaves with no `Term` child: cannot mention a data type.
+        Term::Var(_)
+        | Term::Univ(_)
+        | Term::Interval(_)
+        | Term::IntTy
+        | Term::IntLit(_)
+        | Term::Erased => false,
     }
 }
 
@@ -404,5 +483,319 @@ mod tests {
         let (e, op) = sig.op_of("get").expect("op get");
         assert_eq!(e.name, EffName("Ref".into()));
         assert_eq!(op.name, "get");
+    }
+
+    /// Pins [`mentions_data`]'s exhaustive traversal (soundness audit K4a): it must find the data
+    /// type in *every* child position of *every* subterm-bearing former. Each probe places the
+    /// data (`hit`) in exactly one position and a non-mentioning term (`no`) in every other, so a
+    /// dropped recursion arm, a weakened `||`→`&&`, or a nullified `.any()` fails on at least one
+    /// probe. Leaves must never report a mention, and a *different* data name must not match.
+    #[test]
+    fn mentions_data_recurses_through_every_term_former() {
+        use crate::row::{EffName, Row};
+        use crate::semiring::Grade;
+        use crate::term::{Cofib, IntPrimOp, Interval, Level, SystemBranch};
+        use std::rc::Rc;
+
+        let d = DataName("D".into());
+        let other = || DataName("Other".into());
+        let hit = || Term::Data(d.clone(), vec![], vec![]); // mentions D
+        let no = || Term::IntTy; // does not mention D
+        let r = |t: Term| Rc::new(t);
+
+        let probes: Vec<(&str, Term)> = vec![
+            ("Data head", hit()),
+            ("Data param", Term::Data(other(), vec![hit()], vec![])),
+            ("Data index", Term::Data(other(), vec![], vec![hit()])),
+            ("Pi dom", Term::Pi(Grade::Omega, r(hit()), r(no()))),
+            ("Pi cod", Term::Pi(Grade::Omega, r(no()), r(hit()))),
+            ("Sigma fst", Term::Sigma(r(hit()), r(no()))),
+            ("Sigma snd", Term::Sigma(r(no()), r(hit()))),
+            ("App fn", Term::App(r(hit()), r(no()))),
+            ("App arg", Term::App(r(no()), r(hit()))),
+            ("Ann tm", Term::Ann(r(hit()), r(no()))),
+            ("Ann ty", Term::Ann(r(no()), r(hit()))),
+            ("Pair fst", Term::Pair(r(hit()), r(no()))),
+            ("Pair snd", Term::Pair(r(no()), r(hit()))),
+            ("Lam", Term::Lam(r(hit()))),
+            ("Fst", Term::Fst(r(hit()))),
+            ("Snd", Term::Snd(r(hit()))),
+            ("PLam", Term::PLam(r(hit()))),
+            ("PApp", Term::PApp(r(hit()), Interval::I0)),
+            ("Partial", Term::Partial(Cofib::Top, r(hit()))),
+            ("Unglue", Term::Unglue(r(hit()))),
+            ("EffTy", Term::EffTy(Row::empty(), r(hit()))),
+            ("Delay", Term::Delay(r(hit()))),
+            ("Now", Term::Now(r(hit()))),
+            ("Later", Term::Later(r(hit()))),
+            ("Force", Term::Force(r(hit()))),
+            (
+                "Foreign ty",
+                Term::Foreign {
+                    symbol: "s".into(),
+                    ty: r(hit()),
+                },
+            ),
+            ("Con arg", Term::Con(ConName("c".into()), vec![hit()])),
+            (
+                "PCon arg",
+                Term::PCon {
+                    data: d.clone(),
+                    name: ConName("c".into()),
+                    args: vec![hit()],
+                    dim: Interval::I0,
+                },
+            ),
+            (
+                "Elim motive",
+                Term::Elim {
+                    data: d.clone(),
+                    motive: r(hit()),
+                    methods: vec![],
+                    scrutinee: r(no()),
+                },
+            ),
+            (
+                "Elim method",
+                Term::Elim {
+                    data: d.clone(),
+                    motive: r(no()),
+                    methods: vec![hit()],
+                    scrutinee: r(no()),
+                },
+            ),
+            (
+                "Elim scrutinee",
+                Term::Elim {
+                    data: d.clone(),
+                    motive: r(no()),
+                    methods: vec![],
+                    scrutinee: r(hit()),
+                },
+            ),
+            (
+                "PathP family",
+                Term::PathP {
+                    family: r(hit()),
+                    lhs: r(no()),
+                    rhs: r(no()),
+                },
+            ),
+            (
+                "PathP lhs",
+                Term::PathP {
+                    family: r(no()),
+                    lhs: r(hit()),
+                    rhs: r(no()),
+                },
+            ),
+            (
+                "PathP rhs",
+                Term::PathP {
+                    family: r(no()),
+                    lhs: r(no()),
+                    rhs: r(hit()),
+                },
+            ),
+            (
+                "System",
+                Term::System(vec![SystemBranch {
+                    face: Cofib::Top,
+                    term: hit(),
+                }]),
+            ),
+            (
+                "Transp family",
+                Term::Transp {
+                    family: r(hit()),
+                    cofib: Cofib::Top,
+                    base: r(no()),
+                },
+            ),
+            (
+                "Transp base",
+                Term::Transp {
+                    family: r(no()),
+                    cofib: Cofib::Top,
+                    base: r(hit()),
+                },
+            ),
+            (
+                "HComp ty",
+                Term::HComp {
+                    ty: r(hit()),
+                    cofib: Cofib::Top,
+                    tube: r(no()),
+                    base: r(no()),
+                },
+            ),
+            (
+                "HComp tube",
+                Term::HComp {
+                    ty: r(no()),
+                    cofib: Cofib::Top,
+                    tube: r(hit()),
+                    base: r(no()),
+                },
+            ),
+            (
+                "HComp base",
+                Term::HComp {
+                    ty: r(no()),
+                    cofib: Cofib::Top,
+                    tube: r(no()),
+                    base: r(hit()),
+                },
+            ),
+            (
+                "Comp family",
+                Term::Comp {
+                    family: r(hit()),
+                    cofib: Cofib::Top,
+                    tube: r(no()),
+                    base: r(no()),
+                },
+            ),
+            (
+                "Comp tube",
+                Term::Comp {
+                    family: r(no()),
+                    cofib: Cofib::Top,
+                    tube: r(hit()),
+                    base: r(no()),
+                },
+            ),
+            (
+                "Comp base",
+                Term::Comp {
+                    family: r(no()),
+                    cofib: Cofib::Top,
+                    tube: r(no()),
+                    base: r(hit()),
+                },
+            ),
+            (
+                "Glue base",
+                Term::Glue {
+                    base: r(hit()),
+                    cofib: Cofib::Top,
+                    ty: r(no()),
+                    equiv: r(no()),
+                },
+            ),
+            (
+                "Glue ty",
+                Term::Glue {
+                    base: r(no()),
+                    cofib: Cofib::Top,
+                    ty: r(hit()),
+                    equiv: r(no()),
+                },
+            ),
+            (
+                "Glue equiv",
+                Term::Glue {
+                    base: r(no()),
+                    cofib: Cofib::Top,
+                    ty: r(no()),
+                    equiv: r(hit()),
+                },
+            ),
+            (
+                "GlueTerm partial",
+                Term::GlueTerm {
+                    cofib: Cofib::Top,
+                    partial: r(hit()),
+                    base: r(no()),
+                },
+            ),
+            (
+                "GlueTerm base",
+                Term::GlueTerm {
+                    cofib: Cofib::Top,
+                    partial: r(no()),
+                    base: r(hit()),
+                },
+            ),
+            (
+                "Op type_arg",
+                Term::Op {
+                    effect: EffName("E".into()),
+                    op: "o".into(),
+                    type_args: vec![hit()],
+                    arg: r(no()),
+                },
+            ),
+            (
+                "Op arg",
+                Term::Op {
+                    effect: EffName("E".into()),
+                    op: "o".into(),
+                    type_args: vec![],
+                    arg: r(hit()),
+                },
+            ),
+            (
+                "Handle body",
+                Term::Handle {
+                    body: r(hit()),
+                    return_clause: r(no()),
+                    op_clauses: vec![],
+                },
+            ),
+            (
+                "Handle return",
+                Term::Handle {
+                    body: r(no()),
+                    return_clause: r(hit()),
+                    op_clauses: vec![],
+                },
+            ),
+            (
+                "Handle clause",
+                Term::Handle {
+                    body: r(no()),
+                    return_clause: r(no()),
+                    op_clauses: vec![("o".into(), r(hit()))],
+                },
+            ),
+            (
+                "IntPrim lhs",
+                Term::IntPrim {
+                    op: IntPrimOp::Add,
+                    lhs: r(hit()),
+                    rhs: r(no()),
+                },
+            ),
+            (
+                "IntPrim rhs",
+                Term::IntPrim {
+                    op: IntPrimOp::Add,
+                    lhs: r(no()),
+                    rhs: r(hit()),
+                },
+            ),
+        ];
+        for (label, t) in &probes {
+            assert!(mentions_data(t, &d), "{label}: the single occurrence of D must be found");
+        }
+
+        // Leaves carry no `Term` child, so they mention no data type.
+        let leaves = [
+            ("Var", Term::Var(0)),
+            ("Univ", Term::Univ(Level::Zero)),
+            ("Interval", Term::Interval(Interval::I0)),
+            ("IntTy", Term::IntTy),
+            ("IntLit", Term::IntLit(3)),
+            ("Erased", Term::Erased),
+        ];
+        for (label, t) in &leaves {
+            assert!(!mentions_data(t, &d), "{label}: a leaf mentions no data type");
+        }
+        // A different data name under a former is not a match (guards the `d == name` check).
+        assert!(
+            !mentions_data(&Term::Delay(Rc::new(Term::Data(other(), vec![], vec![]))), &d),
+            "a *different* data type is not a mention of D"
+        );
     }
 }
