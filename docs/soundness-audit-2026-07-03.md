@@ -9,7 +9,10 @@ spore_codegen_meta false-`Rejected`, anf load-flake, bench nesting limit) are ex
 Governance: each fix follows the S3/N6 TCB gate protocol — full suite, byte-identical verdict
 golden, llvm bit-identity where relevant, mutants over new logic, plus a red-first pinning test.
 
-## Kernel soundness (trusted — highest priority)
+**Status (2026-07-03): all 7 kernel-side soundness bugs FIXED (K1–K7). The 5 re-checker parity
+bugs (R-P1…R-P5) remain — each false-`Ok` is fatal, so they are the next priority.**
+
+## Kernel soundness (trusted — highest priority) — ✅ COMPLETE
 
 - [x] **K1 — infer-mode `Con` on an indexed family discards recursive-argument indices**
   (`check.rs:620,625`). `rec_ty` was built with empty indices and `Arg::Rec(_)` dropped the
@@ -41,12 +44,15 @@ golden, llvm bit-identity where relevant, mutants over new logic, plus a red-fir
   non-positive occurrence (data name not in scope during its own fields — same limitation blocks
   legitimate nested types), so this hardens the kernel gate and future-proofs the path.
 
-- [ ] **K5 — `transp` over a non-constant Π line accepted, then panics** (`check.rs:743`,
-  `kan.rs:289`). The grade-skeleton equality gate accepts a line whose endpoints differ
-  (`Π Nat Nat` vs `Π Nat Bool` are skeleton-equal); normalization then underflows
-  `lvl - k - 1` at `normalize.rs:1211`. Fix: the acceptance predicate must require genuine
-  endpoint convertibility, not just skeleton equality, OR `transp_pi` must handle the neutral
-  case without the shallow quote.
+- [x] **K5 — `transp` over a non-constant Π line accepted, then panics** (`check.rs:743`,
+  `kan.rs:289`). The grade-skeleton gate accepted a heterogeneous Π line; `transp_pi` then
+  underflowed `quote_value_at(1,0,…)` on an escaping ambient neutral. *Fixed 2026-07-03
+  (2695749):* the Transp rule now evaluates the *open* line (family at a fresh dim — what
+  `kan::transp` dispatches on) and rejects a `Pi`-headed non-constant line. `ua`/Glue lines have
+  Π endpoints but a Glue-headed open line, so they still transport via `transp_glue`. Red pin;
+  kernel 183/183 incl. all ua/kan-conformance; workspace 876/876; verdict golden byte-identical;
+  1 accepted-sound mutant survivor (grade-skeleton check, now defense-in-depth per K3, mechanized
+  in GradeSkeleton.lean — documented inline).
 
 - [x] **K6 — infer-mode `Handle` return-clause type escaping `x` underflows** (`check.rs:419`).
   `c_ty` quoted at `ctx.len()` (one level too shallow); a return type mentioning the bound `x`
@@ -55,11 +61,12 @@ golden, llvm bit-identity where relevant, mutants over new logic, plus a red-fir
   quote runs only when `x` is provably unused. `uses_binder` exposed `pub(crate)`. Red pin +
   workspace 871/871 + verdict golden byte-identical + mutants.
 
-- [ ] **K7 — `check_kan_adequacy` shift overflow at ≥32 dimensions** (`check.rs:1012`).
-  `1u32 << dims.len()` panics in debug at 32+ dims; in release the shift is masked, so the
-  adequacy loop silently enumerates a tiny subset of boundary faces — weakening a guard whose
-  own comment says it prevents a genuine unsoundness. Fix: bound-check `dims.len()` and reject
-  (or widen) rather than shift-overflow. *Medium confidence / reachability.*
+- [x] **K7 — `check_kan_adequacy` shift overflow at ≥32 dimensions** (`check.rs:1012`).
+  `1u32 << dims.len()` overflowed/masked at 32+ dims, under-checking the adequacy guard. *Fixed
+  2026-07-03 (e835b8a):* reject a cofibration mentioning more than `MAX_KAN_ADEQUACY_DIMS` (16)
+  distinct dimensions before the shift — sound (never under-checks), far beyond any real
+  cofibration. Red pin (33-dim overflow → reject) + boundary pin (exactly 16 accepted); workspace
+  875/875; verdict golden byte-identical; mutants 0-missed.
 
 ## Re-checker parity (trusted second opinion — false-`Ok` is fatal)
 
