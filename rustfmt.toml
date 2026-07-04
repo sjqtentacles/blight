@@ -1,0 +1,6 @@
+# Pin the formatting style to the 2021 style edition. Without this, `cargo fmt` follows the
+# toolchain's default style edition (2024 as of rustc 1.96), which re-sorts imports and re-wraps
+# committed code — so `cargo fmt --all --check` starts failing on untouched files the moment the
+# toolchain updates. Pinning keeps the check meaningful: a failure is drift in *our* code, not in
+# rustfmt's defaults. Revisit deliberately (one repo-wide reformat commit) when moving editions.
+style_edition = "2021"
