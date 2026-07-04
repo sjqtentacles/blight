@@ -9,8 +9,10 @@ spore_codegen_meta false-`Rejected`, anf load-flake, bench nesting limit) are ex
 Governance: each fix follows the S3/N6 TCB gate protocol — full suite, byte-identical verdict
 golden, llvm bit-identity where relevant, mutants over new logic, plus a red-first pinning test.
 
-**Status (2026-07-03): all 7 kernel-side soundness bugs FIXED (K1–K7). The 5 re-checker parity
-bugs (R-P1…R-P5) remain — each false-`Ok` is fatal, so they are the next priority.**
+**Status (2026-07-03): ALL 7 kernel-side (K1–K7) AND all 5 re-checker parity bugs (R-P1…R-P5)
+resolved — the whole soundness audit is closed. R-P3 also closed one of the two pinned
+false-`Rejected` verdicts (spore); flat_esc.bl::main remains a separate false-`Reject` (different
+root cause, follow-up below).**
 
 ## Kernel soundness (trusted — highest priority) — ✅ COMPLETE
 
@@ -100,11 +102,22 @@ bugs (R-P1…R-P5) remain — each false-`Ok` is fatal, so they are the next pri
   inference/`from_kernel`/match-compilation issue, not eval reflection). Tracked as a follow-up
   below.
 
-- [ ] **R-P4 — `transp_pi` codomain line uses constant `x1` instead of the transport fill**
-  (`recheck/kan.rs:105`); **R-P5 — `transp_sigma` uses source `a0` instead of the fill**
-  (`recheck/kan.rs:136`). Both use the collapsed constant-line rule where the kernel instantiates
-  at the backward transport-fill, diverging for genuinely-varying dependent lines. Fix: port the
-  kernel's `transp_fill_line`. *Medium confidence.*
+- [x] **R-P4 — `transp_pi` codomain line uses constant `x1` instead of the transport fill**
+  (`recheck/kan.rs`). *Resolved-by-K5 (no code needed):* the K5 kernel fix (2695749) rejects every
+  non-constant Pi-headed transp line at type-check, so the re-checker (which sees only
+  kernel-accepted proofs) never receives a non-constant Pi transp — the divergence is unreachable.
+  The reachable constant case is already pinned by `transp_const_pi_is_identity`.
+
+- [x] **R-P5 — `transp_sigma` uses source `a0` instead of the fill** (`recheck/kan.rs`). *Fixed
+  2026-07-03:* ported the kernel's `transp_fill_line` and conditionalized `transp_sigma`'s
+  second-component line on `family_is_constant(fst_line)` (mirrors the mechanized kernel).
+  **Reachability (definitive):** a genuinely-varying first-component *type* line requires a path
+  between distinct types — a `ua`/`Glue` — which the re-checker **declines**, so the divergent
+  branch is unreachable-by-construction; no red test can reproduce it. The fix is therefore
+  *defensive parity* with the kernel, validated by mirroring the mechanized code + the constant-case
+  contract test (`transp_fill_line_is_identity_on_a_constant_family`) + the existing constant-Σ
+  regression + the kernel↔recheck differential harnesses. Recheck 83/83; verdict golden
+  byte-identical.
 
 ## Non-TCB (untrusted tooling / cleanup)
 

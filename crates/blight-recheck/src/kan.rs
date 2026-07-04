@@ -90,6 +90,37 @@ fn line_reverse(sig: &Signature, family: &DimClosure) -> DimClosure {
     }
 }
 
+/// The *partial transport line* `j. transpFill^i A φ a0` — mirrors the kernel's `transp_fill_line`
+/// (`kernel/kan.rs`). At `j = i0` it is `a0`; at `j = i1` it is the full `transp`. Realized as the
+/// closure `j. transp (i. A(i ∧ j)) ⊥ a0`, quoting the `Transp` *term* (not its forced value) so
+/// the `j`-dependence is preserved structurally.
+fn transp_fill_line(
+    sig: &Signature,
+    family: &DimClosure,
+    _cofib: &RCofib,
+    base: &RValue,
+) -> DimClosure {
+    let inner_line_body = {
+        // Project `A` at the conjunction of the inner bound dim (0) and the outer fill dim (1).
+        let projected = family.apply_dim(
+            sig,
+            RInterval::Min(Box::new(RInterval::Dim(0)), Box::new(RInterval::Dim(1))),
+        );
+        // Quote under two dimension binders (inner `i` = 0, outer `j` = 1).
+        quote(sig, 0, 2, &projected)
+    };
+    let base_body = quote(sig, 0, 1, base);
+    let transp_term = RTerm::Transp {
+        family: Box::new(inner_line_body),
+        cofib: RCofib::Bot,
+        base: Box::new(base_body),
+    };
+    DimClosure {
+        env: Env::new(),
+        body: Rc::new(transp_term),
+    }
+}
+
 fn transp_pi(sig: &Signature, family: &DimClosure, f: &RValue) -> RValue {
     let dom_line = line_closure(sig, family, |a| match a {
         RValue::Pi(_, d, _) => (*d).clone(),
@@ -132,11 +163,33 @@ fn transp_sigma(sig: &Signature, family: &DimClosure, pair: &RValue) -> RValue {
         other => other,
     });
     let a1 = transp(sig, &fst_line, &RCofib::Bot, &a0);
-    let a0c = a0.clone();
-    let snd_line = line_closure(sig, family, move |a| match a {
-        RValue::Sigma(_, cod) => cod.apply(sig, a0c.clone()),
-        other => other,
-    });
+    // Second-component line at the FILL of the first component: `i. B i (afill i)` (soundness
+    // audit 2026-07-03, R-P5, mirroring the kernel's `transp_sigma`). With a constant
+    // first-component line the fill is constant `= a0`, recovering `i. B i a0`; with a genuinely
+    // varying one, instantiating `B` at the source `a0` (the previous behavior) diverged from the
+    // kernel. (Reachability: a varying first-component *type* line requires a path between distinct
+    // types, i.e. a `ua`/`Glue`, which the re-checker *declines* — so this branch is defensive.)
+    let snd_line = if family_is_constant(sig, &fst_line) {
+        let a0c = a0.clone();
+        line_closure(sig, family, move |a| match a {
+            RValue::Sigma(_, cod) => cod.apply(sig, a0c.clone()),
+            other => other,
+        })
+    } else {
+        let fill = transp_fill_line(sig, &fst_line, &RCofib::Bot, &a0);
+        let projected = match family.apply_dim(sig, RInterval::Dim(0)) {
+            RValue::Sigma(_, cod) => {
+                let a_here = fill.apply_dim(sig, RInterval::Dim(0));
+                cod.apply(sig, a_here)
+            }
+            other => other,
+        };
+        let body = quote(sig, 0, 1, &projected);
+        DimClosure {
+            env: Env::new(),
+            body: Rc::new(body),
+        }
+    };
     let b1 = transp(sig, &snd_line, &RCofib::Bot, &b0);
     RValue::Pair(Rc::new(a1), Rc::new(b1))
 }
@@ -627,6 +680,28 @@ mod tests {
             }
             other => panic!("transp over a heterogeneous Sigma line is a pair, got {other:?}"),
         }
+    }
+
+    /// R-P5 (soundness audit 2026-07-03): `transp_fill_line` (ported to keep `transp_sigma`'s
+    /// second-component line at the *fill* of the first component, mirroring the kernel) is the
+    /// identity on a constant type line — `base` at both endpoints. This is the only reachable
+    /// input: a genuinely *varying* first-component type line needs a path between distinct types
+    /// (a `ua`/`Glue`), which the re-checker declines, so the divergent branch is unreachable and
+    /// the fix is defensive parity with the mechanized kernel.
+    #[test]
+    fn transp_fill_line_is_identity_on_a_constant_family() {
+        let s = sig();
+        let family = const_line(nat_t()); // i. Nat — constant
+        let base = succ_v(zero_v());
+        let fill = transp_fill_line(&s, &family, &RCofib::Bot, &base);
+        assert!(
+            veq(&s, &fill.apply_dim(&s, RInterval::I0), &base),
+            "fill at j=i0 is base"
+        );
+        assert!(
+            veq(&s, &fill.apply_dim(&s, RInterval::I1), &base),
+            "fill at j=i1 is base (constant line ⇒ identity transport)"
+        );
     }
 
     // ---- varying-face `hcomp` (Track M1) ----
