@@ -43,11 +43,12 @@ golden, llvm bit-identity where relevant, mutants over new logic, plus a red-fir
   endpoint convertibility, not just skeleton equality, OR `transp_pi` must handle the neutral
   case without the shallow quote.
 
-- [ ] **K6 — infer-mode `Handle` return-clause type escaping `x` underflows** (`check.rs:419`).
-  `c_ty` is quoted at `ctx.len()` (one level too shallow) with no scope-escape check; a return
-  clause whose type mentions the bound result `x` panics with subtraction overflow instead of a
-  clean `TypeError`. Fix: detect the escaping occurrence and reject, or quote at the extended
-  depth and validate.
+- [x] **K6 — infer-mode `Handle` return-clause type escaping `x` underflows** (`check.rs:419`).
+  `c_ty` quoted at `ctx.len()` (one level too shallow); a return type mentioning the bound `x`
+  panicked with subtraction overflow. *Fixed 2026-07-03 (88774ac):* quote at the extended depth
+  (never underflows), reject with a clean `EffectError` if `uses_binder(_, 0)`, then the shallow
+  quote runs only when `x` is provably unused. `uses_binder` exposed `pub(crate)`. Red pin +
+  workspace 871/871 + verdict golden byte-identical + mutants.
 
 - [ ] **K7 — `check_kan_adequacy` shift overflow at ≥32 dimensions** (`check.rs:1012`).
   `1u32 << dims.len()` panics in debug at 32+ dims; in release the shift is masked, so the
