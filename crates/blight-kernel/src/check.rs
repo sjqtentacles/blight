@@ -614,32 +614,50 @@ impl Checker {
                 }
                 let decl_name = decl.name.clone();
                 let result_index_terms = ctor.result_indices.clone();
-                // We only reach inference mode for a *non-parameterized* family (parameterized ones
-                // require a type ascription, above). Recursive arguments therefore share the family
-                // head with no parameters; indices, if any, are reconciled against the result below.
-                let rec_ty = Value::Data(decl_name.clone(), Rc::new(vec![]), Rc::new(vec![]));
+                let arg_shapes = ctor.args.clone();
+                // Thread the argument *values* through the environment left-to-right, exactly as
+                // the checking-mode `(Con, Data)` rule does (see `check_g`): a later argument's
+                // declared type, a recursive occurrence's index expressions, and the result
+                // indices are all de Bruijn terms over the (here empty) parameters and the
+                // *preceding* arguments, so each must be evaluated against those accumulated
+                // values — not the bare context env. The family is non-parameterized here
+                // (parameterized ones require an ascription, above), so `params` is empty.
+                //
+                // Soundness audit K1/K2 (2026-07-03): the previous code built recursive-occurrence
+                // types with empty indices — laundering e.g. a `Fin 2` where `Fin 0` was required —
+                // and evaluated dependent non-recursive argument types in the un-threaded context
+                // env, panicking on an unbound de Bruijn index for a constructor like
+                // `mkbox : (A:Univ 0) → (x:A) → Box`.
                 let mut usage = Usage::zero(n);
                 let mut row = Row::empty();
-                for (arg, shape) in args.iter().zip(ctor.args.iter()) {
+                let mut arg_env = self.env_for(ctx);
+                for (arg, shape) in args.iter().zip(arg_shapes.iter()) {
                     let (arg_row, arg_usage) = match shape {
-                        Arg::Rec(_) => self.check_g(ctx, arg, &rec_ty, sigma)?,
+                        Arg::Rec(rec_indices) => {
+                            // The recursive occurrence is `D (rec_indices...)` (no params); the
+                            // index terms range over the preceding arguments.
+                            let rec_index_vals: Vec<Value> =
+                                rec_indices.iter().map(|t| eval(&arg_env, t)).collect();
+                            let rec_ty = Value::Data(
+                                decl_name.clone(),
+                                Rc::new(vec![]),
+                                Rc::new(rec_index_vals),
+                            );
+                            self.check_g(ctx, arg, &rec_ty, sigma)?
+                        }
                         Arg::NonRec(ty) => {
-                            let ty_val = eval(&self.env_for(ctx), ty);
+                            let ty_val = eval(&arg_env, ty);
                             self.check_g(ctx, arg, &ty_val, sigma)?
                         }
                     };
                     usage = usage.add(&arg_usage);
                     row = row.union(&arg_row);
+                    // Extend with this argument's value (a term over `ctx`) for subsequent args.
+                    arg_env = arg_env.extend(eval(&self.env_for(ctx), arg));
                 }
-                // Compute the result indices by evaluating each `result_index` against the argument
-                // values (innermost = last arg), in the current environment.
-                let mut env = self.env_for(ctx);
-                for arg in args.iter() {
-                    let v = eval(&self.env_for(ctx), arg);
-                    env = env.extend(v);
-                }
+                // Result indices are computed from the same threaded (param + args) environment.
                 let result_indices: Vec<Value> =
-                    result_index_terms.iter().map(|t| eval(&env, t)).collect();
+                    result_index_terms.iter().map(|t| eval(&arg_env, t)).collect();
                 let data_ty = Value::Data(decl_name, Rc::new(vec![]), Rc::new(result_indices));
                 Ok((data_ty, row, usage))
             }
@@ -3786,6 +3804,89 @@ mod tests {
 
     fn vec_ty(elem: Term, len: Term) -> Term {
         Term::Data(vec_name(), vec![elem], vec![len])
+    }
+
+    /// `Fin : Nat → Univ 0` — an *indexed but non-parameterized* family, with
+    /// `fz : (n:Nat) → Fin (succ n)` and `fs : (n:Nat) → Fin n → Fin (succ n)`. Unlike `Vec`
+    /// (which carries a parameter and so is forced into checking mode), a paramless indexed
+    /// family reaches the `Term::Con` *inference* rule — the path the soundness audit's K1/K2
+    /// findings live on.
+    fn fin_sig() -> Signature {
+        let mut sig = nat_sig();
+        sig.declare(DataDecl {
+            name: DataName("Fin".into()),
+            params: vec![],
+            indices: vec![nat_ty()],
+            level: 0,
+            constructors: vec![
+                Constructor {
+                    // fz : (n:Nat) → Fin (succ n); telescope [n], result index `succ n` (n = Var 0).
+                    name: ConName("fz".into()),
+                    args: vec![Arg::NonRec(nat_ty())],
+                    result_indices: vec![succ(Term::Var(0))],
+                },
+                Constructor {
+                    // fs : (n:Nat) → Fin n → Fin (succ n). Telescope [n, prev]; the recursive
+                    // occurrence is `Fin n` (n = Var 0 when checking `prev`); result index
+                    // `succ n` (n = Var 1 in the result scope [prev, n]).
+                    name: ConName("fs".into()),
+                    args: vec![Arg::NonRec(nat_ty()), Arg::Rec(vec![Term::Var(0)])],
+                    result_indices: vec![succ(Term::Var(1))],
+                },
+            ],
+            path_constructors: vec![],
+        });
+        sig
+    }
+
+    /// Soundness audit K1: inferring the type of a `Con` of an indexed, non-parameterized family
+    /// must VERIFY the recursive argument's declared indices. `fs zero (fz (succ zero))` has a
+    /// recursive argument `fz (succ zero) : Fin (succ (succ zero))` (Fin 2) where `fs zero …`
+    /// demands `Fin zero` (Fin 0) — the kernel must reject it, never launder a Fin-2 into a Fin-1.
+    #[test]
+    fn infer_con_indexed_family_checks_recursive_arg_indices() {
+        let checker = Checker::new(std::rc::Rc::new(fin_sig()));
+        let ctx = Context::empty();
+        // fz (succ zero) : Fin (succ (succ zero))
+        let fz_two = Term::Con(ConName("fz".into()), vec![succ(succ(zero()))]);
+        // fs zero (fz (succ zero)) — recursive arg demands Fin zero, but fz_two is Fin (succ …).
+        let laundering = Term::Con(ConName("fs".into()), vec![zero(), fz_two]);
+        assert!(
+            checker.infer(&ctx, &laundering).is_err(),
+            "the kernel must reject a Fin-2 element supplied where Fin-0 is required, \
+             not infer a laundered Fin-1 type for it"
+        );
+    }
+
+    /// Soundness audit K2: inferring the type of a `Con` whose later argument's type mentions an
+    /// earlier argument must evaluate that type in the environment threaded with the earlier
+    /// argument values — `mkbox : (A:Univ 0) → (x:A) → Box` applied to `Nat, zero` is well-typed
+    /// `Box`, and must not panic on an unbound de Bruijn index.
+    #[test]
+    fn infer_con_threads_earlier_args_into_dependent_arg_types() {
+        let mut sig = nat_sig();
+        sig.declare(DataDecl {
+            name: DataName("Box".into()),
+            params: vec![],
+            indices: vec![],
+            level: 1,
+            constructors: vec![Constructor {
+                // mkbox : (A : Univ 0) → (x : A) → Box. When checking `x`, the env is [A], so the
+                // arg type `A` is Var 0 — which is unbound unless the env is threaded.
+                name: ConName("mkbox".into()),
+                args: vec![Arg::NonRec(u(0)), Arg::NonRec(Term::Var(0))],
+                result_indices: vec![],
+            }],
+            path_constructors: vec![],
+        });
+        let checker = Checker::new(std::rc::Rc::new(sig));
+        let ctx = Context::empty();
+        let mkbox = Term::Con(ConName("mkbox".into()), vec![nat_ty(), zero()]);
+        assert_eq!(
+            checker.infer(&ctx, &mkbox),
+            Ok(Value::Data(DataName("Box".into()), Rc::new(vec![]), Rc::new(vec![]))),
+            "mkbox Nat zero : Box (dependent arg type A must resolve to Nat, not panic)"
+        );
     }
 
     /// `Nat : Univ 0` (formation).
