@@ -1,8 +1,8 @@
 {
   "name": "blight",
   "displayName": "Blight",
-  "description": "Syntax highlighting and Language Server support (diagnostics, hover, go-to-definition) for the Blight (.bl) language.",
-  "version": "0.2.0",
+  "description": "Syntax highlighting and Language Server support (diagnostics, hover, go-to-definition, completion, formatting, local rename) for the Blight (.bl) language.",
+  "version": "0.3.0",
   "publisher": "local",
   "license": "MIT",
   "engines": {

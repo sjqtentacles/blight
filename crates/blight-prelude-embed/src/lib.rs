@@ -8,73 +8,87 @@
 //! these embedded sources, so a user's own files and overrides always win.
 //!
 //! This lives in its own tiny crate (rather than inside `blight-repl`) so the LSP server can share
-//! the exact same embedded table instead of re-deriving it — one `include_str!` list, two
-//! consumers.
+//! the exact same embedded table instead of re-deriving it — one module list, two consumers.
 
-/// `(load name)` → embedded source, for every shipped prelude/tower module. Keys are exactly the
-/// strings that appear in `(load "…")` forms.
-pub fn embedded(name: &str) -> Option<&'static str> {
-    // The prelude lives next to this crate at `../blight-prelude/`. `include_str!` is resolved
-    // relative to *this* file at compile time, so the binary needs no runtime access to the tree.
-    macro_rules! p {
-        ($rel:literal) => {
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../blight-prelude/",
-                $rel
-            ))
-        };
-    }
-    Some(match name {
-        "std/nat.bl" => p!("std/nat.bl"),
-        "std/bool.bl" => p!("std/bool.bl"),
-        "std/order.bl" => p!("std/order.bl"),
-        "std/char.bl" => p!("std/char.bl"),
-        "std/list.bl" => p!("std/list.bl"),
-        "std/list_extra.bl" => p!("std/list_extra.bl"),
-        "std/tree.bl" => p!("std/tree.bl"),
-        "std/maybe.bl" => p!("std/maybe.bl"),
-        "std/either.bl" => p!("std/either.bl"),
-        "std/function.bl" => p!("std/function.bl"),
-        "std/pair.bl" => p!("std/pair.bl"),
-        "std/ordering.bl" => p!("std/ordering.bl"),
-        "std/string.bl" => p!("std/string.bl"),
-        "std/string_extra.bl" => p!("std/string_extra.bl"),
-        "std/io.bl" => p!("std/io.bl"),
-        "std/bytes.bl" => p!("std/bytes.bl"),
-        "std/array.bl" => p!("std/array.bl"),
-        "std/graphics.bl" => p!("std/graphics.bl"),
-        "std/time.bl" => p!("std/time.bl"),
-        "std/test.bl" => p!("std/test.bl"),
-        "std/map.bl" => p!("std/map.bl"),
-        "std/json.bl" => p!("std/json.bl"),
-        "std/regex.bl" => p!("std/regex.bl"),
-        "std/lexer.bl" => p!("std/lexer.bl"),
-        "std/parser.bl" => p!("std/parser.bl"),
-        "std/actor.bl" => p!("std/actor.bl"),
-        "std/vec.bl" => p!("std/vec.bl"),
-        "std/int.bl" => p!("std/int.bl"),
-        "std/float.bl" => p!("std/float.bl"),
-        "std/f64.bl" => p!("std/f64.bl"),
-        "std/equiv.bl" => p!("std/equiv.bl"),
-        "std/path.bl" => p!("std/path.bl"),
-        "std/prelude.bl" => p!("std/prelude.bl"),
-        "tactics.bl" => p!("tactics.bl"),
-        "plus_zero_tac.bl" => p!("plus_zero_tac.bl"),
-        "traits.bl" => p!("traits.bl"),
-        "modules.bl" => p!("modules.bl"),
-        "regions.bl" => p!("regions.bl"),
-        "spore.bl" => p!("spore.bl"),
-        "spore_meta.bl" => p!("spore_meta.bl"),
-        "spore_intrinsic.bl" => p!("spore_intrinsic.bl"),
-        "spore_elab.bl" => p!("spore_elab.bl"),
-        "spore_compile.bl" => p!("spore_compile.bl"),
-        "spore_pipeline.bl" => p!("spore_pipeline.bl"),
-        "spore_codegen_meta.bl" => p!("spore_codegen_meta.bl"),
-        "spore_reader.bl" => p!("spore_reader.bl"),
-        "spore_print.bl" => p!("spore_print.bl"),
-        _ => return None,
-    })
+/// One macro invocation is the single source of truth for the module list: it expands to both the
+/// `embedded` lookup and the `MODULE_NAMES` enumeration (E8 — LSP `(load "` completion), so the
+/// two can never drift apart.
+macro_rules! embedded_modules {
+    ($($rel:literal),+ $(,)?) => {
+        /// `(load name)` → embedded source, for every shipped prelude/tower module. Keys are
+        /// exactly the strings that appear in `(load "…")` forms.
+        pub fn embedded(name: &str) -> Option<&'static str> {
+            // The prelude lives next to this crate at `../blight-prelude/`. `include_str!` is
+            // resolved relative to this file at compile time, so the binary needs no runtime
+            // access to the tree.
+            match name {
+                $($rel => Some(include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../blight-prelude/",
+                    $rel
+                ))),)+
+                _ => None,
+            }
+        }
+
+        /// Every embedded module path, in table order — the completion source for `(load "`.
+        const MODULE_NAMES: &[&str] = &[$($rel),+];
+    };
+}
+
+embedded_modules! {
+    "std/nat.bl",
+    "std/bool.bl",
+    "std/order.bl",
+    "std/char.bl",
+    "std/list.bl",
+    "std/list_extra.bl",
+    "std/tree.bl",
+    "std/maybe.bl",
+    "std/either.bl",
+    "std/function.bl",
+    "std/pair.bl",
+    "std/ordering.bl",
+    "std/string.bl",
+    "std/string_extra.bl",
+    "std/io.bl",
+    "std/bytes.bl",
+    "std/array.bl",
+    "std/graphics.bl",
+    "std/time.bl",
+    "std/test.bl",
+    "std/map.bl",
+    "std/json.bl",
+    "std/regex.bl",
+    "std/lexer.bl",
+    "std/parser.bl",
+    "std/actor.bl",
+    "std/vec.bl",
+    "std/int.bl",
+    "std/float.bl",
+    "std/f64.bl",
+    "std/equiv.bl",
+    "std/path.bl",
+    "std/prelude.bl",
+    "tactics.bl",
+    "plus_zero_tac.bl",
+    "traits.bl",
+    "modules.bl",
+    "regions.bl",
+    "spore.bl",
+    "spore_meta.bl",
+    "spore_intrinsic.bl",
+    "spore_elab.bl",
+    "spore_compile.bl",
+    "spore_pipeline.bl",
+    "spore_codegen_meta.bl",
+    "spore_reader.bl",
+    "spore_print.bl",
+}
+
+/// The embedded module paths (the `(load "…")` keys), in table order.
+pub fn module_names() -> &'static [&'static str] {
+    MODULE_NAMES
 }
 
 #[cfg(test)]
@@ -89,5 +103,15 @@ mod tests {
     #[test]
     fn unknown_module_is_none() {
         assert!(embedded("std/does_not_exist.bl").is_none());
+    }
+
+    /// The enumeration and the lookup are macro-generated from one list, so every enumerated
+    /// name must resolve — this pins the two faces against a refactor splitting them apart.
+    #[test]
+    fn every_enumerated_module_resolves() {
+        assert!(module_names().len() >= 40);
+        for name in module_names() {
+            assert!(embedded(name).is_some(), "{name} enumerated but not embedded");
+        }
     }
 }

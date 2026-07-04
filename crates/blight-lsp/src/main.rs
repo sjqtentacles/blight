@@ -51,8 +51,9 @@ use lsp_types::notification::{
     DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Notification as _,
     PublishDiagnostics,
 };
-use lsp_types::request::{GotoDefinition, HoverRequest, Rename};
+use lsp_types::request::{Completion, Formatting, GotoDefinition, HoverRequest, Rename};
 use lsp_types::{
+    CompletionItem, CompletionItemKind, CompletionOptions, CompletionResponse,
     Diagnostic as LspDiagnostic, DiagnosticSeverity, GotoDefinitionResponse, Hover, HoverContents,
     HoverProviderCapability, InitializeParams, Location, MarkupContent, MarkupKind, OneOf,
     Position, PublishDiagnosticsParams, Range, ServerCapabilities, TextDocumentSyncCapability,
@@ -67,6 +68,14 @@ fn main() -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
         hover_provider: Some(HoverProviderCapability::Simple(true)),
         definition_provider: Some(OneOf::Left(true)),
         rename_provider: Some(OneOf::Left(true)),
+        // E8: whole-document formatting via the shared `blight_elab::format_source`.
+        document_formatting_provider: Some(OneOf::Left(true)),
+        // E8: completion. `"` and `/` re-trigger inside `(load "std/…")` path strings; ordinary
+        // identifier completion is client-initiated as the user types.
+        completion_provider: Some(CompletionOptions {
+            trigger_characters: Some(vec!["\"".into(), "/".into()]),
+            ..Default::default()
+        }),
         ..Default::default()
     };
     let init_params_value = connection.initialize(serde_json::to_value(capabilities)?)?;
@@ -424,26 +433,142 @@ fn rename_at(
     }
 }
 
-// ---- E8: formatting + completion (red stubs — see docs/roadmap-v0.1.md §E8) -------------------
+// ---- E8: formatting + completion ---------------------------------------------------------------
 
 /// Full-document formatting via the shared `blight_elab::format_source` (the same canonicalizer
 /// behind `blight fmt` and the fmt_corpus idempotence/semantics gate). Contract, pinned by
 /// `lsp_formatting_returns_fmt_output`: `None` when the buffer is lexically malformed (the
 /// formatter never guesses at text it cannot re-read), an empty vec when the buffer is already
-/// canonical, and exactly one whole-document `TextEdit` otherwise.
-#[allow(dead_code)] // E8 red stub — the green flip wires this into handle_request and drops the allow.
-fn formatting_edits(_doc: &DocState) -> Option<Vec<TextEdit>> {
-    None
+/// canonical, and exactly one whole-document `TextEdit` otherwise (idempotence of the formatter
+/// makes the single replace edit safe — re-formatting the result is a no-op).
+fn formatting_edits(doc: &DocState) -> Option<Vec<TextEdit>> {
+    let formatted = blight_elab::format_source(&doc.text).ok()?;
+    if formatted == doc.text {
+        return Some(Vec::new());
+    }
+    Some(vec![TextEdit {
+        range: Range {
+            start: Position::new(0, 0),
+            end: offset_to_position(&doc.text, doc.text.len()),
+        },
+        new_text: formatted,
+    }])
 }
 
-/// Completion candidates at `offset` (E8). Three sources, pinned by
-/// `completion_lists_globals_and_keywords` / `completion_lists_std_modules_after_load`: the
-/// buffer's indexed globals/constructors/effect-ops (`doc.definitions`), the surface keyword
-/// set, and — when `offset` sits inside a `(load "` string literal — the embedded std module
-/// paths *instead* (keywords are noise inside a path string).
-#[allow(dead_code)] // E8 red stub — the green flip wires this into handle_request and drops the allow.
-fn completions_at(_doc: &DocState, _offset: usize) -> Vec<lsp_types::CompletionItem> {
-    Vec::new()
+/// The surface keywords offered by completion: the top-level heads from
+/// `blight_elab::program::Program`'s dispatch (the same set `blight_elab::docs::DOC_KEYWORDS`
+/// mirrors, plus the non-documenting heads) and the expression heads the elaborator and the
+/// VS Code grammar's special-form rule recognize. Curated here because no single crate exports
+/// the union; completion quality degrades gracefully if a keyword is missing, so a curated list
+/// is acceptable where go-to-definition's exhaustive indexing would not be.
+const KEYWORDS: &[&str] = &[
+    // top-level declaration heads
+    "define",
+    "define-rec",
+    "define-by",
+    "define-macro",
+    "defn",
+    "deftotal",
+    "defdata",
+    "class",
+    "instance",
+    "effect",
+    "foreign",
+    "load",
+    "import",
+    // expression heads
+    "lam",
+    "plam",
+    "let",
+    "match",
+    "the",
+    "do",
+    "handle",
+    "perform",
+    "pair",
+    "fst",
+    "snd",
+    "region",
+    "Pi",
+    "Sigma",
+    "Type",
+    "Path",
+];
+
+/// If `offset` sits inside the string argument of a `(load "…")` form, return the path prefix
+/// typed so far. Detected lexically over `text[..offset]` (a quote-parity scan), NOT via the
+/// s-expression reader: mid-keystroke the string is unterminated, the buffer unreadable, and the
+/// definitions index empty — exactly when this completion is wanted.
+fn load_string_prefix(text: &str, offset: usize) -> Option<&str> {
+    let before = &text[..offset.min(text.len())];
+    // Walk the prefix tracking whether we are inside a string literal (honoring `\"` escapes),
+    // remembering the opening quote of the string the cursor is in.
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut open = 0usize;
+    for (i, c) in before.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+        } else if c == '"' {
+            in_string = true;
+            open = i;
+        }
+    }
+    if !in_string {
+        return None;
+    }
+    // The string is a `(load …)` argument iff the text before its opening quote ends with the
+    // `load` head in operator position.
+    let head = before[..open].trim_end();
+    let head = head.strip_suffix("load")?;
+    if !head.trim_end().ends_with(['(', '[']) {
+        return None;
+    }
+    Some(&before[open + 1..])
+}
+
+/// Completion candidates at `offset` (E8). Inside a `(load "` string: the embedded std module
+/// paths matching the typed prefix, and nothing else (keywords are noise inside a path string).
+/// Otherwise: every indexed global/constructor/effect-op from `doc.definitions` plus the surface
+/// [`KEYWORDS`], deduplicated and sorted (the client filters against the word at the cursor).
+fn completions_at(doc: &DocState, offset: usize) -> Vec<CompletionItem> {
+    if let Some(prefix) = load_string_prefix(&doc.text, offset) {
+        return blight_prelude_embed::module_names()
+            .iter()
+            .filter(|m| m.starts_with(prefix))
+            .map(|m| CompletionItem {
+                label: (*m).to_string(),
+                kind: Some(CompletionItemKind::FILE),
+                detail: Some("embedded std module".to_string()),
+                ..Default::default()
+            })
+            .collect();
+    }
+    let mut items: Vec<CompletionItem> = doc
+        .definitions
+        .keys()
+        .map(|name| CompletionItem {
+            label: name.clone(),
+            // The definitions index doesn't record what kind of name it holds (define vs
+            // constructor vs effect op); VALUE is the honest generic kind.
+            kind: Some(CompletionItemKind::VALUE),
+            ..Default::default()
+        })
+        .collect();
+    items.extend(KEYWORDS.iter().map(|kw| CompletionItem {
+        label: (*kw).to_string(),
+        kind: Some(CompletionItemKind::KEYWORD),
+        ..Default::default()
+    }));
+    items.sort_by(|a, b| a.label.cmp(&b.label));
+    items.dedup_by(|a, b| a.label == b.label);
+    items
 }
 
 // ---- LSP position <-> byte-offset conversion (UTF-16, per the LSP default encoding) -----------
@@ -691,6 +816,37 @@ fn handle_request(
         }
         Err(req) => req,
     };
+    // E8: whole-document formatting. `None` (unknown buffer or lexically malformed text) means
+    // "no edits" — the client's format request quietly does nothing rather than erroring.
+    let req = match cast_request::<Formatting>(req) {
+        Ok((id, params)) => {
+            let uri = &params.text_document.uri;
+            let result: Option<Vec<TextEdit>> =
+                docs.get(uri.as_str()).and_then(formatting_edits);
+            connection
+                .sender
+                .send(Message::Response(Response::new_ok(id, result)))?;
+            return Ok(());
+        }
+        Err(req) => req,
+    };
+    // E8: completion — globals/constructors/effect-ops + keywords, or std module paths inside a
+    // `(load "` string.
+    let req = match cast_request::<Completion>(req) {
+        Ok((id, params)) => {
+            let uri = &params.text_document_position.text_document.uri;
+            let result: Option<CompletionResponse> = docs.get(uri.as_str()).map(|doc| {
+                let offset =
+                    position_to_offset(&doc.text, params.text_document_position.position);
+                CompletionResponse::Array(completions_at(doc, offset))
+            });
+            connection
+                .sender
+                .send(Message::Response(Response::new_ok(id, result)))?;
+            return Ok(());
+        }
+        Err(req) => req,
+    };
     connection.sender.send(Message::Response(Response::new_err(
         req.id,
         lsp_server::ErrorCode::MethodNotFound as i32,
@@ -821,7 +977,6 @@ mod tests {
     // ---- E8 red: formatter + completion acceptance (un-ignore at the green flip) -------------
 
     #[test]
-    #[ignore = "E8 red: LSP formatting not wired yet — un-ignore at the green flip"]
     fn lsp_formatting_returns_fmt_output() {
         let messy = "(  define a   1 )\n(define b 2)\n";
         let doc = analyze(messy, Path::new("."));
@@ -846,7 +1001,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "E8 red: completion not implemented yet — un-ignore at the green flip"]
     fn completion_lists_globals_and_keywords() {
         let src = "(defdata Nat () (Zero) (Succ (n Nat)))\n\
                    (define plus-two (the Nat Zero))\n";
@@ -864,7 +1018,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "E8 red: load-path completion not implemented yet — un-ignore at the green flip"]
     fn completion_lists_std_modules_after_load() {
         // The buffer is mid-keystroke (unterminated string), so `doc.definitions` is empty —
         // the `(load "` context must be detected lexically from the text before the cursor.

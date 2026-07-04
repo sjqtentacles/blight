@@ -346,3 +346,71 @@ fn shutdown_then_exit_terminates_promptly() {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+// ---- E8 protocol tests: formatting + completion ------------------------------------------------
+
+/// E8: the initialize handshake advertises the two new capabilities, a messy buffer formats to
+/// the shared canonicalizer's output as one whole-document edit, and completion offers globals
+/// and keywords — all over the real wire.
+#[test]
+fn formatting_and_completion_work_over_the_wire() {
+    let mut server = Server::spawn();
+
+    // Inline (rather than via the shared `initialize` helper) to assert the E8 capabilities.
+    server.send(&json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"processId": null, "rootUri": null, "capabilities": {}}
+    }));
+    let resp = server.recv();
+    assert!(resp["result"]["capabilities"]["documentFormattingProvider"]
+        .as_bool()
+        .unwrap_or(false));
+    assert!(
+        resp["result"]["capabilities"]["completionProvider"].is_object(),
+        "{resp:?}"
+    );
+    server.send(&json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}));
+
+    let uri = "file:///tmp/blight_lsp_protocol_test_e8.bl";
+    server.send(&json!({
+        "jsonrpc": "2.0", "method": "textDocument/didOpen",
+        "params": {"textDocument": {
+            "uri": uri, "languageId": "blight", "version": 1,
+            "text": "(defdata Nat () (Zero) (Succ (n Nat)))\n(  define one   (the Nat Zero) )\n"
+        }}
+    }));
+    let _diag = server.recv();
+
+    // Formatting: one whole-document edit whose text is the canonical form.
+    server.send(&json!({
+        "jsonrpc": "2.0", "id": 2, "method": "textDocument/formatting",
+        "params": {"textDocument": {"uri": uri},
+                   "options": {"tabSize": 2, "insertSpaces": true}}
+    }));
+    let fmt = server.recv();
+    let edits = fmt["result"].as_array().unwrap();
+    assert_eq!(edits.len(), 1, "{fmt:?}");
+    let new_text = edits[0]["newText"].as_str().unwrap();
+    assert!(
+        new_text.contains("(define one (the Nat Zero))"),
+        "canonicalized: {new_text}"
+    );
+
+    // Completion at the end of the buffer: a defined global, a constructor, and a keyword.
+    server.send(&json!({
+        "jsonrpc": "2.0", "id": 3, "method": "textDocument/completion",
+        "params": {"textDocument": {"uri": uri}, "position": {"line": 2, "character": 0}}
+    }));
+    let completion = server.recv();
+    let items = completion["result"].as_array().unwrap();
+    let labels: Vec<&str> = items
+        .iter()
+        .filter_map(|i| i["label"].as_str())
+        .collect();
+    for expected in ["one", "Succ", "define"] {
+        assert!(
+            labels.contains(&expected),
+            "completion offers `{expected}`; got {labels:?}"
+        );
+    }
+}

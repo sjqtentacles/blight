@@ -306,7 +306,7 @@ teaches the E6 measure clause. Suite 853/853; the "every BadForm gets a form-spe
 span" ambition beyond these four shapes is folded into E9/R-era polish rather than blocking
 here.
 
-### [ ] E8 — Formatter + LSP surface polish
+### [x] E8 — Formatter + LSP surface polish
 
 Wire the existing formatter (`crates/blight-elab/src/fmt.rs` — correctness already pinned by the
 fmt_corpus idempotence + semantics test) through LSP `textDocument/formatting` and a `blight fmt`
@@ -316,6 +316,18 @@ keywords, std module paths after `(load "`).
 - **Red tests:** `lsp_formatting_returns_fmt_output`, `completion_lists_globals_and_keywords`
   (blight-lsp inline harness); `blight_fmt_rewrites_file_in_place_idempotently` (CLI).
 - **Exit:** VS Code extension bumped; README LSP feature table updated.
+
+**As-built (2026-07-03):** red at 0a2e007 (the pre-named tests plus an extra
+`completion_lists_std_modules_after_load` — the `(load "` context is detected *lexically*, since
+a mid-keystroke buffer is unreadable and the definitions index empty exactly when path completion
+is wanted). The CLI half was already live (Wave 9/T2), so its roadmap-named test landed as an
+un-ignored idempotence pin. Green: `formatting_edits` (None on lexically-malformed text / empty
+on canonical / one whole-document edit otherwise) and `completions_at` (definitions index +
+curated keyword set, or embedded std paths inside a load string) as pure helpers in the inline-
+harness style; capabilities advertised; `blight_prelude_embed::module_names()` added via a
+macro so the lookup and the enumeration share one list. Wire-protocol test covers both methods
+end-to-end. Extension 0.2.0 → 0.3.0; its README feature list updated (also un-rotted: rename for
+local binders shipped in T1 but was still listed as "not yet implemented").
 
 ---
 
