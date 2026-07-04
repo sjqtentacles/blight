@@ -123,7 +123,7 @@ pub fn eval(sig: &Signature, env: &Env, t: &RTerm) -> RValue {
         RTerm::Univ(l) => RValue::Univ(*l),
         RTerm::Pi(g, dom, cod) => RValue::Pi(
             *g,
-            Box::new(eval(sig, env, dom)),
+            Rc::new(eval(sig, env, dom)),
             Closure {
                 env: env.clone(),
                 body: Rc::new((**cod).clone()),
@@ -139,24 +139,24 @@ pub fn eval(sig: &Signature, env: &Env, t: &RTerm) -> RValue {
             apply(sig, vf, va)
         }
         RTerm::Sigma(dom, cod) => RValue::Sigma(
-            Box::new(eval(sig, env, dom)),
+            Rc::new(eval(sig, env, dom)),
             Closure {
                 env: env.clone(),
                 body: Rc::new((**cod).clone()),
             },
         ),
-        RTerm::Pair(a, b) => RValue::Pair(Box::new(eval(sig, env, a)), Box::new(eval(sig, env, b))),
+        RTerm::Pair(a, b) => RValue::Pair(Rc::new(eval(sig, env, a)), Rc::new(eval(sig, env, b))),
         RTerm::Fst(p) => vfst(eval(sig, env, p)),
         RTerm::Snd(p) => vsnd(sig, eval(sig, env, p)),
         RTerm::Ann(e, _ty) => eval(sig, env, e),
         RTerm::Data(name, ps, is) => RValue::Data(
             name.clone(),
-            ps.iter().map(|x| eval(sig, env, x)).collect(),
-            is.iter().map(|x| eval(sig, env, x)).collect(),
+            Rc::new(ps.iter().map(|x| eval(sig, env, x)).collect()),
+            Rc::new(is.iter().map(|x| eval(sig, env, x)).collect()),
         ),
         RTerm::Con(name, args) => RValue::Con(
             name.clone(),
-            args.iter().map(|x| eval(sig, env, x)).collect(),
+            Rc::new(args.iter().map(|x| eval(sig, env, x)).collect()),
         ),
         RTerm::Elim {
             data,
@@ -174,8 +174,8 @@ pub fn eval(sig: &Signature, env: &Env, t: &RTerm) -> RValue {
                 env: env.clone(),
                 body: Rc::new((**family).clone()),
             },
-            lhs: Box::new(eval(sig, env, lhs)),
-            rhs: Box::new(eval(sig, env, rhs)),
+            lhs: Rc::new(eval(sig, env, lhs)),
+            rhs: Rc::new(eval(sig, env, rhs)),
         },
         RTerm::PLam(body) => RValue::PLam(DimClosure {
             env: env.clone(),
@@ -206,9 +206,9 @@ pub fn eval(sig: &Signature, env: &Env, t: &RTerm) -> RValue {
             base,
         } => crate::kan::eval_comp(sig, env, family, cofib, tube, base),
 
-        RTerm::Delay(a) => RValue::Delay(Box::new(eval(sig, env, a))),
-        RTerm::Now(a) => RValue::Now(Box::new(eval(sig, env, a))),
-        RTerm::Later(d) => RValue::Later(Box::new(eval(sig, env, d))),
+        RTerm::Delay(a) => RValue::Delay(Rc::new(eval(sig, env, a))),
+        RTerm::Now(a) => RValue::Now(Rc::new(eval(sig, env, a))),
+        RTerm::Later(d) => RValue::Later(Rc::new(eval(sig, env, d))),
         RTerm::Force(d) => do_force(eval(sig, env, d)),
 
         // ---- effects and handlers (spec §4) ----
@@ -230,7 +230,7 @@ pub fn eval(sig: &Signature, env: &Env, t: &RTerm) -> RValue {
             effect: effect.clone(),
             op: op.clone(),
             type_args: type_args.iter().map(|t| eval(sig, env, t)).collect(),
-            arg: Box::new(eval(sig, env, arg)),
+            arg: Rc::new(eval(sig, env, arg)),
         }),
         RTerm::Handle {
             body,
@@ -238,7 +238,7 @@ pub fn eval(sig: &Signature, env: &Env, t: &RTerm) -> RValue {
             op_clauses,
         } => RValue::Neutral(Neutral::Handle {
             env: env.clone(),
-            body: Box::new(eval(sig, env, body)),
+            body: Rc::new(eval(sig, env, body)),
             return_clause: Rc::new((**return_clause).clone()),
             op_clauses: op_clauses
                 .iter()
@@ -269,8 +269,8 @@ pub fn int_prim(op: blight_kernel::IntPrimOp, lhs: RValue, rhs: RValue) -> RValu
                     if b == 0 {
                         RValue::Neutral(Neutral::IntPrim {
                             op,
-                            lhs: Box::new(lhs),
-                            rhs: Box::new(rhs),
+                            lhs: Rc::new(lhs),
+                            rhs: Rc::new(rhs),
                         })
                     } else {
                         RValue::IntLit(a.wrapping_div(b))
@@ -282,8 +282,8 @@ pub fn int_prim(op: blight_kernel::IntPrimOp, lhs: RValue, rhs: RValue) -> RValu
         }
         _ => RValue::Neutral(Neutral::IntPrim {
             op,
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
+            lhs: Rc::new(lhs),
+            rhs: Rc::new(rhs),
         }),
     }
 }
@@ -349,11 +349,11 @@ pub fn apply(sig: &Signature, f: RValue, a: RValue) -> RValue {
             let result_ty = cod.apply(sig, a.clone());
             reflect(
                 sig,
-                Neutral::App(Box::new(neutral), Box::new(a)),
+                Neutral::App(Rc::new(neutral), Rc::new(a)),
                 &result_ty,
             )
         }
-        RValue::Neutral(n) => RValue::Neutral(Neutral::App(Box::new(n), Box::new(a))),
+        RValue::Neutral(n) => RValue::Neutral(Neutral::App(Rc::new(n), Rc::new(a))),
         other => panic!("apply: not a function: {other:?}"),
     }
 }
@@ -361,8 +361,8 @@ pub fn apply(sig: &Signature, f: RValue, a: RValue) -> RValue {
 /// First projection.
 pub fn vfst(p: RValue) -> RValue {
     match p {
-        RValue::Pair(a, _) => *a,
-        RValue::Neutral(n) => RValue::Neutral(Neutral::Fst(Box::new(n))),
+        RValue::Pair(a, _) => crate::value::unshare_rvalue(a),
+        RValue::Neutral(n) => RValue::Neutral(Neutral::Fst(Rc::new(n))),
         other => panic!("vfst: not a pair: {other:?}"),
     }
 }
@@ -370,8 +370,8 @@ pub fn vfst(p: RValue) -> RValue {
 /// Second projection.
 pub fn vsnd(_sig: &Signature, p: RValue) -> RValue {
     match p {
-        RValue::Pair(_, b) => *b,
-        RValue::Neutral(n) => RValue::Neutral(Neutral::Snd(Box::new(n))),
+        RValue::Pair(_, b) => crate::value::unshare_rvalue(b),
+        RValue::Neutral(n) => RValue::Neutral(Neutral::Snd(Rc::new(n))),
         other => panic!("vsnd: not a pair: {other:?}"),
     }
 }
@@ -380,9 +380,9 @@ pub fn vsnd(_sig: &Signature, p: RValue) -> RValue {
 /// neutral reflects to a stuck `force`.
 pub fn do_force(d: RValue) -> RValue {
     match d {
-        RValue::Now(a) => *a,
-        RValue::Later(inner) => RValue::Force(Box::new(RValue::Later(inner))),
-        RValue::Neutral(n) => RValue::Neutral(Neutral::Force(Box::new(n))),
+        RValue::Now(a) => crate::value::unshare_rvalue(a),
+        RValue::Later(inner) => RValue::Force(Rc::new(RValue::Later(inner))),
+        RValue::Neutral(n) => RValue::Neutral(Neutral::Force(Rc::new(n))),
         other => panic!("do_force: not a delay: {other:?}"),
     }
 }
@@ -392,11 +392,11 @@ pub fn papp(sig: &Signature, p: RValue, r: RInterval) -> RValue {
     match p {
         RValue::PLam(clos) => clos.apply_dim(sig, r),
         RValue::ReflectedPath { neutral, lhs, rhs } => match nf_interval(&r) {
-            RInterval::I0 => *lhs,
-            RInterval::I1 => *rhs,
-            other => RValue::Neutral(Neutral::PApp(Box::new(neutral), other)),
+            RInterval::I0 => crate::value::unshare_rvalue(lhs),
+            RInterval::I1 => crate::value::unshare_rvalue(rhs),
+            other => RValue::Neutral(Neutral::PApp(Rc::new(neutral), other)),
         },
-        RValue::Neutral(n) => RValue::Neutral(Neutral::PApp(Box::new(n), nf_interval(&r))),
+        RValue::Neutral(n) => RValue::Neutral(Neutral::PApp(Rc::new(n), nf_interval(&r))),
         other => panic!("papp: not a path: {other:?}"),
     }
 }
@@ -439,15 +439,15 @@ pub fn do_elim(
         }
         RValue::Neutral(n) => RValue::Neutral(Neutral::Elim {
             data: data.clone(),
-            motive: Box::new(motive),
+            motive: Rc::new(motive),
             methods,
-            scrutinee: Box::new(n),
+            scrutinee: Rc::new(n),
         }),
         RValue::ReflectedPath { neutral, .. } => RValue::Neutral(Neutral::Elim {
             data: data.clone(),
-            motive: Box::new(motive),
+            motive: Rc::new(motive),
             methods,
-            scrutinee: Box::new(neutral),
+            scrutinee: Rc::new(neutral),
         }),
         other => panic!("do_elim: bad scrutinee: {other:?}"),
     }
@@ -466,10 +466,10 @@ pub fn reflect(sig: &Signature, neutral: Neutral, ty: &RValue) -> RValue {
             cod: cod.clone(),
         },
         RValue::Sigma(dom, cod) => {
-            let fst = reflect(sig, Neutral::Fst(Box::new(neutral.clone())), dom);
+            let fst = reflect(sig, Neutral::Fst(Rc::new(neutral.clone())), dom);
             let snd_ty = cod.apply(sig, fst.clone());
-            let snd = reflect(sig, Neutral::Snd(Box::new(neutral)), &snd_ty);
-            RValue::Pair(Box::new(fst), Box::new(snd))
+            let snd = reflect(sig, Neutral::Snd(Rc::new(neutral)), &snd_ty);
+            RValue::Pair(Rc::new(fst), Rc::new(snd))
         }
         _ => RValue::Neutral(neutral),
     }
@@ -523,7 +523,7 @@ pub fn quote(sig: &Signature, lvl: usize, dlvl: usize, v: &RValue) -> RTerm {
             let result_ty = cod.apply(sig, arg.clone());
             let body = reflect(
                 sig,
-                Neutral::App(Box::new(neutral.clone()), Box::new(arg)),
+                Neutral::App(Rc::new(neutral.clone()), Rc::new(arg)),
                 &result_ty,
             );
             RTerm::Lam(Box::new(quote(sig, lvl + 1, dlvl, &body)))

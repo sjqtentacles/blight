@@ -149,7 +149,7 @@ fn op_push(
     effect: crate::row::EffName,
     op: crate::signature::OpName,
     type_args: Vec<Value>,
-    arg: Box<Value>,
+    arg: Rc<Value>,
     mut cont: Vec<Frame>,
     frame: Frame,
 ) -> Value {
@@ -180,7 +180,7 @@ pub fn replay(env: &Env, mut v: Value, cont: &[Frame]) -> Value {
                 data,
                 motive,
                 methods,
-            } => do_elim(env, &data, *motive, methods, v),
+            } => do_elim(env, &data, crate::value::unshare_value(motive), methods, v),
             Frame::Force => do_force(v),
         };
     }
@@ -211,7 +211,7 @@ pub fn do_handle(handler: &std::rc::Rc<crate::value::HandlerVal>, comp: Value) -
                     cont,
                     handler: handler.clone(),
                 };
-                let clause_env = handler.env.extend(*arg).extend(k);
+                let clause_env = handler.env.extend(crate::value::unshare_value(arg)).extend(k);
                 eval(&clause_env, clause)
             } else {
                 // Unhandled: bubble the OpNode past this handler unchanged.
@@ -243,7 +243,7 @@ pub fn eval(env: &Env, term: &Term) -> Value {
         Term::Univ(l) => Value::Univ(l.clone()),
         Term::Pi(grade, dom, cod) => Value::Pi(
             *grade,
-            Box::new(eval(env, dom)),
+            Rc::new(eval(env, dom)),
             Closure {
                 env: env.clone(),
                 body: (**cod).clone(),
@@ -259,13 +259,13 @@ pub fn eval(env: &Env, term: &Term) -> Value {
             apply(vf, va)
         }
         Term::Sigma(dom, cod) => Value::Sigma(
-            Box::new(eval(env, dom)),
+            Rc::new(eval(env, dom)),
             Closure {
                 env: env.clone(),
                 body: (**cod).clone(),
             },
         ),
-        Term::Pair(a, b) => Value::Pair(Box::new(eval(env, a)), Box::new(eval(env, b))),
+        Term::Pair(a, b) => Value::Pair(Rc::new(eval(env, a)), Rc::new(eval(env, b))),
         Term::Fst(p) => vfst(eval(env, p)),
         Term::Snd(p) => vsnd(eval(env, p)),
         // Ascription is transparent for *reduction* (the inner term is what actually computes),
@@ -286,11 +286,11 @@ pub fn eval(env: &Env, term: &Term) -> Value {
         // ---- data / recursion (spec §2.7) ----
         Term::Data(name, params, indices) => Value::Data(
             name.clone(),
-            params.iter().map(|t| eval(env, t)).collect(),
-            indices.iter().map(|t| eval(env, t)).collect(),
+            Rc::new(params.iter().map(|t| eval(env, t)).collect()),
+            Rc::new(indices.iter().map(|t| eval(env, t)).collect()),
         ),
         Term::Con(name, args) => {
-            Value::Con(name.clone(), args.iter().map(|t| eval(env, t)).collect())
+            Value::Con(name.clone(), Rc::new(args.iter().map(|t| eval(env, t)).collect()))
         }
         // Path constructor (spec §2.7, Wave 7/E4): at an interval endpoint this is *definitionally*
         // the declared `lhs`/`rhs` boundary (looked up unconditionally, unlike `Con` above, which
@@ -336,7 +336,7 @@ pub fn eval(env: &Env, term: &Term) -> Value {
                 other => Value::PCon {
                     data: data.clone(),
                     name: name.clone(),
-                    args: Vec::new(),
+                    args: Rc::new(Vec::new()),
                     dim: other,
                 },
             }
@@ -359,8 +359,8 @@ pub fn eval(env: &Env, term: &Term) -> Value {
                 env: env.clone(),
                 body: (**family).clone(),
             },
-            lhs: Box::new(eval(env, lhs)),
-            rhs: Box::new(eval(env, rhs)),
+            lhs: Rc::new(eval(env, lhs)),
+            rhs: Rc::new(eval(env, rhs)),
         },
         Term::PLam(body) => Value::PLam(Closure {
             env: env.clone(),
@@ -436,10 +436,10 @@ pub fn eval(env: &Env, term: &Term) -> Value {
                 eval(env, base)
             } else {
                 Value::Glue {
-                    base: Box::new(eval(env, base)),
+                    base: Rc::new(eval(env, base)),
                     cofib,
-                    ty: Box::new(eval(env, ty)),
-                    equiv: Box::new(eval(env, equiv)),
+                    ty: Rc::new(eval(env, ty)),
+                    equiv: Rc::new(eval(env, equiv)),
                 }
             }
         }
@@ -455,7 +455,7 @@ pub fn eval(env: &Env, term: &Term) -> Value {
             effect: effect.clone(),
             op: op.clone(),
             type_args: type_args.iter().map(|t| eval(env, t)).collect(),
-            arg: Box::new(eval(env, arg)),
+            arg: Rc::new(eval(env, arg)),
             cont: Vec::new(),
         },
 
@@ -487,16 +487,16 @@ pub fn eval(env: &Env, term: &Term) -> Value {
         // ---- partiality (spec §4.5): the intensional Capretta delay ----
         // `Delay A` is a type former; `now`/`later` are its intro forms. `Later` is *guarded*: we
         // evaluate its argument to a value but never force/unfold it, so NbE stays finite.
-        Term::Delay(a) => Value::Delay(Box::new(eval(env, a))),
-        Term::Now(a) => Value::Now(Box::new(eval(env, a))),
-        Term::Later(d) => Value::Later(Box::new(eval(env, d))),
+        Term::Delay(a) => Value::Delay(Rc::new(eval(env, a))),
+        Term::Now(a) => Value::Now(Rc::new(eval(env, a))),
+        Term::Later(d) => Value::Later(Rc::new(eval(env, d))),
         Term::Force(d) => do_force(eval(env, d)),
 
         // A foreign postulate evaluates to an opaque stuck neutral carrying its symbol and (the
         // value of) its declared type. Nothing reduces it (spec §7.6).
         Term::Foreign { symbol, ty } => Value::Neutral(Neutral::Foreign {
             symbol: symbol.clone(),
-            ty: Box::new(eval(env, ty)),
+            ty: Rc::new(eval(env, ty)),
         }),
 
         // ---- primitive machine integers (M11) ----
@@ -539,8 +539,8 @@ pub fn int_prim(op: crate::term::IntPrimOp, lhs: Value, rhs: Value) -> Value {
                     if b == 0 {
                         Value::Neutral(Neutral::IntPrim {
                             op,
-                            lhs: Box::new(lhs),
-                            rhs: Box::new(rhs),
+                            lhs: Rc::new(lhs),
+                            rhs: Rc::new(rhs),
                         })
                     } else {
                         Value::IntLit(a.wrapping_div(b))
@@ -553,8 +553,8 @@ pub fn int_prim(op: crate::term::IntPrimOp, lhs: Value, rhs: Value) -> Value {
         // At least one operand is not a literal: the operation is stuck.
         _ => Value::Neutral(Neutral::IntPrim {
             op,
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
+            lhs: Rc::new(lhs),
+            rhs: Rc::new(rhs),
         }),
     }
 }
@@ -608,9 +608,9 @@ pub fn apply(f: Value, arg: Value) -> Value {
         // A reflected path-valued function: reflect the applied spine at the instantiated codomain.
         Value::ReflectedFun { neutral, cod, .. } => {
             let result_ty = cod.apply(arg.clone());
-            reflect(Neutral::App(Box::new(neutral), Box::new(arg)), &result_ty)
+            reflect(Neutral::App(Rc::new(neutral), Rc::new(arg)), &result_ty)
         }
-        Value::Neutral(n) => Value::Neutral(Neutral::App(Box::new(n), Box::new(arg))),
+        Value::Neutral(n) => Value::Neutral(Neutral::App(Rc::new(n), Rc::new(arg))),
         // An effectful-neutral bubbles: record the application to replay on resume.
         Value::OpNode {
             effect,
@@ -675,10 +675,10 @@ pub fn reflect(neutral: Neutral, ty: &Value) -> Value {
         Value::Sigma(dom, cod) => {
             // η for pairs: reflect the first projection against `dom`, the second against `cod`
             // instantiated at the (reflected) first projection.
-            let fst = reflect(Neutral::Fst(Box::new(neutral.clone())), dom);
+            let fst = reflect(Neutral::Fst(Rc::new(neutral.clone())), dom);
             let snd_ty = cod.apply(fst.clone());
-            let snd = reflect(Neutral::Snd(Box::new(neutral)), &snd_ty);
-            Value::Pair(Box::new(fst), Box::new(snd))
+            let snd = reflect(Neutral::Snd(Rc::new(neutral)), &snd_ty);
+            Value::Pair(Rc::new(fst), Rc::new(snd))
         }
         _ => Value::Neutral(neutral),
     }
@@ -691,11 +691,11 @@ pub fn papp(p: Value, r: Interval) -> Value {
     match p {
         Value::PLam(clos) => clos.apply_dim(r),
         Value::ReflectedPath { neutral, lhs, rhs } => match r {
-            Interval::I0 => *lhs,
-            Interval::I1 => *rhs,
-            other => Value::Neutral(Neutral::PApp(Box::new(neutral), other)),
+            Interval::I0 => crate::value::unshare_value(lhs),
+            Interval::I1 => crate::value::unshare_value(rhs),
+            other => Value::Neutral(Neutral::PApp(Rc::new(neutral), other)),
         },
-        Value::Neutral(n) => Value::Neutral(Neutral::PApp(Box::new(n), r)),
+        Value::Neutral(n) => Value::Neutral(Neutral::PApp(Rc::new(n), r)),
         Value::OpNode {
             effect,
             op,
@@ -710,8 +710,8 @@ pub fn papp(p: Value, r: Interval) -> Value {
 /// First projection on a (possibly neutral) pair value.
 pub fn vfst(p: Value) -> Value {
     match p {
-        Value::Pair(a, _) => *a,
-        Value::Neutral(n) => Value::Neutral(Neutral::Fst(Box::new(n))),
+        Value::Pair(a, _) => crate::value::unshare_value(a),
+        Value::Neutral(n) => Value::Neutral(Neutral::Fst(Rc::new(n))),
         Value::OpNode {
             effect,
             op,
@@ -726,8 +726,8 @@ pub fn vfst(p: Value) -> Value {
 /// Second projection on a (possibly neutral) pair value.
 pub fn vsnd(p: Value) -> Value {
     match p {
-        Value::Pair(_, b) => *b,
-        Value::Neutral(n) => Value::Neutral(Neutral::Snd(Box::new(n))),
+        Value::Pair(_, b) => crate::value::unshare_value(b),
+        Value::Neutral(n) => Value::Neutral(Neutral::Snd(Rc::new(n))),
         Value::OpNode {
             effect,
             op,
@@ -744,10 +744,10 @@ pub fn vsnd(p: Value) -> Value {
 /// a neutral reflects to a stuck `force`; an effectful-neutral bubbles via `Frame::Force`.
 pub fn do_force(d: Value) -> Value {
     match d {
-        Value::Now(a) => *a,
+        Value::Now(a) => crate::value::unshare_value(a),
         // Guarded: do not unfold the inner delay. `force (later d)` stays observable.
-        Value::Later(inner) => Value::Force(Box::new(Value::Later(inner))),
-        Value::Neutral(n) => Value::Neutral(Neutral::Force(Box::new(n))),
+        Value::Later(inner) => Value::Force(Rc::new(Value::Later(inner))),
+        Value::Neutral(n) => Value::Neutral(Neutral::Force(Rc::new(n))),
         Value::OpNode {
             effect,
             op,
@@ -970,23 +970,23 @@ fn do_elim(env: &Env, data: &DataName, motive: Value, methods: Vec<Value>, scrut
             let mut result = methods.get(method_idx).cloned().unwrap_or_else(|| {
                 panic!("do_elim: missing method for path constructor index {pidx}")
             });
-            for arg in pargs.into_iter() {
+            for arg in crate::value::unshare_args(pargs).into_iter() {
                 result = apply(result, arg);
             }
             papp(result, dim)
         }
         Value::Neutral(n) => Value::Neutral(Neutral::Elim {
             data: data.clone(),
-            motive: Box::new(motive),
+            motive: Rc::new(motive),
             methods,
-            scrutinee: Box::new(n),
+            scrutinee: Rc::new(n),
         }),
         // A reflected path is, underneath, a neutral; eliminating it is stuck on that neutral.
         Value::ReflectedPath { neutral, .. } => Value::Neutral(Neutral::Elim {
             data: data.clone(),
-            motive: Box::new(motive),
+            motive: Rc::new(motive),
             methods,
-            scrutinee: Box::new(neutral),
+            scrutinee: Rc::new(neutral),
         }),
         // An effectful-neutral bubbles: record the elimination to replay on resume.
         Value::OpNode {
@@ -1003,7 +1003,7 @@ fn do_elim(env: &Env, data: &DataName, motive: Value, methods: Vec<Value>, scrut
             cont,
             Frame::Elim {
                 data: data.clone(),
-                motive: Box::new(motive),
+                motive: Rc::new(motive),
                 methods,
             },
         ),
@@ -1087,7 +1087,7 @@ fn quote_at(lvl: usize, dlvl: usize, value: &Value) -> Term {
             let arg = Value::Neutral(Neutral::Var(lvl));
             let result_ty = cod.apply(arg.clone());
             let body = reflect(
-                Neutral::App(Box::new(neutral.clone()), Box::new(arg)),
+                Neutral::App(Rc::new(neutral.clone()), Rc::new(arg)),
                 &result_ty,
             );
             Term::Lam(Rc::new(quote_at(lvl + 1, dlvl, &body)))
@@ -1329,13 +1329,13 @@ fn conv_at(lvl: usize, dlvl: usize, a: &Value, b: &Value) -> bool {
             n1 == n2
                 && p1.len() == p2.len()
                 && i1.len() == i2.len()
-                && p1.iter().zip(p2).all(|(a, b)| conv_at(lvl, dlvl, a, b))
-                && i1.iter().zip(i2).all(|(a, b)| conv_at(lvl, dlvl, a, b))
+                && p1.iter().zip(p2.iter()).all(|(a, b)| conv_at(lvl, dlvl, a, b))
+                && i1.iter().zip(i2.iter()).all(|(a, b)| conv_at(lvl, dlvl, a, b))
         }
         (Value::Con(n1, a1), Value::Con(n2, a2)) => {
             n1 == n2
                 && a1.len() == a2.len()
-                && a1.iter().zip(a2).all(|(a, b)| conv_at(lvl, dlvl, a, b))
+                && a1.iter().zip(a2.iter()).all(|(a, b)| conv_at(lvl, dlvl, a, b))
         }
         (
             Value::PCon {
@@ -1354,7 +1354,7 @@ fn conv_at(lvl: usize, dlvl: usize, a: &Value, b: &Value) -> bool {
             d1 == d2
                 && n1 == n2
                 && a1.len() == a2.len()
-                && a1.iter().zip(a2).all(|(a, b)| conv_at(lvl, dlvl, a, b))
+                && a1.iter().zip(a2.iter()).all(|(a, b)| conv_at(lvl, dlvl, a, b))
                 && quote_interval(dlvl, r1) == quote_interval(dlvl, r2)
         }
         (Value::Neutral(n1), Value::Neutral(n2)) => {
@@ -1764,7 +1764,7 @@ mod tests {
             effect: crate::row::EffName::new("E"),
             op: "op".to_string(),
             type_args: Vec::new(),
-            arg: Box::new(Value::Univ(Level::Zero)),
+            arg: Rc::new(Value::Univ(Level::Zero)),
             cont: Vec::new(),
         }
     }
@@ -1870,7 +1870,7 @@ mod tests {
             effect: crate::row::EffName::new("E"),
             op: "other".to_string(),
             type_args: Vec::new(),
-            arg: Box::new(Value::Univ(Level::Zero)),
+            arg: Rc::new(Value::Univ(Level::Zero)),
             cont: Vec::new(),
         };
         assert!(!conv(0, &a, &c), "different op not convertible");

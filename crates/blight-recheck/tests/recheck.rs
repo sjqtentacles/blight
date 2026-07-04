@@ -1318,11 +1318,15 @@ fn deep_plus_zero_conv_kernel_and_recheck_agree_in_bounded_time() {
         // after repeated loaded-machine false alarms): scale-pair — the same pipeline at a
         // quarter of the depth, in the same process. Converting the instrument immediately
         // taught something the wall clock hid: the pipeline is *quadratic today* (measured
-        // 19.6× for the 4× depth) — the IH here is genuinely used, so N5's skip doesn't apply,
-        // and each level deep-clones an O(level) `Value` (N6's documented Value-sharing target,
-        // second measured justification). Bound: current quadratic law with headroom (< 35×);
-        // the guarded pre-ValueChain recurrence multiplies ANOTHER depth factor (≥ cubic,
-        // ~64×+) and still fails loudly. Tighten toward ~8× when N6 lands.
+        // 19.6× for the 4× depth pre-N6) — the IH here is genuinely used, so N5's skip doesn't
+        // apply. N6's Value-tree sharing (Box→Rc, both engines) cut the *constant* ~1.9× (paired
+        // twin: 16.6× → 15.3× ratio, 1.37 s → 0.73 s absolute) but falsified the deep-clone
+        // hypothesis for the *ratio*: the surviving quadratic is re-evaluation churn — eval/
+        // do_elim materialize a fresh O(level) chain per level and drop it (profile: recursive
+        // drop_in_place/clone under eval; the N6 item-3 refl endpoint re-evaluation target's
+        // measured justification). Bound: post-N6 law with headroom (< 20×, earned from 15.3
+        // measured); the pre-ValueChain recurrence (≥ cubic, ~64×+) still fails loudly. Tighten
+        // further when item 3 (re-evaluation sharing) lands.
         let (small_sig, small_ann) = deep_plus_zero_proof(375);
         let Term::Ann(small_term, small_ty) = small_ann else {
             unreachable!()
@@ -1339,11 +1343,13 @@ fn deep_plus_zero_conv_kernel_and_recheck_agree_in_bounded_time() {
             .elapsed()
             .max(std::time::Duration::from_micros(1));
         let ratio = elapsed.as_secs_f64() / small_elapsed.as_secs_f64();
+        eprintln!("N6 payoff: depth-1500/depth-375 ratio = {ratio:.2}x ({elapsed:?} vs {small_elapsed:?})");
         assert!(
-            ratio < 35.0,
+            ratio < 20.0,
             "kernel + re-checker at depth 1,500 cost {ratio:.1}× the depth-375 twin \
-             ({elapsed:?} vs {small_elapsed:?}) — quadratic-with-headroom is today's law; \
-             at ≥ cubic the ValueChain sharing fix has regressed (see each crate's value.rs)"
+             ({elapsed:?} vs {small_elapsed:?}) — post-N6 quadratic-with-headroom is today's \
+             law (measured 15.3×); past 20× either the ValueChain sharing or the N6 Rc sharing \
+             has regressed (see each crate's value.rs)"
         );
     });
 }

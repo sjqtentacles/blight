@@ -334,7 +334,7 @@ fn transp_sigma(family: &Closure, pair: &Value) -> Value {
         }
     };
     let b1 = transp(&snd_line, &Cofib::Bot, &b0);
-    Value::Pair(Box::new(a1), Box::new(b1))
+    Value::Pair(Rc::new(a1), Rc::new(b1))
 }
 
 /// `transp` along a PathP line (CCHM). For a path `p : PathP (j. A i j) (u i) (v i)` the transport
@@ -409,7 +409,7 @@ pub fn hcomp(ty: &Value, cofib: &Cofib, tube: &Closure, base: &Value) -> Value {
             // The second component composes in the (instantiated) fibre `B a1`.
             let snd_ty = cod.apply(a1.clone());
             let b1 = hcomp(&snd_ty, cofib, &snd_tube, &snd_base);
-            Value::Pair(Box::new(a1), Box::new(b1))
+            Value::Pair(Rc::new(a1), Rc::new(b1))
         }
         // Π: compose in the codomain pointwise. `hcomp (Π A B) φ u f = λ x. hcomp (B x) φ (u·x) (f x)`.
         Value::Pi(_, _, cod) => {
@@ -587,10 +587,10 @@ mod tests {
     fn unglue_glue_roundtrip() {
         let base = univ(0);
         let glued = Value::Glue {
-            base: Box::new(base.clone()),
+            base: Rc::new(base.clone()),
             cofib: Cofib::Top,
-            ty: Box::new(univ(0)),
-            equiv: Box::new(univ(0)),
+            ty: Rc::new(univ(0)),
+            equiv: Rc::new(univ(0)),
         };
         assert_eq!(unglue(&glued), base, "unglue ∘ glue = id on the base");
     }
@@ -622,7 +622,7 @@ mod tests {
     #[test]
     fn transp_const_nat_is_identity() {
         let line = const_type_line(nat_ty_term());
-        let base = Value::Con(crate::term::ConName("zero".into()), vec![]);
+        let base = Value::Con(crate::term::ConName("zero".into()), Rc::new(vec![]));
         assert_eq!(transp(&line, &Cofib::Bot, &base), base);
     }
 
@@ -649,8 +649,8 @@ mod tests {
     fn transp_const_sigma_is_identity() {
         let sigma = Term::Sigma(Rc::new(nat_ty_term()), Rc::new(nat_ty_term()));
         let line = const_type_line(sigma);
-        let z = Value::Con(crate::term::ConName("zero".into()), vec![]);
-        let pair = Value::Pair(Box::new(z.clone()), Box::new(z.clone()));
+        let z = Value::Con(crate::term::ConName("zero".into()), Rc::new(vec![]));
+        let pair = Value::Pair(Rc::new(z.clone()), Rc::new(z.clone()));
         assert_eq!(transp(&line, &Cofib::Bot, &pair), pair);
     }
 
@@ -747,17 +747,17 @@ mod tests {
     #[test]
     fn hcomp_sigma_varying_face_is_componentwise() {
         let partial = Cofib::Eq0(Interval::Dim(1));
-        let z = || Value::Con(crate::term::ConName("zero".into()), vec![]);
+        let z = || Value::Con(crate::term::ConName("zero".into()), Rc::new(vec![]));
         let path_ty = Value::PathP {
             family: Closure {
                 env: Env::empty(),
                 body: nat_ty_term(),
             },
-            lhs: Box::new(z()),
-            rhs: Box::new(z()),
+            lhs: Rc::new(z()),
+            rhs: Rc::new(z()),
         };
         let sigma_ty = Value::Sigma(
-            Box::new(path_ty.clone()),
+            Rc::new(path_ty.clone()),
             Closure {
                 env: Env::empty(),
                 body: quote_value_at(0, 0, &path_ty),
@@ -774,7 +774,7 @@ mod tests {
                 body: Term::Con(crate::term::ConName("zero".into()), vec![]),
             })
         };
-        let base = Value::Pair(Box::new(refl()), Box::new(refl()));
+        let base = Value::Pair(Rc::new(refl()), Rc::new(refl()));
         let out = hcomp(&sigma_ty, &partial, &tube, &base);
         // CCHM: composition in Σ yields a pair (it does not get stuck/panic).
         assert!(
@@ -808,10 +808,10 @@ mod tests {
         let partial = Cofib::Eq0(Interval::Dim(1));
         let pi_ty = Value::Pi(
             crate::semiring::Grade::Omega,
-            Box::new(Value::Data(
+            Rc::new(Value::Data(
                 crate::term::DataName("Nat".into()),
-                vec![],
-                vec![],
+                Rc::new(vec![]),
+                Rc::new(vec![]),
             )),
             Closure {
                 env: Env::empty(),
@@ -892,16 +892,16 @@ mod tests {
         // genuinely non-constant), and a closed equivalence `e : Equiv Nat Bool` whose forward map
         // `e.fun = λ_. true` makes the transported result `true` — *distinct* from the input `zero`,
         // so the test fails if transport silently reduced to the identity.
-        let zero = || Value::Con(crate::term::ConName("zero".into()), vec![]);
-        let tru = || Value::Con(crate::term::ConName("true".into()), vec![]);
+        let zero = || Value::Con(crate::term::ConName("zero".into()), Rc::new(vec![]));
+        let tru = || Value::Con(crate::term::ConName("true".into()), Rc::new(vec![]));
         // Equiv value `e = (λ_. true, <proof>)`; the proof component is never inspected by the rule,
         // so a placeholder closed value (`zero`) suffices for this white-box reduction test.
         let e = Value::Pair(
-            Box::new(Value::Lam(Closure {
+            Rc::new(Value::Lam(Closure {
                 env: Env::empty(),
                 body: Term::Con(crate::term::ConName("true".into()), vec![]),
             })),
-            Box::new(zero()),
+            Rc::new(zero()),
         );
         // The line `i. Glue Bool (i=0) Nat e`.
         let glue_body = Term::Glue {
@@ -937,24 +937,24 @@ mod tests {
     /// type (`Bool` where `Nat` is expected) and observably distinct from the correct `zero`.
     #[test]
     fn transp_ua_glue_line_reverse_face_applies_inverse_map() {
-        let zero = || Value::Con(crate::term::ConName("zero".into()), vec![]);
-        let tru = || Value::Con(crate::term::ConName("true".into()), vec![]);
+        let zero = || Value::Con(crate::term::ConName("zero".into()), Rc::new(vec![]));
+        let tru = || Value::Con(crate::term::ConName("true".into()), Rc::new(vec![]));
         // `fiber (fst e) y := (centre := (zero, <path>), <contraction>)` for every `y`: a constant
         // is-equiv witness whose fibre centre is always `zero`, so `invEq e _ = zero`.
         let fiber_for_any_y = Value::Pair(
-            Box::new(Value::Pair(Box::new(zero()), Box::new(zero()))), // centre = (zero, <path>)
-            Box::new(zero()),                                          // <contraction>, unused
+            Rc::new(Value::Pair(Rc::new(zero()), Rc::new(zero()))), // centre = (zero, <path>)
+            Rc::new(zero()),                                          // <contraction>, unused
         );
         let is_equiv_proof = Value::Lam(Closure {
             env: Env::empty(),
             body: quote_value_at(0, 1, &fiber_for_any_y),
         });
         let e = Value::Pair(
-            Box::new(Value::Lam(Closure {
+            Rc::new(Value::Lam(Closure {
                 env: Env::empty(),
                 body: Term::Con(crate::term::ConName("true".into()), vec![]),
             })),
-            Box::new(is_equiv_proof),
+            Rc::new(is_equiv_proof),
         );
         // The line `i. Glue Bool (i=1) Nat e`: bare `Bool` at `i0`, glued `Nat` at `i1`.
         let line = Closure {
@@ -989,22 +989,22 @@ mod tests {
     /// not silently stop matching this guard.
     #[test]
     fn transp_ua_glue_line_negated_dim_reverse_face_applies_inverse_map() {
-        let zero = || Value::Con(crate::term::ConName("zero".into()), vec![]);
-        let tru = || Value::Con(crate::term::ConName("true".into()), vec![]);
+        let zero = || Value::Con(crate::term::ConName("zero".into()), Rc::new(vec![]));
+        let tru = || Value::Con(crate::term::ConName("true".into()), Rc::new(vec![]));
         let fiber_for_any_y = Value::Pair(
-            Box::new(Value::Pair(Box::new(zero()), Box::new(zero()))),
-            Box::new(zero()),
+            Rc::new(Value::Pair(Rc::new(zero()), Rc::new(zero()))),
+            Rc::new(zero()),
         );
         let is_equiv_proof = Value::Lam(Closure {
             env: Env::empty(),
             body: quote_value_at(0, 1, &fiber_for_any_y),
         });
         let e = Value::Pair(
-            Box::new(Value::Lam(Closure {
+            Rc::new(Value::Lam(Closure {
                 env: Env::empty(),
                 body: Term::Con(crate::term::ConName("true".into()), vec![]),
             })),
-            Box::new(is_equiv_proof),
+            Rc::new(is_equiv_proof),
         );
         // `i. Glue Bool (¬i=0) Nat e` — the literal shape `sym (ua e)` reduces to.
         let line = Closure {
@@ -1037,13 +1037,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "not the univalence `i=0`-or-`i=1` direction")]
     fn transp_glue_non_ua_face_fails_safe() {
-        let zero = || Value::Con(crate::term::ConName("zero".into()), vec![]);
+        let zero = || Value::Con(crate::term::ConName("zero".into()), Rc::new(vec![]));
         let e = Value::Pair(
-            Box::new(Value::Lam(Closure {
+            Rc::new(Value::Lam(Closure {
                 env: Env::empty(),
                 body: Term::Con(crate::term::ConName("true".into()), vec![]),
             })),
-            Box::new(zero()),
+            Rc::new(zero()),
         );
         // `i. Glue Bool (i ∧ j) Nat e` — a connection face, neither `i=0` nor `i=1`.
         let line = Closure {
@@ -1067,13 +1067,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "non-constant base")]
     fn transp_glue_non_constant_base_fails_safe() {
-        let zero = || Value::Con(crate::term::ConName("zero".into()), vec![]);
+        let zero = || Value::Con(crate::term::ConName("zero".into()), Rc::new(vec![]));
         let e = Value::Pair(
-            Box::new(Value::Lam(Closure {
+            Rc::new(Value::Lam(Closure {
                 env: Env::empty(),
                 body: Term::Con(crate::term::ConName("true".into()), vec![]),
             })),
-            Box::new(zero()),
+            Rc::new(zero()),
         );
         // `i. Glue (Glue-base varies) (i=0) Nat e`: make the *base* a non-constant line by gluing a
         // base that itself is `i`-dependent. We model a varying base with a path-applied neutral so

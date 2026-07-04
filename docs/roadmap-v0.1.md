@@ -587,16 +587,19 @@ DIFF_CORPUS; evaluator-only changes are gated by the byte-identical verdict gold
   Θ(k)-per-level `Value` deep-clone polynomial multiplier. N6's value-sharing item has its
   measured justification; the other two N6 items still await theirs.
 
-### [ ] N6 — Constant-factor hygiene (post-N5, measured-in, each optional)
+### [~] N6 — Constant-factor hygiene (post-N5, measured-in, each optional)
 
 Only what the post-N5 ladder still needs, in measured order of leverage:
-- **Value-tree sharing** (kernel + recheck): `Rc` children in `Value` / interned `ConName` —
+- [x] **Value-tree sharing** (kernel + recheck): `Rc` children in `Value` / interned `ConName` —
   kills the Θ(k)-per-level deep clones (the polynomial multiplier). S3-shaped protocol.
-- **RTerm Box→Rc** (recheck only): S3-for-recheck; parity bounds the win at ~15% on eliminator
+  *Landed 2026-07-03 under an amended pre-registration — see the as-built note below.*
+- [ ] **RTerm Box→Rc** (recheck only): S3-for-recheck; parity bounds the win at ~15% on eliminator
   workloads, more on closure-heavy ones. Verdict golden byte-identical.
-- **Refl endpoint sharing** (kernel): stop re-evaluating the witness/endpoints ~3×
-  (PathP eager endpoint eval + PLam boundary + define-by re-check); measured target ~3-10×
-  constant on refl-heavy goldens.
+- [ ] **Refl endpoint sharing / re-evaluation churn** (kernel + recheck): stop re-evaluating the
+  witness/endpoints ~3× (PathP eager endpoint eval + PLam boundary + define-by re-check);
+  measured target ~3-10× constant on refl-heavy goldens. *Now holds the scale-pair quadratic's
+  measured justification (the Value-sharing profile below): eval/do_elim materialize a fresh
+  O(level) chain per level and drop it — representation sharing cannot reach it.*
 
 **Pre-registration (2026-07-03, Value-tree sharing — the item with two measured justifications:
 json/regex re-checks at 26.5/30.8 s and the depth scale-pair at ~19.6× for 4×):** mechanical
@@ -610,6 +613,26 @@ the scale-pair ratio drops from ~19.6× toward the linear ~4–6× band (then ti
 35× to 10×), and json/regex re-checks drop meaningfully below ~30 s. Kill criterion: if the
 ratio does not drop below 12×, the sharing hypothesis is wrong — revert and re-profile instead
 of keeping speculative churn.
+
+**As-built (2026-07-03, kill criterion fired → pre-registration amended, user decision):** the
+conversion landed complete (zero `Box<Value>`/`Box<Neutral>` remnants, audited `unshare_value`/
+`unshare_args` per engine) and every safety gate held: suite 858/858, verdict golden
+byte-identical, B1 llvm bit-identity matrix green, mutants over the diff 129 tested / every
+viable mutant killed (one initially missed — recheck `unify_index`'s `(Data, Data)` arm — now
+mutation-pinned by `unify_index_data_arm_decomposes_and_clashes`; the `#[ignore]`d corpus gates
+don't run in the mutants oracle, so arm-level behavior needs direct probes). Payoffs, measured
+as same-machine paired stash-twins: json_scratch 17.2 → **8.7 s** (2.0×), regex_scratch 24.7 →
+**5.3 s** (4.7×), whole verdict corpus 49.4 → 20.4 s (2.4×), scale-pair absolute 1.37 s →
+0.73 s (~1.9×) — but the scale-pair *ratio* only 16.6× → 15.3× (five runs each, tight), above
+the pre-registered 12× kill line. The re-profile (kill protocol) re-attributed the quadratic:
+the hot frames are recursive `drop_in_place`/`clone`/`Vec::from_iter` under `eval`/`do_elim` —
+freshly *materialized* O(level) chains (refcount 1, sharing never engages), i.e. re-evaluation
+churn, item 3's territory, its measured justification. Decision: keep — the deep-clone
+hypothesis for the ratio is falsified, but the change decisively meets the other pre-registered
+target on the workloads that motivated N6; the ratio bound tightened 35× → **20×** (earned from
+15.3 measured, not the unearned 10×; item 3 must earn the rest). Recorded cost: pipeline
+`end_to_end` criterion rows regressed ~4–5% (isolated arbiter confirmed; µs-scale Rc constant
+overhead on tiny terms) — runtime benches flat-to-improved. `ConName` interning stays deferred.
 
 ### [x] N7 — Decision checkpoint (fires only on N5 fork) — closed without firing
 

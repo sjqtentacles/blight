@@ -11,24 +11,24 @@ use std::rc::Rc;
 pub enum RValue {
     Neutral(Neutral),
     Univ(u32),
-    Pi(RGrade, Box<RValue>, Closure),
+    Pi(RGrade, Rc<RValue>, Closure),
     Lam(Closure),
-    Sigma(Box<RValue>, Closure),
-    Pair(Box<RValue>, Box<RValue>),
-    Data(blight_kernel::DataName, Vec<RValue>, Vec<RValue>),
-    Con(blight_kernel::ConName, Vec<RValue>),
+    Sigma(Rc<RValue>, Closure),
+    Pair(Rc<RValue>, Rc<RValue>),
+    Data(blight_kernel::DataName, Rc<Vec<RValue>>, Rc<Vec<RValue>>),
+    Con(blight_kernel::ConName, Rc<Vec<RValue>>),
     PathP {
         family: DimClosure,
-        lhs: Box<RValue>,
-        rhs: Box<RValue>,
+        lhs: Rc<RValue>,
+        rhs: Rc<RValue>,
     },
     PLam(DimClosure),
     /// A reflected (η-expanded) path: a neutral known to have path type, carrying its endpoints so
     /// `p @ 0 = lhs`, `p @ 1 = rhs` fire even on a stuck path.
     ReflectedPath {
         neutral: Neutral,
-        lhs: Box<RValue>,
-        rhs: Box<RValue>,
+        lhs: Rc<RValue>,
+        rhs: Rc<RValue>,
     },
     /// A reflected function: a neutral known to have Π type, η-expanded on application.
     ReflectedFun {
@@ -40,14 +40,14 @@ pub enum RValue {
 
     // ---- partiality (spec §4.5): the intensional Capretta delay (modeled independently) ----
     /// `Delay A` as a type value.
-    Delay(Box<RValue>),
+    Delay(Rc<RValue>),
     /// `now a : Delay A`.
-    Now(Box<RValue>),
+    Now(Rc<RValue>),
     /// `later d : Delay A` — a guarded, non-reducing node (intensional).
-    Later(Box<RValue>),
+    Later(Rc<RValue>),
     /// `force d` stuck on a guarded `later` (`force (now a)` reduces; over a neutral it reflects to
     /// `Neutral::Force`; only the `later` case lands here).
-    Force(Box<RValue>),
+    Force(Rc<RValue>),
 
     // ---- effects and handlers (spec §4) ----
     // `! E A` has no value of its own: it is *definitionally its payload* `A` at the value level
@@ -65,18 +65,18 @@ pub enum RValue {
 #[derive(Debug, Clone)]
 pub enum Neutral {
     Var(usize),
-    App(Box<Neutral>, Box<RValue>),
-    Fst(Box<Neutral>),
-    Snd(Box<Neutral>),
-    PApp(Box<Neutral>, RInterval),
+    App(Rc<Neutral>, Rc<RValue>),
+    Fst(Rc<Neutral>),
+    Snd(Rc<Neutral>),
+    PApp(Rc<Neutral>, RInterval),
     Elim {
         data: blight_kernel::DataName,
-        motive: Box<RValue>,
+        motive: Rc<RValue>,
         methods: Vec<RValue>,
-        scrutinee: Box<Neutral>,
+        scrutinee: Rc<Neutral>,
     },
     /// `force _` — forcing a neutral of `Delay A`, kept stuck.
-    Force(Box<Neutral>),
+    Force(Rc<Neutral>),
     /// A *stuck* `perform op a`: the re-checker does not run effect semantics, so a `perform`
     /// evaluates to this neutral (carrying the op name and the argument value). It only needs to
     /// round-trip through `quote`; it is never reduced.
@@ -86,7 +86,7 @@ pub enum Neutral {
         /// Type-argument instantiation (Wave 7/E2), threaded so two stuck `perform`s of a
         /// differently-instantiated parameterized operation are never misjudged convertible.
         type_args: Vec<RValue>,
-        arg: Box<RValue>,
+        arg: Rc<RValue>,
     },
     /// A *stuck* `handle …`: the re-checker does not run handler semantics, so a `handle`
     /// evaluates to this neutral. The body value, return clause, and op clauses are captured (with
@@ -95,15 +95,15 @@ pub enum Neutral {
     /// quote time by opening with fresh variables.
     Handle {
         env: Env,
-        body: Box<RValue>,
+        body: Rc<RValue>,
         return_clause: Rc<RTerm>,
         op_clauses: Vec<(blight_kernel::signature::OpName, Rc<RTerm>)>,
     },
     /// A *stuck* primitive `Int` operation: at least one operand is neutral.
     IntPrim {
         op: blight_kernel::IntPrimOp,
-        lhs: Box<RValue>,
-        rhs: Box<RValue>,
+        lhs: Rc<RValue>,
+        rhs: Rc<RValue>,
     },
 }
 
@@ -235,4 +235,15 @@ impl Env {
             None
         }
     }
+}
+
+/// Take ownership of the `RValue` inside an `Rc`, cloning only when shared (N6, this engine's
+/// independent twin of the kernel's `unshare_value` — same contract, separate implementation).
+/// This engine's independent twin of the kernel's `unshare_args` (N6).
+pub fn unshare_rargs(rc: Rc<Vec<RValue>>) -> Vec<RValue> {
+    Rc::try_unwrap(rc).unwrap_or_else(|rc| (*rc).clone())
+}
+
+pub fn unshare_rvalue(rc: Rc<RValue>) -> RValue {
+    Rc::try_unwrap(rc).unwrap_or_else(|rc| (*rc).clone())
 }

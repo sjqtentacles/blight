@@ -138,7 +138,7 @@ fn transp_sigma(sig: &Signature, family: &DimClosure, pair: &RValue) -> RValue {
         other => other,
     });
     let b1 = transp(sig, &snd_line, &RCofib::Bot, &b0);
-    RValue::Pair(Box::new(a1), Box::new(b1))
+    RValue::Pair(Rc::new(a1), Rc::new(b1))
 }
 
 fn transp_path(sig: &Signature, family: &DimClosure, path: &RValue) -> RValue {
@@ -191,7 +191,7 @@ pub fn hcomp(
             let snd_base = vsnd(sig, base.clone());
             let snd_ty = cod.apply(sig, a1.clone());
             let b1 = hcomp(sig, &snd_ty, cofib, &snd_tube, &snd_base);
-            RValue::Pair(Box::new(a1), Box::new(b1))
+            RValue::Pair(Rc::new(a1), Rc::new(b1))
         }
         RValue::Pi(_, _, cod) => {
             let x = RValue::Neutral(Neutral::Var(0));
@@ -402,10 +402,10 @@ mod tests {
         RTerm::Con(ConName("Zero".into()), vec![])
     }
     fn zero_v() -> RValue {
-        RValue::Con(ConName("Zero".into()), vec![])
+        RValue::Con(ConName("Zero".into()), Rc::new(vec![]))
     }
     fn succ_v(v: RValue) -> RValue {
-        RValue::Con(ConName("Succ".into()), vec![v])
+        RValue::Con(ConName("Succ".into()), Rc::new(vec![v]))
     }
     fn univ(n: u32) -> RValue {
         RValue::Univ(n)
@@ -457,7 +457,7 @@ mod tests {
         let s = sig();
         let sigma = RTerm::Sigma(Box::new(nat_t()), Box::new(nat_t()));
         let line = const_line(sigma);
-        let pair = RValue::Pair(Box::new(zero_v()), Box::new(zero_v()));
+        let pair = RValue::Pair(Rc::new(zero_v()), Rc::new(zero_v()));
         let out = transp(&s, &line, &RCofib::Bot, &pair);
         assert!(veq(&s, &out, &pair));
     }
@@ -610,8 +610,8 @@ mod tests {
         let family = const_line(sigma);
         assert!(!family_is_constant(&s, &family));
         let pair = RValue::Pair(
-            Box::new(zero_v()),
-            Box::new(RValue::PLam(const_line(zero_t()))),
+            Rc::new(zero_v()),
+            Rc::new(RValue::PLam(const_line(zero_t()))),
         );
         let out = transp(&s, &family, &RCofib::Bot, &pair);
         match &out {
@@ -640,7 +640,7 @@ mod tests {
         let partial = RCofib::Eq0(RInterval::Dim(3));
         assert!(!is_total(&partial) && !is_empty_face(&partial));
         let sigma_ty = RValue::Sigma(
-            Box::new(RValue::Data(DataName("Nat".into()), vec![], vec![])),
+            Rc::new(RValue::Data(DataName("Nat".into()), Rc::new(vec![]), Rc::new(vec![]))),
             Closure {
                 env: Env::new(),
                 body: Rc::new(RTerm::PathP {
@@ -659,8 +659,8 @@ mod tests {
             "the tube's second component genuinely varies"
         );
         let base = RValue::Pair(
-            Box::new(zero_v()),
-            Box::new(RValue::PLam(const_line(zero_t()))),
+            Rc::new(zero_v()),
+            Rc::new(RValue::PLam(const_line(zero_t()))),
         );
         let out = hcomp(&s, &sigma_ty, &partial, &tube, &base);
         match &out {
@@ -692,7 +692,7 @@ mod tests {
         let partial = RCofib::Eq0(RInterval::Dim(1));
         let pi_ty = RValue::Pi(
             RGrade::Omega,
-            Box::new(RValue::Data(DataName("Nat".into()), vec![], vec![])),
+            Rc::new(RValue::Data(DataName("Nat".into()), Rc::new(vec![]), Rc::new(vec![]))),
             Closure {
                 env: Env::new(),
                 body: Rc::new(nat_t()),
@@ -731,7 +731,7 @@ mod tests {
         let partial = RCofib::Eq0(RInterval::Dim(3));
         let pi_ty = RValue::Pi(
             RGrade::Omega,
-            Box::new(RValue::Data(DataName("Nat".into()), vec![], vec![])),
+            Rc::new(RValue::Data(DataName("Nat".into()), Rc::new(vec![]), Rc::new(vec![]))),
             Closure {
                 env: Env::new(),
                 body: Rc::new(RTerm::PathP {
@@ -800,7 +800,7 @@ mod tests {
         assert!(veq(
             &s,
             &succ_v(zero_v()),
-            &RValue::Con(ConName("Succ".into()), vec![zero_v()])
+            &RValue::Con(ConName("Succ".into()), Rc::new(vec![zero_v()]))
         ));
     }
 }

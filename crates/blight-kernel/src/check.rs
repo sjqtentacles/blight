@@ -304,7 +304,7 @@ impl Checker {
             Term::Fst(p) => {
                 let (p_ty, row, usage) = self.infer_g(ctx, p, sigma)?;
                 match p_ty {
-                    Value::Sigma(dom, _cod) => Ok((*dom, row, usage)),
+                    Value::Sigma(dom, _cod) => Ok((crate::value::unshare_value(dom), row, usage)),
                     other => Err(TypeError::Mismatch {
                         expected: "a pair (Sigma) type".into(),
                         found: format!("{other:?}"),
@@ -510,7 +510,7 @@ impl Checker {
             // `now a : Delay A` when `a : A`. An immediately-available value is *total*: empty row.
             Term::Now(a) => {
                 let (a_ty, a_row, a_usage) = self.infer_g(ctx, a, sigma)?;
-                let a_ty_v = Box::new(a_ty);
+                let a_ty_v = Rc::new(a_ty);
                 Ok((Value::Delay(a_ty_v), a_row, a_usage))
             }
             // `later d : Delay A` when `d : Delay A`. A guarded step **may diverge**, so it contributes
@@ -539,7 +539,7 @@ impl Checker {
                 match d_ty {
                     Value::Delay(inner) => {
                         let row = d_row.union(&Row::single(crate::row::EffName::partial(), sigma));
-                        Ok((*inner, row, d_usage))
+                        Ok((crate::value::unshare_value(inner), row, d_usage))
                     }
                     other => Err(TypeError::Mismatch {
                         expected: "Delay A (the argument of `force`)".into(),
@@ -617,7 +617,7 @@ impl Checker {
                 // We only reach inference mode for a *non-parameterized* family (parameterized ones
                 // require a type ascription, above). Recursive arguments therefore share the family
                 // head with no parameters; indices, if any, are reconciled against the result below.
-                let rec_ty = Value::Data(decl_name.clone(), vec![], vec![]);
+                let rec_ty = Value::Data(decl_name.clone(), Rc::new(vec![]), Rc::new(vec![]));
                 let mut usage = Usage::zero(n);
                 let mut row = Row::empty();
                 for (arg, shape) in args.iter().zip(ctor.args.iter()) {
@@ -640,7 +640,7 @@ impl Checker {
                 }
                 let result_indices: Vec<Value> =
                     result_index_terms.iter().map(|t| eval(&env, t)).collect();
-                let data_ty = Value::Data(decl_name, vec![], result_indices);
+                let data_ty = Value::Data(decl_name, Rc::new(vec![]), Rc::new(result_indices));
                 Ok((data_ty, row, usage))
             }
 
@@ -682,7 +682,7 @@ impl Checker {
                     );
                 }
                 Ok((
-                    Value::Data(data.clone(), vec![], vec![]),
+                    Value::Data(data.clone(), Rc::new(vec![]), Rc::new(vec![])),
                     Row::empty(),
                     Usage::zero(n),
                 ))
@@ -857,10 +857,10 @@ impl Checker {
                 let (base_ty, row_base, usage_base) = self.infer_g(ctx, base, sigma)?;
                 Ok((
                     Value::Glue {
-                        base: Box::new(base_ty),
+                        base: Rc::new(base_ty),
                         cofib: self.resolve_cofib_at(ctx, cofib),
-                        ty: Box::new(eval(&self.env_for(ctx), partial)),
-                        equiv: Box::new(eval(&self.env_for(ctx), base)),
+                        ty: Rc::new(eval(&self.env_for(ctx), partial)),
+                        equiv: Rc::new(eval(&self.env_for(ctx), base)),
                     },
                     row_partial.union(&row_base),
                     usage_partial.add(&usage_base),
@@ -871,7 +871,7 @@ impl Checker {
             Term::Unglue(g) => {
                 let (g_ty, row, usage) = self.infer_g(ctx, g, sigma)?;
                 match g_ty {
-                    Value::Glue { base, .. } => Ok((*base, row, usage)),
+                    Value::Glue { base, .. } => Ok((crate::value::unshare_value(base), row, usage)),
                     other => Err(TypeError::Mismatch {
                         expected: "a Glue type".into(),
                         found: format!("{other:?}"),
@@ -1056,7 +1056,7 @@ impl Checker {
         // params are not otherwise recoverable from the eliminator alone).
         let (scrut_ty, scrut_row0, scrut_usage0) = self.infer_g(ctx, scrutinee, sigma)?;
         let (params, scrut_indices): (Vec<Value>, Vec<Value>) = match &scrut_ty {
-            Value::Data(d, ps, is) if d == data => (ps.clone(), is.clone()),
+            Value::Data(d, ps, is) if d == data => ((**ps).clone(), (**is).clone()),
             other => {
                 return Err(TypeError::Mismatch {
                     expected: format!("a scrutinee of type {data:?}"),
@@ -1069,7 +1069,7 @@ impl Checker {
 
         // The fully-applied family value `D params indices` used for the recursive occurrences and the
         // motive's domain. For an indexed family the indices are abstracted in the motive instead.
-        let data_ty = Value::Data(decl.name.clone(), params.clone(), scrut_indices.clone());
+        let data_ty = Value::Data(decl.name.clone(), Rc::new(params.clone()), Rc::new(scrut_indices.clone()));
 
         // Motive must denote `(i1:Idx1) → … → (im:Idxm) → D params i1..im → Univ ℓ`. The
         // surface/elaborator passes it as nested `Lam`s (not inferable on its own), so we type its
@@ -1102,7 +1102,7 @@ impl Checker {
                         }
                     }
                 }
-                let dty = Value::Data(decl.name.clone(), params.clone(), idx_vars.clone());
+                let dty = Value::Data(decl.name.clone(), Rc::new(params.clone()), Rc::new(idx_vars.clone()));
                 let ctx_id = ctx_acc.extend(quote(ctx_acc.len(), &dty), Grade::Omega);
                 match body {
                     Term::Lam(inner) => self.infer_universe(&ctx_id, inner)?,
@@ -1536,8 +1536,8 @@ impl Checker {
         };
         Value::PathP {
             family,
-            lhs: Box::new(elim_at(&pc.lhs)),
-            rhs: Box::new(elim_at(&pc.rhs)),
+            lhs: Rc::new(elim_at(&pc.lhs)),
+            rhs: Rc::new(elim_at(&pc.rhs)),
         }
     }
 
@@ -1662,7 +1662,7 @@ impl Checker {
                 if n1 != n2 || p1.len() != p2.len() || i1.len() != i2.len() {
                     return Unify::Clash;
                 }
-                self.unify_seq(lvl, p1.iter().zip(p2).chain(i1.iter().zip(i2)), sol)
+                self.unify_seq(lvl, p1.iter().zip(p2.iter()).chain(i1.iter().zip(i2.iter())), sol)
             }
             // Same constructor head: decompose arguments. Different heads are a genuine CLASH — the
             // branch is unreachable for this scrutinee.
@@ -1670,7 +1670,7 @@ impl Checker {
                 if c1 != c2 || a1.len() != a2.len() {
                     return Unify::Clash;
                 }
-                self.unify_seq(lvl, a1.iter().zip(a2), sol)
+                self.unify_seq(lvl, a1.iter().zip(a2.iter()), sol)
             }
             (Value::IntLit(a), Value::IntLit(b)) => {
                 if a == b {
@@ -1744,12 +1744,12 @@ impl Checker {
             }
             Value::Data(n, ps, is) => Value::Data(
                 n.clone(),
-                ps.iter().map(|x| self.subst_levels(x, map)).collect(),
-                is.iter().map(|x| self.subst_levels(x, map)).collect(),
+                Rc::new(ps.iter().map(|x| self.subst_levels(x, map)).collect()),
+                Rc::new(is.iter().map(|x| self.subst_levels(x, map)).collect()),
             ),
             Value::Con(c, xs) => Value::Con(
                 c.clone(),
-                xs.iter().map(|x| self.subst_levels(x, map)).collect(),
+                Rc::new(xs.iter().map(|x| self.subst_levels(x, map)).collect()),
             ),
             other => other.clone(),
         }
@@ -1812,7 +1812,7 @@ impl Checker {
                 Arg::Rec(rec_indices) => {
                     let ix: Vec<Value> = rec_indices.iter().map(|t| eval(&arg_env, t)).collect();
                     rec_ix = Some(ix.clone());
-                    Value::Data(decl.name.clone(), params.to_vec(), ix)
+                    Value::Data(decl.name.clone(), Rc::new(params.to_vec()), Rc::new(ix))
                 }
             };
             let inner = match body {
@@ -1936,7 +1936,7 @@ impl Checker {
             let ix = self.subst_levels(ix, &refined_ambient);
             concl = apply_value(concl, ix);
         }
-        let con_val = Value::Con(ctor.name.clone(), arg_vals);
+        let con_val = Value::Con(ctor.name.clone(), Rc::new(arg_vals));
         concl = apply_value(concl, con_val);
 
         let (body_row, body_usage) = self.check_g(&cur, body, &concl, sigma)?;
@@ -2052,7 +2052,7 @@ impl Checker {
                             let rec_index_vals: Vec<Value> =
                                 rec_indices.iter().map(|t| eval(&arg_env, t)).collect();
                             let rec_ty =
-                                Value::Data(decl.name.clone(), param_vals.clone(), rec_index_vals);
+                                Value::Data(decl.name.clone(), param_vals.clone(), Rc::new(rec_index_vals));
                             self.check_g(ctx, arg, &rec_ty, sigma)?
                         }
                         Arg::NonRec(ty) => {
@@ -2329,7 +2329,7 @@ fn apply_value(f: Value, arg: Value) -> Value {
     match f {
         Value::Lam(clos) => clos.apply(arg),
         Value::Pi(_, _, cod) => cod.apply(arg),
-        Value::Neutral(n) => Value::Neutral(Neutral::App(Box::new(n), Box::new(arg))),
+        Value::Neutral(n) => Value::Neutral(Neutral::App(Rc::new(n), Rc::new(arg))),
         other => panic!("apply_value: not applicable: {other:?}"),
     }
 }

@@ -7,6 +7,20 @@ use crate::signature::Signature;
 use crate::term::{ConName, DataName, Interval, Level, Term};
 use std::rc::Rc;
 
+/// Take ownership of the `Value` inside an `Rc`, cloning only when shared — the audited
+/// N6 replacement for what was a plain `*boxed` move before `Value`'s children moved to `Rc`
+/// (same contract as `crate::term::unshare`: identical behavior, the fallback clone is shallow
+/// because this node's own children are behind `Rc`).
+/// Take ownership of a shared argument vector, cloning only when shared (N6 — the `Con`/`Data`
+/// args moved behind `Rc<Vec<_>>` so a k-deep constructor chain clones in O(1)).
+pub fn unshare_args(rc: Rc<Vec<Value>>) -> Vec<Value> {
+    Rc::try_unwrap(rc).unwrap_or_else(|rc| (*rc).clone())
+}
+
+pub fn unshare_value(rc: Rc<Value>) -> Value {
+    Rc::try_unwrap(rc).unwrap_or_else(|rc| (*rc).clone())
+}
+
 /// A closure: an unevaluated body together with the environment it captured.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Closure {
@@ -20,12 +34,12 @@ pub enum Value {
     /// A neutral term (a variable with a spine of eliminations applied).
     Neutral(Neutral),
     Univ(Level),
-    Pi(crate::semiring::Grade, Box<Value>, Closure),
+    Pi(crate::semiring::Grade, Rc<Value>, Closure),
     Lam(Closure),
-    Sigma(Box<Value>, Closure),
-    Pair(Box<Value>, Box<Value>),
-    Data(DataName, Vec<Value>, Vec<Value>),
-    Con(ConName, Vec<Value>),
+    Sigma(Rc<Value>, Closure),
+    Pair(Rc<Value>, Rc<Value>),
+    Data(DataName, Rc<Vec<Value>>, Rc<Vec<Value>>),
+    Con(ConName, Rc<Vec<Value>>),
     /// The value-level counterpart of [`crate::term::Term::PCon`] (spec §2.7, Wave 7/E4): a path
     /// constructor applied to its arguments, at a *non-endpoint* dimension. [`crate::normalize::eval`]
     /// collapses an endpoint `dim` (`I0`/`I1`) to the constructor's declared boundary value
@@ -34,13 +48,13 @@ pub enum Value {
     PCon {
         data: DataName,
         name: ConName,
-        args: Vec<Value>,
+        args: Rc<Vec<Value>>,
         dim: Interval,
     },
     PathP {
         family: Closure,
-        lhs: Box<Value>,
-        rhs: Box<Value>,
+        lhs: Rc<Value>,
+        rhs: Rc<Value>,
     },
     PLam(Closure),
     /// A *reflected* neutral of `PathP` type (η for paths at neutrals). Carries the underlying
@@ -52,8 +66,8 @@ pub enum Value {
     /// (`h x : Path B (f x) (g x)`).
     ReflectedPath {
         neutral: Neutral,
-        lhs: Box<Value>,
-        rhs: Box<Value>,
+        lhs: Rc<Value>,
+        rhs: Rc<Value>,
     },
     /// A *reflected* neutral of `Pi` type: a function value that, when applied, reflects the
     /// applied spine at the (instantiated) codomain. This is what carries path endpoints through a
@@ -61,16 +75,16 @@ pub enum Value {
     ReflectedFun {
         neutral: Neutral,
         /// The function's domain (unused for reduction but kept for completeness/quoting).
-        dom: Box<Value>,
+        dom: Rc<Value>,
         /// The codomain family `B`; applied to the argument value to get the result type that the
         /// applied spine is reflected against.
         cod: Closure,
     },
     Glue {
-        base: Box<Value>,
+        base: Rc<Value>,
         cofib: crate::term::Cofib,
-        ty: Box<Value>,
-        equiv: Box<Value>,
+        ty: Rc<Value>,
+        equiv: Rc<Value>,
     },
 
     // ---- effects (spec §4): the effectful-neutral and runtime continuation ----
@@ -91,7 +105,7 @@ pub enum Value {
         /// misjudged convertible (see `conv_at`'s `OpNode` rule) — the value-level analogue of
         /// [`Value::Data`]'s `params`. Empty for a non-parameterized effect.
         type_args: Vec<Value>,
-        arg: Box<Value>,
+        arg: Rc<Value>,
         /// Pending eliminations to replay on resume, in application order (index 0 first).
         cont: Vec<Frame>,
     },
@@ -111,18 +125,18 @@ pub enum Value {
 
     // ---- partiality (spec §4.5): the intensional Capretta delay ----
     /// `Delay A` as a *type* value (the type former). Carries the underlying value type `A`.
-    Delay(Box<Value>),
+    Delay(Rc<Value>),
     /// `now a : Delay A` — an immediately-available value of `Delay A`.
-    Now(Box<Value>),
+    Now(Rc<Value>),
     /// `later d : Delay A` — a single **guarded** delay step. NbE does *not* force the inner
     /// `Delay A` value: `Later` is a canonical, non-reducing node, so each normalization step
     /// unfolds at most one layer and stays finite even for divergent (`define-rec`) computations.
-    Later(Box<Value>),
+    Later(Rc<Value>),
     /// `force d` stuck on a **guarded** `later` (spec §4.5): forcing a `later` does not unfold it
     /// (intensional partiality keeps the delay structure observable), so `force (later d)` is a
     /// canonical, non-reducing node. (`force` on a `now` reduces; `force` on a neutral reflects to
     /// `Neutral::Force`; `force` on an `OpNode` bubbles — only the `later` case lands here.)
-    Force(Box<Value>),
+    Force(Rc<Value>),
 
     // ---- primitive machine integers (M11) ----
     /// `Int` as a type value (`IntTy : Univ 0`).
@@ -168,7 +182,7 @@ pub enum Frame {
     /// `Elim D motive methods _` — eliminating the (resumed) value as a scrutinee.
     Elim {
         data: DataName,
-        motive: Box<Value>,
+        motive: Rc<Value>,
         methods: Vec<Value>,
     },
     /// `force _` — forcing the (resumed) delay value.
@@ -180,32 +194,32 @@ pub enum Frame {
 pub enum Neutral {
     /// A variable, stored as a de Bruijn *level* (so it is stable under weakening).
     Var(usize),
-    App(Box<Neutral>, Box<Value>),
-    Fst(Box<Neutral>),
-    Snd(Box<Neutral>),
-    PApp(Box<Neutral>, Interval),
+    App(Rc<Neutral>, Rc<Value>),
+    Fst(Rc<Neutral>),
+    Snd(Rc<Neutral>),
+    PApp(Rc<Neutral>, Interval),
     Elim {
         data: DataName,
-        motive: Box<Value>,
+        motive: Rc<Value>,
         methods: Vec<Value>,
-        scrutinee: Box<Neutral>,
+        scrutinee: Rc<Neutral>,
     },
     /// `force _` — forcing a neutral (a variable of `Delay A`), kept stuck.
-    Force(Box<Neutral>),
+    Force(Rc<Neutral>),
     /// `foreign "sym" : A` — an opaque trusted constant (spec §7.6). It is *stuck by construction*:
     /// nothing reduces it, and two foreigns are convertible only when their symbols (and types)
     /// coincide. Carrying the type lets `quote` reconstruct the original `Term::Foreign`.
     Foreign {
         symbol: String,
-        ty: Box<Value>,
+        ty: Rc<Value>,
     },
     /// A *stuck* primitive `Int` operation (M11): at least one operand is neutral (not a literal),
     /// so the operation cannot reduce. Carries both operand values so `quote` can reconstruct the
     /// `Term::IntPrim`. (When both operands are `IntLit`s, `eval` reduces to an `IntLit` instead.)
     IntPrim {
         op: crate::term::IntPrimOp,
-        lhs: Box<Value>,
-        rhs: Box<Value>,
+        lhs: Rc<Value>,
+        rhs: Rc<Value>,
     },
 }
 

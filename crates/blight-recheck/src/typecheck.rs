@@ -9,6 +9,7 @@ use crate::value::{Env, RValue};
 use crate::RecheckError;
 use blight_kernel::signature::{Arg, Constructor, DataDecl, Signature};
 use blight_kernel::DataName;
+use std::rc::Rc;
 
 type RResult<T> = Result<T, RecheckError>;
 
@@ -245,7 +246,7 @@ impl<'a> Recheck<'a> {
             RTerm::Fst(p) => {
                 let (p_ty, row, usage) = self.infer(ctx, p, sigma)?;
                 match p_ty {
-                    RValue::Sigma(dom, _cod) => Ok((*dom, row, usage)),
+                    RValue::Sigma(dom, _cod) => Ok((crate::value::unshare_rvalue(dom), row, usage)),
                     other => Err(reject(format!("Fst of a non-pair of type {other:?}"))),
                 }
             }
@@ -371,7 +372,7 @@ impl<'a> Recheck<'a> {
             // `now a : Delay A` where `A` is the inferred type of `a` (row = `a`'s row).
             RTerm::Now(a) => {
                 let (a_ty, row, usage) = self.infer(ctx, a, sigma)?;
-                Ok((RValue::Delay(Box::new(a_ty)), row, usage))
+                Ok((RValue::Delay(Rc::new(a_ty)), row, usage))
             }
             // `later d : Delay A` where `d : Delay A` (the inferred type of `d` is already a Delay).
             RTerm::Later(d) => {
@@ -390,7 +391,7 @@ impl<'a> Recheck<'a> {
                 match d_ty {
                     RValue::Delay(inner) => {
                         let row = d_row.union(&RRow::single(partial_label(), sigma));
-                        Ok((*inner, row, usage))
+                        Ok((crate::value::unshare_rvalue(inner), row, usage))
                     }
                     other => Err(reject(format!("`force` of a non-Delay of type {other:?}"))),
                 }
@@ -579,7 +580,7 @@ impl<'a> Recheck<'a> {
             let cod_closure_body = shift_free(&c_term, 2);
             let k_ty = RValue::Pi(
                 RGrade::Omega,
-                Box::new(k_dom_val),
+                Rc::new(k_dom_val),
                 crate::value::Closure {
                     env: ctx_x.env.clone(),
                     body: std::rc::Rc::new(cod_closure_body),
@@ -733,7 +734,7 @@ impl<'a> Recheck<'a> {
             )));
         }
         // Non-parameterized family: recursive arguments share the (param-free) family head.
-        let rec_ty = RValue::Data(decl.name.clone(), vec![], vec![]);
+        let rec_ty = RValue::Data(decl.name.clone(), Rc::new(vec![]), Rc::new(vec![]));
         let mut usage = Usage::zero(ctx.len());
         let mut row = RRow::empty();
         // `env` evaluates the constructor's result-index terms; for a non-parameterized family it
@@ -768,7 +769,7 @@ impl<'a> Recheck<'a> {
                 Ok::<RValue, RecheckError>(eval(self.sig, &env, &rt))
             })
             .collect::<RResult<_>>()?;
-        Ok((RValue::Data(decl.name, vec![], result_indices), row, usage))
+        Ok((RValue::Data(decl.name, Rc::new(vec![]), Rc::new(result_indices)), row, usage))
     }
 
     /// Check a constructor application against an expected `Data` family (spec §2.7).
@@ -819,7 +820,7 @@ impl<'a> Recheck<'a> {
                             Ok::<RValue, RecheckError>(eval(self.sig, &env, &rt))
                         })
                         .collect::<RResult<_>>()?;
-                    let rec_ty = RValue::Data(decl.name.clone(), params.to_vec(), rec_index_vals);
+                    let rec_ty = RValue::Data(decl.name.clone(), Rc::new(params.to_vec()), Rc::new(rec_index_vals));
                     let (r, u) = self.check(ctx, arg, &rec_ty, sigma)?;
                     row = row.union(&r);
                     usage = usage.add(&u);
@@ -890,7 +891,7 @@ impl<'a> Recheck<'a> {
                 for idx_ty_term in decl.indices.iter() {
                     let kt = crate::term::from_kernel(idx_ty_term)?;
                     let mut env = Env::new();
-                    for p in &eparams {
+                    for p in eparams.iter() {
                         env = env.extend(p.clone());
                     }
                     for v in &idx_vars {
@@ -911,7 +912,7 @@ impl<'a> Recheck<'a> {
                         }
                     }
                 }
-                let dty = RValue::Data(decl.name.clone(), eparams.clone(), idx_vars.clone());
+                let dty = RValue::Data(decl.name.clone(), eparams.clone(), Rc::new(idx_vars.clone()));
                 let ctx_id = ctx_acc.extend(self.sig, dty, RGrade::Omega);
                 match body {
                     RTerm::Lam(inner) => {
@@ -935,7 +936,7 @@ impl<'a> Recheck<'a> {
                 }
             }
             RTerm::Lam(body) => {
-                let dty = RValue::Data(decl.name.clone(), eparams.clone(), vec![]);
+                let dty = RValue::Data(decl.name.clone(), eparams.clone(), Rc::new(vec![]));
                 let ctx2 = ctx.extend(self.sig, dty, RGrade::Omega);
                 self.infer_universe(&ctx2, body)?;
             }
@@ -1015,7 +1016,7 @@ impl<'a> Recheck<'a> {
                 )));
             }
             let mut acc = motive_v;
-            for idx in scrut_indices.into_iter() {
+            for idx in crate::value::unshare_rargs(scrut_indices).into_iter() {
                 acc = apply(self.sig, acc, idx);
             }
             apply(self.sig, acc, scrut_v)
@@ -1418,7 +1419,7 @@ impl<'a> Recheck<'a> {
                 if n1 != n2 || p1.len() != p2.len() || i1.len() != i2.len() {
                     return Ok(Unify::Clash);
                 }
-                self.unify_seq(ctx, p1.iter().zip(p2).chain(i1.iter().zip(i2)), sol)
+                self.unify_seq(ctx, p1.iter().zip(p2.iter()).chain(i1.iter().zip(i2.iter())), sol)
             }
             // Same constructor head: decompose arguments. Different heads are a genuine CLASH — the
             // branch is unreachable for this scrutinee.
@@ -1426,7 +1427,7 @@ impl<'a> Recheck<'a> {
                 if c1 != c2 || a1.len() != a2.len() {
                     return Ok(Unify::Clash);
                 }
-                self.unify_seq(ctx, a1.iter().zip(a2), sol)
+                self.unify_seq(ctx, a1.iter().zip(a2.iter()), sol)
             }
             (RValue::IntLit(a), RValue::IntLit(b)) => {
                 Ok(if a == b { Unify::Trivial } else { Unify::Clash })
@@ -1534,7 +1535,7 @@ impl<'a> Recheck<'a> {
                         })
                         .collect::<RResult<_>>()?;
                     rec_ix = Some(ix.clone());
-                    RValue::Data(decl.name.clone(), params.to_vec(), ix)
+                    RValue::Data(decl.name.clone(), Rc::new(params.to_vec()), Rc::new(ix))
                 }
             };
             // Open the method's lambda for this argument.
@@ -1624,7 +1625,7 @@ impl<'a> Recheck<'a> {
             &ctx.refine_ambient(&refined_ambient).env,
             motive_term,
         );
-        let con_val = RValue::Con(ctor.name.clone(), arg_vals);
+        let con_val = RValue::Con(ctor.name.clone(), Rc::new(arg_vals));
         let mut concl = motive;
         for ix in scrut_indices {
             let ix = self.subst_levels(ix, &refined_ambient);
@@ -1662,12 +1663,12 @@ impl<'a> Recheck<'a> {
             }
             RValue::Data(n, ps, is) => RValue::Data(
                 n.clone(),
-                ps.iter().map(|x| self.subst_levels(x, map)).collect(),
-                is.iter().map(|x| self.subst_levels(x, map)).collect(),
+                Rc::new(ps.iter().map(|x| self.subst_levels(x, map)).collect()),
+                Rc::new(is.iter().map(|x| self.subst_levels(x, map)).collect()),
             ),
             RValue::Con(c, xs) => RValue::Con(
                 c.clone(),
-                xs.iter().map(|x| self.subst_levels(x, map)).collect(),
+                Rc::new(xs.iter().map(|x| self.subst_levels(x, map)).collect()),
             ),
             other => other.clone(),
         }
@@ -2123,6 +2124,64 @@ mod tests {
                 Err(RecheckError::Rejected(_))
             ),
             "handling a parameterized effect's operation is Rejected, not Declined or silently accepted"
+        );
+    }
+
+    /// Mutation pin (N6 gate ladder): cargo-mutants found that deleting the `(Data, Data)`
+    /// decomposition arm of [`Recheck::unify_index`] survived the suite — the corpus gates that
+    /// exercise indexed-family refinement are `#[ignore]`d, so the arm needs a direct probe.
+    /// Two behaviors only the arm provides (the catch-all below it can answer at most
+    /// `Trivial`/`Stuck` via `conv`): same-head decomposition recurses into the indices and
+    /// solves a constructor-argument placeholder (`Progress`), and different heads are a
+    /// definite `Clash` (unreachable branch), not merely `Stuck`.
+    #[test]
+    fn unify_index_data_arm_decomposes_and_clashes() {
+        let sig = Signature::empty();
+        let rc = Recheck::new(&sig);
+        let ctx = Ctx::empty();
+        let a = || DataName("A".into());
+        let zero = || RValue::Con(ConName("z".into()), std::rc::Rc::new(vec![]));
+        let indices = |v: RValue| std::rc::Rc::new(vec![v]);
+        let no_params = || std::rc::Rc::new(vec![]);
+
+        // Same head, a placeholder (a Var at/above `ctx.lvl`, slot k = 0) as the got-side
+        // index: the arm decomposes and the index sub-unification binds the slot.
+        let got = RValue::Data(
+            a(),
+            no_params(),
+            indices(RValue::Neutral(crate::value::Neutral::Var(0))),
+        );
+        let want = RValue::Data(a(), no_params(), indices(zero()));
+        let mut sol = Solution {
+            args: vec![None],
+            ambient: vec![],
+        };
+        let r = rc
+            .unify_index(&ctx, &got, &want, &mut sol)
+            .expect("unify_index runs");
+        assert!(
+            matches!(r, Unify::Progress),
+            "same-head decomposition must solve the index placeholder (Progress)"
+        );
+        assert!(
+            sol.args[0].is_some(),
+            "the placeholder slot is bound by the decomposition"
+        );
+
+        // Different heads at equal arity: the arm answers Clash (branch unreachable); the
+        // catch-all could only say Stuck.
+        let got = RValue::Data(a(), no_params(), indices(zero()));
+        let want = RValue::Data(DataName("B".into()), no_params(), indices(zero()));
+        let mut sol = Solution {
+            args: vec![],
+            ambient: vec![],
+        };
+        let r = rc
+            .unify_index(&ctx, &got, &want, &mut sol)
+            .expect("unify_index runs");
+        assert!(
+            matches!(r, Unify::Clash),
+            "different data heads are a definite Clash"
         );
     }
 }

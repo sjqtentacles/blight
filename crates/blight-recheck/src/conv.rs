@@ -88,13 +88,13 @@ pub fn conv(sig: &Signature, lvl: usize, dlvl: usize, a: &RValue, b: &RValue) ->
             n1 == n2
                 && p1.len() == p2.len()
                 && i1.len() == i2.len()
-                && p1.iter().zip(p2).all(|(x, y)| conv(sig, lvl, dlvl, x, y))
-                && i1.iter().zip(i2).all(|(x, y)| conv(sig, lvl, dlvl, x, y))
+                && p1.iter().zip(p2.iter()).all(|(x, y)| conv(sig, lvl, dlvl, x, y))
+                && i1.iter().zip(i2.iter()).all(|(x, y)| conv(sig, lvl, dlvl, x, y))
         }
         (RValue::Con(n1, a1), RValue::Con(n2, a2)) => {
             n1 == n2
                 && a1.len() == a2.len()
-                && a1.iter().zip(a2).all(|(x, y)| conv(sig, lvl, dlvl, x, y))
+                && a1.iter().zip(a2.iter()).all(|(x, y)| conv(sig, lvl, dlvl, x, y))
         }
         (RValue::Neutral(n1), RValue::Neutral(n2)) => {
             quote(sig, lvl, dlvl, &RValue::Neutral(n1.clone()))
@@ -197,6 +197,7 @@ mod tests {
     use crate::normalize::{eval, reflect};
     use crate::term::{RGrade, RTerm};
     use crate::value::{Env, RValue};
+    use std::rc::Rc;
     use blight_kernel::{ConName, DataName, Signature};
 
     fn sig() -> Signature {
@@ -238,10 +239,10 @@ mod tests {
     fn delay_family_conv_recurses_and_separates_variants() {
         let s = sig();
         let il = RValue::IntLit;
-        let now = |n| RValue::Now(Box::new(il(n)));
-        let delay = |n| RValue::Delay(Box::new(il(n)));
-        let later = |n| RValue::Later(Box::new(il(n)));
-        let force = |n| RValue::Force(Box::new(il(n)));
+        let now = |n| RValue::Now(Rc::new(il(n)));
+        let delay = |n| RValue::Delay(Rc::new(il(n)));
+        let later = |n| RValue::Later(Rc::new(il(n)));
+        let force = |n| RValue::Force(Rc::new(il(n)));
         // Each arm recurses into its payload …
         assert!(conv(&s, 0, 0, &now(1), &now(1)));
         assert!(!conv(&s, 0, 0, &now(1), &now(2)));
@@ -270,11 +271,11 @@ mod tests {
     #[test]
     fn data_conv_checks_name_params_and_indices() {
         let s = sig();
-        let nat = || RValue::Data(DataName("Nat".into()), vec![], vec![]);
-        let boolean = RValue::Data(DataName("Bool".into()), vec![], vec![]);
+        let nat = || RValue::Data(DataName("Nat".into()), Rc::new(vec![]), Rc::new(vec![]));
+        let boolean = RValue::Data(DataName("Bool".into()), Rc::new(vec![]), Rc::new(vec![]));
         assert!(conv(&s, 0, 0, &nat(), &nat()));
         assert!(!conv(&s, 0, 0, &nat(), &boolean)); // name
-        let vec_of = |ps, is| RValue::Data(DataName("Vec".into()), ps, is);
+        let vec_of = |ps, is| RValue::Data(DataName("Vec".into()), Rc::new(ps), Rc::new(is));
         let a = vec_of(vec![nat()], vec![RValue::IntLit(0)]);
         assert!(conv(
             &s,
@@ -310,8 +311,8 @@ mod tests {
     #[test]
     fn con_conv_checks_name_arity_and_args() {
         let s = sig();
-        let zero = || RValue::Con(ConName("Zero".into()), vec![]);
-        let succ = |v| RValue::Con(ConName("Succ".into()), vec![v]);
+        let zero = || RValue::Con(ConName("Zero".into()), Rc::new(vec![]));
+        let succ = |v| RValue::Con(ConName("Succ".into()), Rc::new(vec![v]));
         assert!(conv(&s, 0, 0, &zero(), &zero()));
         assert!(!conv(&s, 0, 0, &zero(), &succ(zero()))); // name + arity
         assert!(conv(&s, 0, 0, &succ(zero()), &succ(zero())));
@@ -397,7 +398,7 @@ mod tests {
     #[test]
     fn eta_for_pairs() {
         let s = sig();
-        let pair = |a, b| RValue::Pair(Box::new(RValue::IntLit(a)), Box::new(RValue::IntLit(b)));
+        let pair = |a, b| RValue::Pair(Rc::new(RValue::IntLit(a)), Rc::new(RValue::IntLit(b)));
         assert!(conv(&s, 0, 0, &pair(1, 2), &pair(1, 2)));
         assert!(!conv(&s, 0, 0, &pair(1, 2), &pair(1, 3))); // second components differ
         assert!(!conv(&s, 0, 0, &pair(1, 2), &pair(9, 2))); // first components differ
