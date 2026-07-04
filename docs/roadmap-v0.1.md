@@ -680,11 +680,24 @@ continuation capture), proving preservation and the resume-once theorem *operati
 - **Exit:** [metatheory-mechanized.md](metatheory-mechanized.md) checklist rows flip;
   metatheory.md §2 evidence upgraded.
 
-### [ ] P2 — Dependent.lean substitution + preservation
+### [~] P2 — Dependent.lean substitution + preservation
 
 The acknowledged "comparably-sized effort": the substitution lemma + preservation for the
-dependent-Π fragment (requires a conversion relation). Same red protocol.
+dependent-Π fragment. Same red protocol. (Note: dependent-Π preservation does *not* need a
+conversion relation — its β-case type is already `subst0 a B` by `HasType.app`'s own rule; the
+conversion relation is the *Σ* blocker, per `Dependent.lean`'s module doc.)
 
+- **In progress (2026-07-04, 1/2 — `10596c9`):** the named prerequisite is proved and
+  machine-verified — `Expr.subst_subst_comm`, the substitution/substitution commutation lemma
+  (`subst i s (subst j a e) = subst j (subst i s a) (subst (i+1) (shiftAbove j s) e)` for `j ≤ i`),
+  plus its cancellation helper. `lake build` green; `#print axioms` = `[propext, Quot.sound]` only,
+  no `sorryAx`. This is exactly the fact the substitution lemma's `app` case needs (lining up
+  `subst i s (subst0 a B)` with `subst0`'s shape).
+- **Remaining (2/2):** the substitution lemma over `Expr` + `preservation`. With the commutation
+  fact landed, the gap is now precisely characterized in `Dependent.lean`'s module doc: the `var`
+  rule's three subcases under a *type*-substituting conclusion (`i<k` cancels — proved; `i=k` needs
+  the lifted `shiftBy k 0 A'`; `i>k` needs a fresh "senior-entry" lemma), plus porting
+  `Substitution.lean`'s `Usage.Le`/`insertUsage`/`scale` bookkeeping verbatim.
 - **Exit:** closes the stated gap in Dependent.lean's header; checklist updated.
 
 ### [ ] P3 — Dependent Kan increment (scoped)

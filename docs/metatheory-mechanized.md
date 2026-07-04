@@ -108,12 +108,14 @@ See `Progress.lean`'s module doc for the full argument.
   `Dependent.lean`'s module doc for exactly where `Σ`'s `snd`-elimination β-case would need it and
   `Π`'s doesn't), and — the more load-bearing gap — the **general substitution lemma and
   `preservation`** for the dependent fragment itself. `weaken`'s proof already needed a new
-  shift/substitution commutation lemma (a dependent type must shift correctly, not just a term);
-  the substitution lemma needs the next rung of the same ladder (substitution/substitution
-  commutation) threaded through every `HasType` case with the same grade/usage bookkeeping
-  `Substitution.lean` does for the non-dependent fragment — a comparably-sized proof effort in its
-  own right, deliberately not folded into this pass (see `Dependent.lean`'s module doc, "What this
-  file proves, and what it honestly leaves open").
+  shift/substitution commutation lemma (a dependent type must shift correctly, not just a term); the
+  next rung of that ladder — the substitution/substitution commutation fact `subst_subst_comm` — is
+  now **proved** (P2, 1/2; `#print axioms` = `[propext, Quot.sound]`), so the remaining gap is the
+  substitution lemma + `preservation` themselves, threaded through every `HasType` case with the same
+  grade/usage bookkeeping `Substitution.lean` does for the non-dependent fragment (`Dependent.lean`'s
+  module doc now characterizes the `var`-case reasoning that a *type*-substituting conclusion forces).
+  A comparably-sized proof effort in its own right, tracked as P2's second half rather than folded
+  into this pass.
 - **Effect/handler grade safety (the graded-row discharge) is now mechanized in a scoped form**
   (Wave 8 / M10, `Effects.lean`): a single fixed operation, a single-label closed row, no row-
   variable effect polymorphism, and lambda bodies required pure (see that file's module doc for

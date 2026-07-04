@@ -60,21 +60,31 @@
   * `progress`: a closed, well-typed term is a value or can step (needs no substitution lemma, by
     the same canonical-forms argument `Progress.lean` uses).
 
-  **Not attempted here**: the general substitution lemma (`Calculus.lean`'s `subst_lemma`
-  analogue) and, consequently, `preservation`. This is a deliberate, load-bearing scope
-  boundary, not an oversight — the same "state the honest boundary, don't fake it" discipline
-  `docs/design-wave4-gobars.md` uses: `weaken`'s proof already needed a fresh, non-trivial
-  shift/substitution commutation lemma (`shiftBy_subst_lt`/`_ge`) purely to let a dependent
-  *type* shift correctly; the substitution lemma's inductive proof would additionally need the
-  companion **substitution/substitution commutation** fact (substituting at index `j` then `k`,
-  vs. `k` then `j`, commute up to a shift/reindex adjustment — the standard next rung of the same
-  ladder), *and* has to thread that through every `HasType` case (crucially `app`, where the
-  substituted codomain's own further substitution must line up with `Expr.subst0`'s shape) with
-  the same grade/usage bookkeeping `Substitution.lean` already does for the non-dependent
-  fragment. That is a second, comparably-sized proof-engineering effort in its own right, cleanly
-  separable from `weaken`/`progress` above — tracked as the natural next step after M9 rather than
-  folded in here under time pressure (matching the roadmap's own precedent of gating SN/canonicity
-  on M5+M6 landing first, M8's own history in this file's neighborhood).
+  **Landed since (P2, 1/2)**: the companion **substitution/substitution commutation** fact the
+  substitution lemma's inductive proof needs — `Expr.subst_subst_comm` (with its cancellation helper
+  `subst_shiftBy1_cancel`/`subst_shiftAbove_cancel`), below in `namespace Expr`. This was the "next
+  rung of the ladder" past `weaken`'s own `shiftBy_subst_lt`/`_ge`: it says `subst i s (subst j a e)`
+  and `subst j (subst i s a) (subst (i+1) (shiftAbove j s) e)` agree for `j ≤ i`, which is exactly
+  what the substitution lemma's `app` case needs to line up `subst i s (subst0 a B)` (since
+  `HasType.app` concludes at `Expr.subst0 a B`) with `subst0`'s shape. Every case discharges from the
+  already-proven `shiftBy_subst_ge` + `shiftBy_shiftBy_le`; `#print axioms` shows it rests on
+  `[propext, Quot.sound]` only.
+
+  **Still not attempted here (P2, 2/2)**: the general substitution lemma (`Substitution.lean`'s
+  `subst_lemma` analogue over `Expr`) and, consequently, `preservation`. With the commutation fact in
+  hand the remaining gap is precisely characterized (no longer a vague "next rung"): unlike the
+  non-dependent `subst_lemma`, whose conclusion keeps the type `B` fixed, the dependent one must
+  substitute the *type* too (`subst k a B`), which forces the `var` rule's three index subcases to
+  reason about the context entry's type — `i < k` cancels via `subst_shiftAbove_cancel` (proved),
+  `i = k` reads back `ctxGet_insert_eq`'s `shiftBy (k+1) 0 A'` and needs the substituted term at the
+  *lifted* type `shiftBy k 0 A'`, and `i > k` needs a fresh "senior-entry" lemma (a `ctxGet` result
+  at index `i` structurally has every free variable `≥ i+1`, so substituting at any `k ≤ i` under one
+  `shiftAbove 0` is the identity). Those, plus porting `Substitution.lean`'s `Usage.Le`/`insertUsage`/
+  `scale` bookkeeping verbatim (usage vectors don't depend on `Expr`), close it — a bounded but
+  genuinely separate effort, cleanly separable from `weaken`/`progress`/`subst_subst_comm` above and
+  tracked as P2's second half, per the "state the honest boundary, don't fake it" discipline
+  `docs/design-wave4-gobars.md` uses (and the roadmap's own precedent of gating SN/canonicity on
+  M5+M6 landing first).
 -/
 
 import BlightMeta.Weakening
