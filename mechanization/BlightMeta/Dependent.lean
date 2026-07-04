@@ -335,6 +335,99 @@ theorem shiftAbove_subst0 (c : Nat) (a B : Expr) :
   unfold shiftAbove subst0
   exact shiftBy_subst_lt B 1 c 0 a (Nat.zero_le c)
 
+/-- **Substituting at a freshly-inserted binder's own threshold is the identity.** `shiftBy 1 c`
+    moves every variable out of slot `c` (to `< c` or `> c`), so `subst c s` finds no occurrence to
+    replace and the surviving `> c` variables shift back down by one — undoing the insertion exactly.
+    The `c`-below-the-substituted-slot case of the substitution-commutation lemma needs this to see a
+    shifted-then-substituted subterm return unchanged. -/
+theorem subst_shiftBy1_cancel : ∀ (e : Expr) (c : Nat) (s : Expr),
+    subst c s (shiftBy 1 c e) = e := by
+  intro e
+  induction e with
+  | var i =>
+    intro c s
+    by_cases h : i < c
+    · rw [shiftBy_var_lt h, subst_var_lt h]
+    · rw [shiftBy_var_ge (by omega : c ≤ i), subst_var_gt (by omega : i + 1 > c), Nat.add_sub_cancel]
+  | bool => intro c s; rfl
+  | tt => intro c s; rfl
+  | ff => intro c s; rfl
+  | ite cnd t e ihc iht ihe => intro c s; simp only [shiftBy, subst, ihc, iht, ihe]
+  | pi rho dom cod ihd ihc => intro c s; simp only [shiftBy, subst, ihd, ihc]
+  | lam body ih => intro c s; simp only [shiftBy, subst, ih]
+  | app f a ihf iha => intro c s; simp only [shiftBy, subst, ihf, iha]
+
+/-- `shiftAbove`-headed restatement of `subst_shiftBy1_cancel` (`shiftAbove c = shiftBy 1 c`),
+    needed because `rw` matches syntactically. -/
+theorem subst_shiftAbove_cancel (c : Nat) (s e : Expr) : subst c s (shiftAbove c e) = e :=
+  subst_shiftBy1_cancel e c s
+
+/-- **Substitution/substitution commutation** — the "next rung of the ladder" the module doc names
+    as the missing prerequisite for the dependent substitution lemma. Substituting at an outer index
+    `i` after an inner index `j ≤ i` commutes with substituting at `j` after `i`, up to the standard
+    de Bruijn reindexing: the inner substitute `a` gains the outer substitution (`subst i s a`), the
+    outer substitute `s` shifts past the inner binder (`shiftAbove j s`), and the outer index steps
+    up by one (`i + 1`). This is exactly the identity the substitution lemma's `app` case needs to
+    line up `subst i s (subst0 a B)` (the substituted codomain, since `HasType.app` concludes at
+    `Expr.subst0 a B`) with `subst0`'s own shape. Every case discharges from the already-proven
+    `shiftBy_subst_ge` (moving a shift past the inner substitution) and `shiftBy_shiftBy_le` (two
+    shifts commuting) — no new arithmetic beyond `subst_shiftBy1_cancel`'s cancellation. -/
+theorem subst_subst_comm : ∀ (e : Expr) (i j : Nat) (s a : Expr), j ≤ i →
+    subst i s (subst j a e) = subst j (subst i s a) (subst (i + 1) (shiftAbove j s) e) := by
+  intro e
+  induction e with
+  | var p =>
+    intro i j s a hji
+    rcases Nat.lt_trichotomy p j with hpj | hpj | hpj
+    · -- p < j ≤ i < i+1: below both, untouched everywhere.
+      rw [subst_var_lt hpj, subst_var_lt (by omega : p < i), subst_var_lt (by omega : p < i + 1),
+        subst_var_lt hpj]
+    · -- p = j: the inner substitution fires here.
+      subst hpj
+      rw [subst_var_eq, subst_var_lt (by omega : p < i + 1), subst_var_eq]
+    · -- p > j: the inner substitution decrements to `var (p-1)`. `Nat.add_sub_cancel` normalizes the
+      -- de Bruijn `_+1-1` back to a bare index after each `subst_var_gt` so the next `rw` matches
+      -- syntactically (the two are defeq, but `rw` is syntactic).
+      obtain ⟨p', rfl⟩ : ∃ p', p = p' + 1 := ⟨p - 1, by omega⟩
+      rw [subst_var_gt (by omega : p' + 1 > j), Nat.add_sub_cancel]
+      rcases Nat.lt_trichotomy p' i with hp'i | hp'i | hp'i
+      · -- j ≤ p' < i
+        rw [subst_var_lt hp'i, subst_var_lt (by omega : p' + 1 < i + 1),
+          subst_var_gt (by omega : p' + 1 > j), Nat.add_sub_cancel]
+      · -- p' = i: the outer substitution fires here; the outer substitute survives the round-trip.
+        subst hp'i
+        rw [subst_var_eq, subst_var_eq, subst_shiftAbove_cancel]
+      · -- p' > i
+        obtain ⟨p'', rfl⟩ : ∃ p'', p' = p'' + 1 := ⟨p' - 1, by omega⟩
+        rw [subst_var_gt (by omega : p'' + 1 > i), Nat.add_sub_cancel,
+          subst_var_gt (by omega : p'' + 1 + 1 > i + 1), Nat.add_sub_cancel,
+          subst_var_gt (by omega : p'' + 1 > j), Nat.add_sub_cancel]
+  | bool => intro i j s a _; rfl
+  | tt => intro i j s a _; rfl
+  | ff => intro i j s a _; rfl
+  | ite cnd t e ihc iht ihe =>
+    intro i j s a hji
+    simp only [subst, ihc i j s a hji, iht i j s a hji, ihe i j s a hji]
+  | pi rho dom cod ihdom ihcod =>
+    intro i j s a hji
+    have hcod := ihcod (i + 1) (j + 1) (shiftAbove 0 s) (shiftAbove 0 a) (by omega)
+    have hA : subst (i + 1) (shiftAbove 0 s) (shiftAbove 0 a) = shiftAbove 0 (subst i s a) :=
+      (shiftBy_subst_ge a 1 0 i s (Nat.zero_le i)).symm
+    have hS : shiftAbove (j + 1) (shiftAbove 0 s) = shiftAbove 0 (shiftAbove j s) :=
+      (shiftBy_shiftBy_le s (Nat.zero_le j)).symm
+    simp only [subst, ihdom i j s a hji, hcod, hA, hS]
+  | lam body ihbody =>
+    intro i j s a hji
+    have hbody := ihbody (i + 1) (j + 1) (shiftAbove 0 s) (shiftAbove 0 a) (by omega)
+    have hA : subst (i + 1) (shiftAbove 0 s) (shiftAbove 0 a) = shiftAbove 0 (subst i s a) :=
+      (shiftBy_subst_ge a 1 0 i s (Nat.zero_le i)).symm
+    have hS : shiftAbove (j + 1) (shiftAbove 0 s) = shiftAbove 0 (shiftAbove j s) :=
+      (shiftBy_shiftBy_le s (Nat.zero_le j)).symm
+    simp only [subst, hbody, hA, hS]
+  | app f a' ihf iha =>
+    intro i j s a hji
+    simp only [subst, ihf i j s a hji, iha i j s a hji]
+
 end Expr
 
 /-- A dependent context lookup: unlike `Calculus.lean`'s plain `Γ[i]?` (safe there because `Ty`
