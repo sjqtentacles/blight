@@ -1043,6 +1043,24 @@ impl Checker {
         }
         let mut dims = Vec::new();
         collect_cofib_dims(cofib, &mut dims);
+        // This enumerates `2^k` boundary faces over the `k` distinct dimensions the cofibration
+        // mentions. `1u32 << k` overflows at `k ≥ 32` — a debug panic, and in release a *masked*
+        // shift (`1u32 << 32 == 1`) that silently enumerates a tiny subset of faces, defeating the
+        // adequacy guard whose comment above warns it prevents a genuine unsoundness (soundness
+        // audit 2026-07-03, K7). A real cofibration in this fragment mentions a handful of
+        // dimensions; decline to certify (soundly — refusing is never unsound, unlike
+        // under-checking) any that mentions more than a generous bound, which also keeps the
+        // enumeration finite. `MAX ≤ 31` keeps `1u32 << k` in range; 16 is already far beyond any
+        // real cofibration (`2^16` faces) while keeping the boundary cheaply testable.
+        const MAX_KAN_ADEQUACY_DIMS: usize = 16;
+        if dims.len() > MAX_KAN_ADEQUACY_DIMS {
+            return Err(TypeError::BadCubical(format!(
+                "cofibration mentions {} distinct dimensions; Kan-adequacy face enumeration is \
+                 limited to {MAX_KAN_ADEQUACY_DIMS} (2^{MAX_KAN_ADEQUACY_DIMS} faces) — refusing \
+                 to certify rather than under-check",
+                dims.len()
+            )));
+        }
         let base_env = self.env_for(ctx);
         let face_count = 1u32 << dims.len();
         for mask in 0..face_count {
@@ -5619,6 +5637,60 @@ mod tests {
         assert!(
             check_top(term, Term::IntTy).is_err(),
             "a Glue whose equiv is not an equivalence must be rejected at formation"
+        );
+    }
+
+    /// Soundness audit K7: `check_kan_adequacy` enumerates `2^k` boundary faces via `1u32 << k`,
+    /// which overflows at `k ≥ 32` — a debug panic, and in release a masked shift that silently
+    /// enumerates a tiny subset of faces, *under-checking* the adequacy guard. A cofibration
+    /// mentioning an unreasonable number of distinct dimensions must be rejected, not overflow.
+    /// Here a 33-way disjunction over 33 distinct dimensions.
+    #[test]
+    fn kan_adequacy_rejects_an_overflowing_dimension_count() {
+        use crate::term::{Interval, Level};
+        let mut ctx = Context::empty();
+        for _ in 0..33 {
+            ctx = ctx.extend_dim();
+        }
+        let mut cofib = Cofib::Eq0(Interval::Dim(0));
+        for i in 1..33 {
+            cofib = Cofib::Or(Box::new(cofib), Box::new(Cofib::Eq0(Interval::Dim(i))));
+        }
+        let checker = Checker::new(std::rc::Rc::new(Signature::empty()));
+        let result = checker.check_kan_adequacy(&ctx, &cofib, |_env| {
+            (Value::Univ(Level::Zero), Value::Univ(Level::Zero))
+        });
+        assert!(
+            result.is_err(),
+            "a cofibration over 33 distinct dimensions must be rejected, not overflow the \
+             face-count shift"
+        );
+    }
+
+    /// K7 boundary: a cofibration mentioning *exactly* the maximum number of distinct dimensions
+    /// is still checked (accepted), not rejected — pinning the `>` bound (a `>=` would reject the
+    /// permitted maximum). 16 distinct dimensions → 2^16 faces, all trivially adequate here.
+    #[test]
+    fn kan_adequacy_accepts_the_maximum_dimension_count() {
+        use crate::term::{Interval, Level};
+        const MAX: usize = 16; // must equal `MAX_KAN_ADEQUACY_DIMS`
+        let mut ctx = Context::empty();
+        for _ in 0..MAX {
+            ctx = ctx.extend_dim();
+        }
+        let mut cofib = Cofib::Eq0(Interval::Dim(0));
+        for i in 1..MAX {
+            cofib = Cofib::Or(Box::new(cofib), Box::new(Cofib::Eq0(Interval::Dim(i))));
+        }
+        let checker = Checker::new(std::rc::Rc::new(Signature::empty()));
+        // `eval_at_face` returns identical floor/base, so every satisfied face is adequate.
+        let result = checker.check_kan_adequacy(&ctx, &cofib, |_env| {
+            (Value::Univ(Level::Zero), Value::Univ(Level::Zero))
+        });
+        assert!(
+            result.is_ok(),
+            "a cofibration mentioning exactly the maximum dimension count must still be checked, \
+             not rejected"
         );
     }
 
