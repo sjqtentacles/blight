@@ -1082,6 +1082,55 @@ fn recheck_agrees_on_state_passing_handler() {
     assert_agreement(&env, &proofs, "state-passing-handler");
 }
 
+/// False-alarm fix: an effectful **`Path` computation demo**. `run3` runs a handler that resolves
+/// `tick` to `3`, so `run3 ≡ 3` definitionally — the KERNEL verifies this by running the whole
+/// handler inside conversion and accepts the constant `Path` proof `run3-is-3`. The independent
+/// re-checker deliberately does NOT run effect semantics (`normalize.rs`: `handle`/`perform`
+/// evaluate to *stuck neutrals*), so it cannot decide the boundary `3 ≡ run3`. The only sound
+/// verdict is to **`Declined`** (abstain): it must NEVER `Rejected` a program the kernel accepted
+/// (that would be a false soundness alarm), and must never certify a computation it did not run.
+/// This locks in the `is_stuck_on_effect` boundary-abstention path — the fix the effect-parser
+/// flagship exposed. Before it, this global `Rejected`.
+#[test]
+fn recheck_declines_not_rejects_effectful_path_boundary() {
+    let src = "\
+(load \"std/nat.bl\")
+(defdata MyUnit () (myu))
+(effect Tick (tick MyUnit Nat))
+(define run3 Nat
+  (handle (perform tick myu)
+    (return x x)
+    (tick u k (k (Succ (Succ (Succ Zero)))))))
+(define run3-is-3 (Path Nat run3 (Succ (Succ (Succ Zero)))) (plam (i) (Succ (Succ (Succ Zero)))))
+";
+    let (env, _proofs) = load(src);
+    let sig = env.signature();
+    let mut saw = false;
+    for (name, term, ty) in env.typed_globals() {
+        if name == "run3-is-3" {
+            saw = true;
+            let j = Judgement::HasType {
+                term: term.clone(),
+                ty: ty.clone(),
+            };
+            match recheck_judgement(sig, &j) {
+                Err(RecheckError::Declined(_)) => {}
+                Err(RecheckError::Rejected(m)) => panic!(
+                    "re-checker must DECLINE (abstain) on an effectful `Path` boundary it cannot run, \
+                     NOT reject a kernel-accepted program (false soundness alarm); got Rejected: {m}"
+                ),
+                Ok(()) => panic!(
+                    "re-checker must not certify an effectful `Path` boundary it never ran; got Ok"
+                ),
+            }
+        }
+    }
+    assert!(
+        saw,
+        "expected the effectful `Path` demo `run3-is-3` to elaborate and be kernel-accepted"
+    );
+}
+
 /// RED (soundness alarm): a dependent **indexed-motive** eliminator whose result type DEPENDS on
 /// the index. `safe-tail : Π(A:U)(n:Nat)(v:Vec A (Succ n)). Vec A n` drops the head; its motive's
 /// result type is `Vec A n` (it mentions the index), unlike the length-erasing "always Nat" motive

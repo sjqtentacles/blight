@@ -1,0 +1,87 @@
+; effect_parser.bl — parsing as ALGEBRAIC EFFECTS (a Blight flagship).
+;
+; A `Parse` effect exposes one operation, `next`, that yields the next input token (a `Nat`), or
+; `nothing` at end of input. A parser is just a computation that `perform`s `next` — it never
+; touches the input list. The ONLY place that knows about the input is a single *state-passing*
+; HANDLER, which threads the remaining `List Nat` through the continuation `k`. That separation —
+; *what* a parser consumes vs. *how* the input is supplied — is exactly what algebraic effects buy
+; you, and it needs a handler whose result type is itself a function `List Nat -> …` (a
+; parameterized/state-passing handler). Blight elaborates and re-checks these now.
+;
+; The parser code — the effect, the two parsers, and both runners — is checked by the trusted kernel
+; AND independently re-checked: `--recheck` agrees, every global `Ok`. That is the two-checker
+; guarantee, now extended to state-passing handlers. The two computation *demos* at the very bottom
+; are a different story worth understanding: they are `Path`s the KERNEL verifies (it runs the whole
+; handler inside conversion to confirm the parser really computes 108 and 6). The independent
+; re-checker deliberately does NOT run effect semantics, so on exactly those two it honestly
+; *declines* (abstains) rather than certifying or — the bug this flagship fixed — falsely rejecting.
+; `Ok` for the code, `Declined` for the effectful equalities: that is the two checkers telling the
+; truth about what each can and cannot vouch for.
+
+(load "std/nat.bl")
+(load "std/maybe.bl")
+(load "std/list.bl")
+(load "std/pair.bl")
+
+(defdata PU () (pu))
+
+; The one effect: `next : PU -> Maybe Nat` — read the next token, or `nothing` at EOF.
+(effect Parse (next PU (Maybe Nat)))
+
+; ── Parsers ──────────────────────────────────────────────────────────────────────────────────
+; A parser is a `! Parse A` computation. `sum-toks` reads *every* remaining token and sums them.
+; `fuel` bounds the recursion (structural totality — a parser can consume at most `fuel` tokens);
+; callers pass `(length … input)`, which is always enough.
+(define-rec sum-toks (Pi ((fuel Nat)) (! Parse Nat))
+  (lam (fuel)
+    (match fuel
+      [(Zero) Zero]
+      [(Succ f)
+        (match (perform next pu)
+          [(nothing) Zero]
+          [(just t) (plus t (sum-toks f))])])))
+
+; `count-toks` reads every token and counts them (ignoring their values) — a second parser sharing
+; the same effect and handler, to show the effect layer is reusable.
+(define-rec count-toks (Pi ((fuel Nat)) (! Parse Nat))
+  (lam (fuel)
+    (match fuel
+      [(Zero) Zero]
+      [(Succ f)
+        (match (perform next pu)
+          [(nothing) Zero]
+          [(just t) (Succ (count-toks f))])])))
+
+; ── The runner: the sole handler ─────────────────────────────────────────────────────────────
+; `run p input` feeds `input` to a parser body `p` and returns its result paired with the leftover
+; input. The op-clause is where the state lives: given the remaining input, resume the continuation
+; `k` with the head token (`just t`, threading the tail) or `nothing` at EOF (threading `nil`). The
+; handle expression has type `List Nat -> Pair Nat (List Nat)`; applying it to `input` runs it.
+(define run-sum (Pi ((input (List Nat))) (Pair Nat (List Nat)))
+  (lam (input)
+    ((handle (sum-toks (length input))
+       (return x (the (Pi ((rest (List Nat))) (Pair Nat (List Nat))) (lam (rest) (mk-pair x rest))))
+       (next u k (the (Pi ((rest (List Nat))) (Pair Nat (List Nat))) (lam (rest)
+         (match rest [(nil) ((k nothing) nil)] [(cons t more) ((k (just t)) more)])))))
+     input)))
+
+(define run-count (Pi ((input (List Nat))) (Pair Nat (List Nat)))
+  (lam (input)
+    ((handle (count-toks (length input))
+       (return x (the (Pi ((rest (List Nat))) (Pair Nat (List Nat))) (lam (rest) (mk-pair x rest))))
+       (next u k (the (Pi ((rest (List Nat))) (Pair Nat (List Nat))) (lam (rest)
+         (match rest [(nil) ((k nothing) nil)] [(cons t more) ((k (just t)) more)])))))
+     input)))
+
+; ── Kernel-checked computation demo: on input [4,8,15,16,23,42], sum = 108 and count = 6, with no
+; input left. These are `refl`-style constant `plam` paths — the kernel accepts each ONLY if the
+; effect-driven parser computes the stated result *definitionally* (it runs the whole handler inside
+; conversion). The re-checker `Declined`s these two (it does not run effects); see the header.
+(define sample (List Nat)
+  (cons 4 (cons 8 (cons 15 (cons 16 (cons 23 (cons 42 nil)))))))
+
+(define sum-is-108 (Path (Pair Nat (List Nat)) (run-sum sample) (mk-pair 108 nil))
+  (plam (i) (mk-pair 108 nil)))
+
+(define count-is-6 (Path (Pair Nat (List Nat)) (run-count sample) (mk-pair 6 nil))
+  (plam (i) (mk-pair 6 nil)))

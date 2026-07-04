@@ -5,7 +5,7 @@
 use crate::conv::{conv, fresh_var, kan_line_grade_skeleton_eq, subtype};
 use crate::normalize::{apply, eval, quote};
 use crate::term::{RGrade, RInterval, RRow, RTerm};
-use crate::value::{Env, RValue};
+use crate::value::{Env, Neutral, RValue};
 use crate::RecheckError;
 use blight_kernel::signature::{Arg, Constructor, DataDecl, Signature};
 use blight_kernel::DataName;
@@ -29,6 +29,31 @@ fn partial_label() -> blight_kernel::EffName {
 /// re-checked" rather than a soundness alarm. Declining is always sound: it abstains, never certifies.
 fn decline(msg: impl Into<String>) -> RecheckError {
     RecheckError::Declined(msg.into())
+}
+
+/// Does this value's neutral spine bottom out at an *un-run effect operation* — a stuck `perform`
+/// (`Op`) or `handle` (`Handle`)? The re-checker deliberately does not run effect semantics
+/// (`normalize.rs`), so such a value is stuck for good: no reduction available here will ever expose
+/// its canonical form. A conversion *against* it is therefore undecidable in the re-checker, and the
+/// only sound verdict is to **decline** (abstain) — never to `reject` a program the kernel accepted
+/// (a false soundness alarm), and of course never to certify it. Declining here can only ever
+/// downgrade a would-be rejection to abstention, so it cannot introduce a false `Ok`. Follows the
+/// neutral spine (application, projection, path-application, eliminator, force); a `Var` or `IntPrim`
+/// head is ordinary neutrality, not an effect, so it does not trigger abstention.
+fn is_stuck_on_effect(v: &RValue) -> bool {
+    fn spine(n: &Neutral) -> bool {
+        match n {
+            Neutral::Op { .. } | Neutral::Handle { .. } => true,
+            Neutral::App(h, _)
+            | Neutral::Fst(h)
+            | Neutral::Snd(h)
+            | Neutral::PApp(h, _)
+            | Neutral::Force(h) => spine(h),
+            Neutral::Elim { scrutinee, .. } => spine(scrutinee),
+            Neutral::Var(_) | Neutral::IntPrim { .. } => false,
+        }
+    }
+    matches!(v, RValue::Neutral(n) if spine(n))
 }
 
 /// A usage vector: demand on each in-scope variable (index 0 = innermost).
@@ -713,9 +738,21 @@ impl<'a> Recheck<'a> {
                     eval(self.sig, &e, body)
                 };
                 if !conv(self.sig, ctx.lvl, ctx.dlvl, &b0, lhs) {
+                    // If either side is stuck on an un-run effect handler, the re-checker cannot
+                    // decide the boundary (it does not run effect semantics) — abstain, never reject.
+                    if is_stuck_on_effect(&b0) || is_stuck_on_effect(lhs) {
+                        return Err(decline(
+                            "path lhs boundary depends on an un-run effect handler",
+                        ));
+                    }
                     return Err(reject("path lhs boundary mismatch"));
                 }
                 if !conv(self.sig, ctx.lvl, ctx.dlvl, &b1, rhs) {
+                    if is_stuck_on_effect(&b1) || is_stuck_on_effect(rhs) {
+                        return Err(decline(
+                            "path rhs boundary depends on an un-run effect handler",
+                        ));
+                    }
                     return Err(reject("path rhs boundary mismatch"));
                 }
                 Ok((body_row, body_usage))
