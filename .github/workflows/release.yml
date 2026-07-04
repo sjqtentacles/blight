@@ -1,0 +1,85 @@
+name: Release
+
+# R3 (v0.1 roadmap): build the `blight` binary for the supported platforms and, on a version tag,
+# attach the archives to the GitHub release.
+#
+# Red-first discipline: the *dry-run* is the primary deliverable. Every push to main, every PR, and
+# `workflow_dispatch` builds the exact release artifacts and uploads them as workflow artifacts
+# **without** publishing anything — so a broken release build is caught long before a `v*` tag is
+# ever cut. The publish step (attach to the GitHub release) runs *only* on a tag push and is a thin
+# `if:`-gated addition on top of the same build.
+on:
+  push:
+    tags: ['v*']
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-arm64
+            os: macos-14
+            target: aarch64-apple-darwin
+          - name: macos-x86_64
+            os: macos-13
+            target: x86_64-apple-darwin
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      # The released binary is check-only (kernel + re-checker + REPL): no `llvm` feature, so it is
+      # a portable, toolchain-free download. Native/WASM compilation (`blight build`) needs an
+      # LLVM 18 toolchain, so that path stays from-source (see the README "Build" section). Each
+      # matrix runner's arch matches its target, so the smoke test below runs the binary natively.
+      - name: Build blight (check-only, release)
+        run: cargo build -p blight-repl --bin blight --release --target ${{ matrix.target }}
+
+      - name: Smoke-test the binary
+        shell: bash
+        run: |
+          set -e
+          bin="target/${{ matrix.target }}/release/blight"
+          test -x "$bin"
+          out="$("$bin" --version)"
+          echo "$out"
+          test "$out" = "blight 0.1.0"
+
+      - name: Package
+        shell: bash
+        run: |
+          set -e
+          staging="blight-${{ matrix.name }}"
+          mkdir -p "$staging"
+          cp "target/${{ matrix.target }}/release/blight" "$staging/"
+          cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE "$staging/"
+          tar czf "$staging.tar.gz" "$staging"
+
+      # Always upload as a workflow artifact — this is the dry-run deliverable, available on every
+      # push/PR without publishing anything.
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: blight-${{ matrix.name }}
+          path: blight-${{ matrix.name }}.tar.gz
+
+      # Publish step: attach the same archive to the GitHub release, but only for a tag push.
+      - name: Attach to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: blight-${{ matrix.name }}.tar.gz

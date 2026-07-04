@@ -2,12 +2,22 @@
 
 All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project is pre-1.0; the version in
-`Cargo.toml` is `0.0.0` and the milestones below track the bootstrap roadmap (spec §9).
+`Cargo.toml` is `0.1.0` and the milestones below track the bootstrap roadmap (spec §9).
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-07-04
+
+The first tagged release: the v0.1 roadmap arcs (E, S, N, R) landed on top of the M0–M6 kernel,
+plus a full soundness-hardening pass over the trusted checkers.
+
 ### Added
 
+- **v0.1 roadmap arc E, milestone E8 (editor support):** the LSP server now formats documents
+  (via the shared `format_source`, honoring the None/empty/single-edit contract) and offers
+  completion — the module's definitions index plus a curated keyword set, and the embedded `std/`
+  module paths inside a `(load "…"` prefix, detected lexically. The VS Code extension advertises
+  both capabilities (bumped 0.2.0 → 0.3.0). Zero kernel changes.
 - **v0.1 roadmap arc R, milestone R2 (browser playground):** a static page where the whole trust
   story runs client-side — paste Blight source, get the kernel's verdict, `main`'s type, and the
   independent re-checker's verified/declined/rejected tally, with caret diagnostics on errors.
@@ -50,6 +60,16 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **Soundness-hardening pass (trusted checkers):** a multi-lens bughunt with adversarial
+  verification found and fixed **7 soundness holes in the kernel** and **5 parity gaps in the
+  independent re-checker**, each reproduced end-to-end, then closed red-first with the full gate
+  protocol (workspace suite, byte-identical verdict golden, cargo-mutants). Kernel: infer-mode
+  constructor index/env threading (`Fin 2` could be laundered as `Fin 1`), `Glue` formation now
+  checks its `equiv` is a genuine CCHM equivalence, strict-positivity wired into `defdata`, `transp`
+  over a non-constant Π line rejected instead of panicking, `Handle`/`Kan`-adequacy overflow guards.
+  Re-checker: injective interval quoting, `Data` arity/type checks, `Ann`-neutral reflection (which
+  also un-pinned a long-standing false-`Rejected` verdict), and `transp` fill parity. See
+  [docs/soundness-audit-2026-07-03.md](docs/soundness-audit-2026-07-03.md) for the per-bug detail.
 - **Roadmap arc N, milestone N5 (the eliminator cliff):** both evaluators — the trusted kernel's
   and the independent re-checker's, each via its own implementation — now skip computing an
   induction hypothesis when the receiving match method provably discards its IH binder (a
@@ -68,6 +88,14 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **v0.1 roadmap arc N, milestone N6 (Value-tree sharing):** the kernel and re-checker value
+  layers now share sub-values via `Rc` instead of deep-cloning them, cutting the re-evaluation
+  churn that dominated the heavier judgements (the `json`/`regex` re-checks drop from ~17 s → ~9 s
+  and ~25 s → ~5 s; the whole verdict corpus ~49 s → ~20 s). Landed under a pre-registered
+  protocol: verdict golden byte-identical, the `BL_NO_*` fast-path binaries bit-identical,
+  criterion within ±5 %, cargo-mutants over the new sharing helpers all-killed. The scale-pair
+  ratio kill-criterion fired (15.3× vs the <12× target) and the keep/kill call was escalated to
+  and made by the user, not assumed.
 - **v0.1 roadmap arc S, milestone S3 (kernel `Term` representation: `Box` → `Rc`):** the kernel
   term grammar's 42 recursive fields now hold `Rc<Term>`, so cloning a term (notably `eval`'s
   closure construction) is a shallow per-node refcount bump instead of a deep subtree copy.

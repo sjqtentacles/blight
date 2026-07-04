@@ -121,6 +121,10 @@ fn program_with_manifest<'a>(env: &'a mut ElabEnv, base: &'a Path) -> Program<'a
 
 fn main() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    if args.len() >= 2 && (args[1] == "--version" || args[1] == "-V") {
+        println!("blight {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     if args.len() >= 2 && args[1] == "build" {
         match run_build(&args[2..]) {
             Ok(out) => {

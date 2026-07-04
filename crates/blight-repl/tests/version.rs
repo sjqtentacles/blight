@@ -16,7 +16,6 @@ fn blight() -> Command {
 }
 
 #[test]
-#[ignore = "R3 red: `--version` flag + 0.1.0 bump not yet landed; un-ignored in R3 green"]
 fn version_flag_prints_package_version() {
     let expected = format!("blight {}", env!("CARGO_PKG_VERSION"));
     for flag in ["--version", "-V"] {
@@ -39,7 +38,6 @@ fn version_flag_prints_package_version() {
 }
 
 #[test]
-#[ignore = "R3 red: workspace still at 0.0.0; un-ignored in R3 green"]
 fn release_version_is_0_1_0() {
     // R3 release pin — this is the v0.1.0 release. Bump this line with the CHANGELOG on the next
     // release; it exists so the version can never silently drift away from the published tag.

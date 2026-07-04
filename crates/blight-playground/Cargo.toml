@@ -1,6 +1,6 @@
 [package]
 name = "blight-playground"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "R2: the browser playground's wasm checker — a thin C-ABI export over the wasm-clean checking stack (R1). No wasm-bindgen, no JS toolchain: hand-rolled glue instantiates the cdylib directly."

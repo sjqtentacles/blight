@@ -156,6 +156,23 @@ The standard library and the self-model live as `.bl` sources in
 [`crates/blight-prelude`](crates/blight-prelude) — tower code (the untrusted, explicitly-checked
 role described above), not a compiled crate.
 
+## Install
+
+Blight is pre-1.0 (current version `0.1.0`). The always-available path is a from-source build with
+a stock Rust toolchain (edition 2021, `rust-version = 1.96`):
+
+```bash
+cargo build --release
+./target/release/blight --version   # blight 0.1.0
+```
+
+Tagged `v0.1.x` releases also publish a prebuilt `blight` binary for macOS (arm64, x86_64) and
+Linux (x86_64) as release artifacts, built by
+[`.github/workflows/release.yml`](.github/workflows/release.yml): download the archive for your
+platform, put `blight` on your `PATH`, and confirm with `blight --version`. Those prebuilt binaries
+are check-only (kernel + re-checker + REPL); native/WASM compilation via `blight build` needs the
+`llvm` feature and an LLVM 18 toolchain, so build from source for that — see [Build](#build) below.
+
 ## Build
 
 The kernel, elaborator, re-checker, and REPL build with a stock Rust toolchain (edition 2021,

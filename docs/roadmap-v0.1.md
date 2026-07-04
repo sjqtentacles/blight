@@ -752,7 +752,7 @@ asset. Deployment is a deliberate act: `pages.yml` is workflow_dispatch-only unt
 wants every merge live. Deferred per spec: running compiled programs (wasm_rt has no Console/GC
 in v0.1).
 
-### [ ] R3 — Release engineering
+### [x] R3 — Release engineering
 
 `release.yml`: tag-triggered matrix build (macOS arm64/x86_64, Linux x86_64) of `blight-repl`
 (+llvm where the toolchain is available; a check-only binary otherwise), artifacts attached to
@@ -760,6 +760,21 @@ the GitHub release. Version 0.0.0 → 0.1.0; CHANGELOG "0.1.0" section; README i
 `blight --version`.
 
 - **Red:** a release.yml dry-run job on push (build artifacts, no publish) lands first.
+
+**As built (2026-07-04).** Red-first: `crates/blight-repl/tests/version.rs` pins `blight
+--version`/`-V` → `blight 0.1.0` and the workspace version, both red before the change (flag fell
+through to the REPL; version was `0.0.0`). Green: a `--version`/`-V` branch in `main.rs`
+(`println!("blight {}", env!("CARGO_PKG_VERSION"))`); workspace version + `blight-playground` bumped
+`0.0.0` → `0.1.0`; CHANGELOG cut a `[0.1.0] — 2026-07-04` section (folding the arc work + adding
+E8/N6/the soundness pass); README grew an `## Install` section (from-source + release-artifact paths,
+`blight --version` verify). `release.yml` builds the check-only `blight` across the three-platform
+matrix, smoke-tests `--version`, and always uploads a workflow artifact (the **dry-run** deliverable
+— runs on every push/PR without publishing); the GitHub-release attach is a tag-gated `if:` step on
+top of the same build. Gates: clippy clean, fmt-clean for the new files, workspace suite 885/885.
+**Known, out-of-scope for R3:** the CI `fmt --check` gate is red on ~1750 lines of *pre-existing*
+repo-wide drift (the deferred `style_edition=2021` reformat, `e73c904`) across files R3 never
+touched — resolving it needs the worktree-branch merge coordination and is an R4-tag prerequisite,
+not an R3 change.
 
 ### [ ] R4 — v0.1 content freeze + docs truth pass
 
