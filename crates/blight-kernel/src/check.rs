@@ -414,8 +414,22 @@ impl Checker {
                 let ctx_ret = ctx.extend(body_ty_term, sigma);
                 let (c_ty, ret_row, ret_usage) = self.infer_g(&ctx_ret, return_clause, sigma)?;
                 let (_demand_ret_x, ret_usage) = ret_usage.pop();
-                // `C` lives at depth `ctx.len()` (it must not mention the bound `x`); quote it there for
-                // re-use under the operation clauses' binders.
+                // `C` must live in the *ambient* context — it may not mention the bound result `x`
+                // (the handler's return type is fixed independently of which value is returned).
+                // Quote at the extended depth first (`x` = de Bruijn 0 there; never underflows), and
+                // reject a return type that actually uses `x` with a clean error instead of letting
+                // the shallow `quote(ctx.len(), …)` below underflow on the escaped level (soundness
+                // audit K6).
+                let c_term_ret = quote(ctx_ret.len(), &c_ty);
+                if crate::normalize::uses_binder(&c_term_ret, 0) {
+                    return Err(TypeError::EffectError(
+                        "handle return clause's type mentions the bound result value; a handler's \
+                         return type must be typeable in the ambient context, independent of the \
+                         value returned"
+                            .to_string(),
+                    ));
+                }
+                // `x` is provably unused, so quoting `C` at the ambient depth is safe.
                 let c_term = quote(ctx.len(), &c_ty);
 
                 // 3. Operation clauses.
@@ -4085,6 +4099,32 @@ mod tests {
         assert!(
             Signature::empty().check_positivity(&decl).is_ok(),
             "an ordinary constructor (non-recursive fields that don't mention D) is accepted"
+        );
+    }
+
+    /// Soundness audit K6: a `handle` whose *return clause's type* escapes the bound result value
+    /// `x` must be a clean `TypeError`, not a quote underflow panic. Here the body has type
+    /// `Univ 0` (so `x : Univ 0` is a type in the return clause) and the return clause
+    /// `the (Π(_:x). x) (λy. y)` has type `Π(_:x). x`, which mentions `x`.
+    #[test]
+    fn infer_handle_return_type_escaping_x_is_rejected_not_panic() {
+        let ret = Term::Ann(
+            Rc::new(Term::Lam(Rc::new(Term::Var(0)))),
+            Rc::new(Term::Pi(
+                Grade::Omega,
+                Rc::new(Term::Var(0)),
+                Rc::new(Term::Var(1)),
+            )),
+        );
+        let handle = Term::Handle {
+            body: Rc::new(Term::IntTy),
+            return_clause: Rc::new(ret),
+            op_clauses: vec![],
+        };
+        let checker = Checker::new(std::rc::Rc::new(Signature::empty()));
+        assert!(
+            checker.infer(&Context::empty(), &handle).is_err(),
+            "a handle whose return-clause type escapes the bound result must be rejected cleanly"
         );
     }
 

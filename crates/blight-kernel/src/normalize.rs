@@ -804,7 +804,7 @@ fn resolve_interval(env: &Env, r: &Interval) -> Interval {
 /// asymmetry: `shift` scopes `System` branches out entirely, so this check treats any `System`
 /// as *using* the binder — over-approximating "used" only ever costs an unnecessary IH
 /// computation (the pre-N5 behavior); under-approximating would be unsound.
-fn uses_binder(t: &Term, depth: usize) -> bool {
+pub(crate) fn uses_binder(t: &Term, depth: usize) -> bool {
     match t {
         Term::Var(i) => *i == depth,
         Term::Univ(_)
