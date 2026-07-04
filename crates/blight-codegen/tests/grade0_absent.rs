@@ -16,6 +16,7 @@
 use blight_kernel::semiring::Grade;
 use blight_kernel::signature::{Arg, Constructor, DataDecl};
 use blight_kernel::term::{Level, Term};
+use std::rc::Rc;
 use blight_kernel::{ConName, DataName, Signature};
 
 fn nat_sig() -> Signature {
@@ -73,19 +74,19 @@ fn main_plain() -> (Term, Term) {
 fn main_with_phantom() -> (Term, Term) {
     // outer : (idx :^0 Nat) -> Nat   =   λ idx. (λ ignore. Succ Zero) idx
     let inner = Term::App(
-        Box::new(Term::Lam(Box::new(succ_zero()))), // λ ignore. Succ Zero  (ignores its arg)
-        Box::new(Term::Var(0)),                     // applied to idx (the grade-0 binder)
+        Rc::new(Term::Lam(Rc::new(succ_zero()))), // λ ignore. Succ Zero  (ignores its arg)
+        Rc::new(Term::Var(0)),                     // applied to idx (the grade-0 binder)
     );
     let term = Term::App(
-        Box::new(Term::Lam(Box::new(inner))),
+        Rc::new(Term::Lam(Rc::new(inner))),
         // The phantom index value: a distinctive constructor that, if not erased, would emit a
         // `bl_con` for its tag.
-        Box::new(Term::Con(ConName("PhantomIdx".into()), vec![])),
+        Rc::new(Term::Con(ConName("PhantomIdx".into()), vec![])),
     );
     let ty = Term::Pi(
         Grade::Zero,
-        Box::new(Term::Data(DataName("Nat".into()), vec![], vec![])),
-        Box::new(Term::Data(DataName("Nat".into()), vec![], vec![])),
+        Rc::new(Term::Data(DataName("Nat".into()), vec![], vec![])),
+        Rc::new(Term::Data(DataName("Nat".into()), vec![], vec![])),
     );
     let _ = u0();
     (term, ty)
