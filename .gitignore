@@ -19,3 +19,6 @@ Cargo.lock
 # Scratch file the S1 self-host demo (examples/selfhost_check.bl) writes when run from the repo root
 /selfhost_scratch.bl
 playground/dist/
+
+# LLVM source-based coverage dumps (regenerated per run)
+*.profraw
