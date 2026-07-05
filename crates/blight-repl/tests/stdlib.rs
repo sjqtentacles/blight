@@ -160,6 +160,39 @@ fn std_either_loads_in_isolation() {
 }
 
 #[test]
+fn std_result_loads_in_isolation() {
+    // `Result a e` — Either specialized to value-or-error, with the railway combinators (D3).
+    with_module("std/result.bl", |env| {
+        assert!(
+            env.data_constructors("Result").is_some(),
+            "Result is declared"
+        );
+        for f in [
+            "result",
+            "result-map",
+            "result-map-err",
+            "result-bind",
+            "result-unwrap-or",
+        ] {
+            assert!(env.global_term(f).is_some(), "std/result defines `{f}`");
+        }
+        // Re-check the eliminator through the *independent* re-checker (agree or honestly
+        // decline, never reject) — same discipline as std/either's pin.
+        let ty = env.global_type("result").expect("result type").clone();
+        let term = env.global_term("result").expect("result term").clone();
+        match blight_recheck::recheck_judgement(
+            env.signature(),
+            &blight_kernel::Judgement::HasType { term, ty },
+        ) {
+            Ok(()) | Err(blight_recheck::RecheckError::Declined(_)) => {}
+            Err(blight_recheck::RecheckError::Rejected(m)) => {
+                panic!("re-checker REJECTED std/result `result` (soundness alarm): {m}")
+            }
+        }
+    });
+}
+
+#[test]
 fn std_string_loads_in_isolation() {
     with_module("std/string.bl", |env| {
         assert!(
@@ -963,6 +996,7 @@ fn every_std_module_loads_in_isolation() {
         "path.bl",
         "prelude.bl",
         "regex.bl",
+        "result.bl",
         "string.bl",
         "string_extra.bl",
         "test.bl",
