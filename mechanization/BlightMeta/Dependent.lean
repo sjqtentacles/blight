@@ -1581,5 +1581,180 @@ theorem conversion_repairs_preservation_false :
 #print axioms preservation_false
 #print axioms conversion_repairs_preservation_false
 
+-- ══════════════════════════════════════════════════════════════════════════════════════════════
+-- B2.2: Church-Rosser via parallel reduction (Takahashi), the hard core the general
+-- conversion-rule preservation rests on. Parallel reduction `PStep` contracts any set of redexes
+-- (beta + ite) at once — full reduction, so it is a CONGRUENCE (needed for substitution-congruence
+-- of definitional equality) and confluent (needed for `pi`-injectivity). CBV `Step ⊆ PStep ⊆ Steps*`.
+-- ══════════════════════════════════════════════════════════════════════════════════════════════
+
+/-- Parallel reduction: contract any set of beta/ite redexes simultaneously (full, not CBV). -/
+inductive PStep : Expr → Expr → Prop where
+  | var (i : Nat) : PStep (var i) (var i)
+  | bool : PStep bool bool
+  | tt : PStep tt tt
+  | ff : PStep ff ff
+  | pi {g : Grade} {d d' c c' : Expr} (hd : PStep d d') (hc : PStep c c') :
+      PStep (pi g d c) (pi g d' c')
+  | lam {b b' : Expr} (hb : PStep b b') : PStep (lam b) (lam b')
+  | app {f f' a a' : Expr} (hf : PStep f f') (ha : PStep a a') : PStep (app f a) (app f' a')
+  | ite {c c' t t' e e' : Expr} (hc : PStep c c') (ht : PStep t t') (he : PStep e e') :
+      PStep (ite c t e) (ite c' t' e')
+  | beta {b b' a a' : Expr} (hb : PStep b b') (ha : PStep a a') :
+      PStep (app (lam b) a) (subst0 a' b')
+  | iteTt {t t' e e' : Expr} (ht : PStep t t') (he : PStep e e') : PStep (ite tt t e) t'
+  | iteFf {t t' e e' : Expr} (ht : PStep t t') (he : PStep e e') : PStep (ite ff t e) e'
+
+/-- Parallel reduction is reflexive (contract no redexes). -/
+theorem PStep.refl (e : Expr) : PStep e e := by
+  induction e with
+  | var i => exact .var i
+  | bool => exact .bool
+  | tt => exact .tt
+  | ff => exact .ff
+  | ite c t e ihc iht ihe => exact .ite ihc iht ihe
+  | pi g d c ihd ihc => exact .pi ihd ihc
+  | lam b ihb => exact .lam ihb
+  | app f a ihf iha => exact .app ihf iha
+
+/-- Parallel reduction is stable under shifting (needed under binders in `PStep.subst`). -/
+theorem PStep.shiftAbove {e e' : Expr} (h : PStep e e') :
+    ∀ c, PStep (shiftAbove c e) (shiftAbove c e') := by
+  induction h with
+  | var i => intro c; exact PStep.refl _
+  | bool => intro c; exact .bool
+  | tt => intro c; exact .tt
+  | ff => intro c; exact .ff
+  | pi _ _ ihd ihc => intro c; exact .pi (ihd c) (ihc (c + 1))
+  | lam _ ihb => intro c; exact .lam (ihb (c + 1))
+  | app _ _ ihf iha => intro c; exact .app (ihf c) (iha c)
+  | ite _ _ _ ihc iht ihe => intro c; exact .ite (ihc c) (iht c) (ihe c)
+  | @beta b b' a a' _ _ ihb iha =>
+      intro c
+      rw [shiftAbove_subst0]
+      exact PStep.beta (ihb (c + 1)) (iha c)
+  | @iteTt t t' e e' _ _ iht ihe => intro c; exact PStep.iteTt (iht c) (ihe c)
+  | @iteFf t t' e e' _ _ iht ihe => intro c; exact PStep.iteFf (iht c) (ihe c)
+
+/-- **Parallel reduction is closed under substitution** (of parallel-reducing terms). The technical
+    heart of confluence: the beta case pivots on `subst_subst_comm`, the binder cases on
+    `PStep.shiftAbove`. -/
+theorem PStep.subst {e e' : Expr} (he : PStep e e') :
+    ∀ {s s' : Expr} (j : Nat), PStep s s' → PStep (subst j s e) (subst j s' e') := by
+  induction he with
+  | var i =>
+      intro s s' j hss
+      rcases Nat.lt_trichotomy i j with h | h | h
+      · rw [subst_var_lt h, subst_var_lt h]; exact PStep.refl _
+      · subst h; rw [subst_var_eq, subst_var_eq]; exact hss
+      · rw [subst_var_gt h, subst_var_gt h]; exact PStep.refl _
+  | bool => intro s s' j hss; exact .bool
+  | tt => intro s s' j hss; exact .tt
+  | ff => intro s s' j hss; exact .ff
+  | pi _ _ ihd ihc => intro s s' j hss; exact .pi (ihd j hss) (ihc (j + 1) (hss.shiftAbove 0))
+  | lam _ ihb => intro s s' j hss; exact .lam (ihb (j + 1) (hss.shiftAbove 0))
+  | app _ _ ihf iha => intro s s' j hss; exact .app (ihf j hss) (iha j hss)
+  | ite _ _ _ ihc iht ihe => intro s s' j hss; exact .ite (ihc j hss) (iht j hss) (ihe j hss)
+  | @beta b b' a a' _ _ ihb iha =>
+      intro s s' j hss
+      simp only [subst0]
+      rw [subst_subst_comm b' j 0 s' a' (Nat.zero_le j)]
+      exact PStep.beta (ihb (j + 1) (hss.shiftAbove 0)) (iha j hss)
+  | @iteTt t t' e e' _ _ iht ihe => intro s s' j hss; exact PStep.iteTt (iht j hss) (ihe j hss)
+  | @iteFf t t' e e' _ _ iht ihe => intro s s' j hss; exact PStep.iteFf (iht j hss) (ihe j hss)
+
+/-- The complete development (Takahashi's `e*`): contract EVERY beta/ite redex simultaneously. -/
+def Expr.dev : Expr → Expr
+  | var i => var i
+  | bool => bool
+  | tt => tt
+  | ff => ff
+  | pi g d c => pi g (Expr.dev d) (Expr.dev c)
+  | lam b => lam (Expr.dev b)
+  | app f a =>
+      match f with
+      | lam b => subst0 (Expr.dev a) (Expr.dev b)
+      | f => app (Expr.dev f) (Expr.dev a)
+  | ite c t e =>
+      match c with
+      | tt => Expr.dev t
+      | ff => Expr.dev e
+      | c => ite (Expr.dev c) (Expr.dev t) (Expr.dev e)
+
+/-- **Triangle lemma (Takahashi):** every parallel reduct of `e` further parallel-reduces to the
+    complete development `e.dev`. The immediate corollary is the diamond property. -/
+theorem PStep.triangle {e f : Expr} (h : PStep e f) : PStep f e.dev := by
+  induction h with
+  | var i => exact .var i
+  | bool => exact .bool
+  | tt => exact .tt
+  | ff => exact .ff
+  | pi _ _ ihd ihc => exact .pi ihd ihc
+  | lam _ ihb => exact .lam ihb
+  | @app ef f' ea a' hf _ ihf iha =>
+      cases ef with
+      | lam b =>
+          cases hf with
+          | lam hb =>
+              cases ihf with
+              | lam hb' => exact PStep.beta hb' iha
+      | var i => exact .app ihf iha
+      | bool => exact .app ihf iha
+      | tt => exact .app ihf iha
+      | ff => exact .app ihf iha
+      | ite _ _ _ => exact .app ihf iha
+      | pi _ _ _ => exact .app ihf iha
+      | app _ _ => exact .app ihf iha
+  | @ite ec c' et t' ee e' hc _ _ ihc iht ihe =>
+      cases ec with
+      | tt => cases hc with | tt => exact PStep.iteTt iht ihe
+      | ff => cases hc with | ff => exact PStep.iteFf iht ihe
+      | var i => exact .ite ihc iht ihe
+      | bool => exact .ite ihc iht ihe
+      | pi _ _ _ => exact .ite ihc iht ihe
+      | lam _ => exact .ite ihc iht ihe
+      | app _ _ => exact .ite ihc iht ihe
+      | ite _ _ _ => exact .ite ihc iht ihe
+  | @beta b b' a a' _ _ ihb iha => exact ihb.subst 0 iha
+  | @iteTt t t' e e' _ _ iht _ => exact iht
+  | @iteFf t t' e e' _ _ _ ihe => exact ihe
+
+/-- **Diamond property of parallel reduction.** -/
+theorem PStep.diamond {e f g : Expr} (hf : PStep e f) (hg : PStep e g) :
+    ∃ d, PStep f d ∧ PStep g d :=
+  ⟨e.dev, hf.triangle, hg.triangle⟩
+
+/-- Refl-trans closure of parallel reduction. -/
+inductive PSteps : Expr → Expr → Prop where
+  | refl (a : Expr) : PSteps a a
+  | tail {a b c : Expr} (hab : PSteps a b) (hbc : PStep b c) : PSteps a c
+
+/-- Strip lemma: slide a single parallel step down a parallel-reduction sequence (diamond, iterated). -/
+theorem PSteps.strip {a b c : Expr} (hab : PStep a b) (hac : PSteps a c) :
+    ∃ d, PSteps b d ∧ PStep c d := by
+  induction hac with
+  | refl => exact ⟨b, PSteps.refl b, hab⟩
+  | tail _ hc'c ih =>
+      obtain ⟨d', hbd', hc'd'⟩ := ih
+      obtain ⟨d, hd'd, hcd⟩ := PStep.diamond hc'd' hc'c
+      exact ⟨d, hbd'.tail hd'd, hcd⟩
+
+/-- **Church-Rosser: parallel reduction is confluent.** -/
+theorem PSteps.confluent {a b c : Expr} (hab : PSteps a b) (hac : PSteps a c) :
+    ∃ d, PSteps b d ∧ PSteps c d := by
+  induction hab with
+  | refl => exact ⟨c, hac, PSteps.refl c⟩
+  | tail _ hb'b ih =>
+      obtain ⟨d', hb'd', hcd'⟩ := ih
+      obtain ⟨e, hbe, hd'e⟩ := PSteps.strip hb'b hb'd'
+      exact ⟨e, hbe, hcd'.tail hd'e⟩
+
+-- Axiom audit (B2.2 Church-Rosser core): the substitutivity heart, the Takahashi diamond, and
+-- confluence are all sorry-free. These are what the general conversion-rule preservation rests on
+-- (pi-injectivity from confluence; substitution-congruence of definitional equality from PStep.subst).
+#print axioms PStep.subst
+#print axioms PStep.triangle
+#print axioms PSteps.confluent
+
 end Dep
 end BlightMeta
