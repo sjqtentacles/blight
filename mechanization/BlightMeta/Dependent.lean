@@ -1866,28 +1866,178 @@ theorem Wt.lam_inv {Γ body T} (h : Wt Γ (Expr.lam body) T) :
       exact ⟨ρ, A, B, hbody, (Conv.symm hAB).trans hconv⟩
   | _ => cases he
 
-/-
-  **Status of `Wt` preservation (B2.2 summit).** The hard, novel content is DONE and machine-checked
-  above, all `sorryAx`-free: Church-Rosser (`PSteps.confluent`) and the definitional-equality
-  metatheory it yields — `Conv.pi_inj` (the beta case's Church-Rosser obligation) and
-  `Conv.subst0_congr` / `conv_subst` (the argument-step case's substitution-congruence) — plus the
-  conversion-augmented typing `Wt` and its `lam_inv`.
+/-- Parallel-reduction sequences are closed under shifting. -/
+theorem PSteps.shiftAboveR {a b : Expr} (h : PSteps a b) (c : Nat) :
+    PSteps (shiftAbove c a) (shiftAbove c b) := by
+  induction h with
+  | refl => exact PSteps.refl _
+  | tail _ hbc ih => exact ih.tail (hbc.shiftAbove c)
 
-  With these, the general preservation
-      `Wt Γ e A → Step e e' → Wt Γ e' A`
-  follows by induction on the typing derivation, per Step:
-    • `conv`          — IH + `Wt.conv`;
-    • `ite_tt/ff`     — the branch's premise directly;
-    • `ite_cond`,`app1` — IH under the congruence rule;
-    • `app2` (arg step) — IH + `Wt.conv` bridged by `Conv.subst0_congr` (the machine-checked fact);
-    • `beta`          — `lam_inv` (⟹ `pi ρ A B` via `Conv.pi_inj`) + the substitution lemma.
-  The ONLY pieces not yet transcribed are the two STANDARD structural lemmas the beta case needs — a
-  weakening lemma and a substitution lemma for `Wt` — which this file already proves in graded form
-  (`weaken`, `subst_lemma_tele`); the `Wt` versions are the same de Bruijn arguments with the usage
-  bookkeeping erased, plus a `conv` case discharged by `conv_subst`. No new mathematics remains; this
-  is deliberately left as a clean transcription step rather than rushed, to keep the `sorryAx`-free
-  invariant intact. See docs/research-frontier.md.
--/
+/-- Definitional equality is closed under shifting. -/
+theorem conv_shift {A B : Expr} (h : Conv A B) (c : Nat) :
+    Conv (shiftAbove c A) (shiftAbove c B) :=
+  let ⟨d, hAd, hBd⟩ := h; ⟨shiftAbove c d, hAd.shiftAboveR c, hBd.shiftAboveR c⟩
+
+/-- Weakening: inserting a fresh binder preserves `Wt` (grade-erased transcription of `weaken`). -/
+theorem Wt.weaken {Γ e A} (h : Wt Γ e A) : ∀ (c : Nat) (X : Expr), c ≤ Γ.length →
+    Wt (ctxInsert Γ c X) (Expr.shiftAbove c e) (Expr.shiftAbove c A) := by
+  induction h with
+  | @var Γ i A hlk =>
+      intro c X _
+      have hlen : i < Γ.length := lookup_ctxGet_lt hlk
+      rcases Nat.lt_or_ge i c with hic | hic
+      · rw [Expr.shiftAbove_var_lt hic]
+        exact Wt.var (by rw [ctxGet_insert_lt hic hlen, hlk]; rfl)
+      · rw [Expr.shiftAbove_var_ge hic]
+        have hAeq : Expr.shiftAbove c A = Expr.shiftAbove 0 A := ctxGet_shift_below_eq hlk hic
+        exact Wt.var (by rw [ctxGet_insert_ge hic, hlk, hAeq]; rfl)
+  | @lam Γ body A B ρ _ ih => intro c X hcle; exact Wt.lam (ih (c + 1) X (Nat.succ_le_succ hcle))
+  | @app Γ f a A B ρ _ _ ihf iha =>
+      intro c X hcle
+      show Wt (ctxInsert Γ c X) (Expr.shiftAbove c (Expr.app f a)) (Expr.shiftAbove c (subst0 a B))
+      rw [Expr.shiftAbove_subst0]
+      exact Wt.app (ihf c X hcle) (iha c X hcle)
+  | tt => intro c X _; exact Wt.tt
+  | ff => intro c X _; exact Wt.ff
+  | @ite Γ cc t e A _ _ _ ihc iht ihe =>
+      intro c X hcle; exact Wt.ite (ihc c X hcle) (iht c X hcle) (ihe c X hcle)
+  | @conv Γ e A B _ hAB ih => intro c X hcle; exact Wt.conv (ih c X hcle) (conv_shift hAB c)
+
+/-- Front weakening by a whole prefix (iterated `Wt.weaken`). -/
+theorem Wt.weaken_prefix {Γ e A} (h : Wt Γ e A) (L : List Expr) :
+    Wt (L ++ Γ) (shiftBy L.length 0 e) (shiftBy L.length 0 A) := by
+  induction L with
+  | nil => simpa [shiftBy_zero] using h
+  | cons X L' ih =>
+      have hw := ih.weaken 0 X (Nat.zero_le _)
+      rw [ctxInsert_zero] at hw
+      have key : ∀ t : Expr, shiftBy (L'.length + 1) 0 t = shiftAbove 0 (shiftBy L'.length 0 t) := by
+        intro t
+        show shiftBy (L'.length + 1) 0 t = shiftBy 1 0 (shiftBy L'.length 0 t)
+        rw [shiftBy_shiftBy_add t 1 L'.length 0]; congr 1; omega
+      show Wt (X :: (L' ++ Γ)) (shiftBy (L'.length + 1) 0 e) (shiftBy (L'.length + 1) 0 A)
+      rw [key e, key A]; exact hw
+
+/-- **Substitution lemma (telescope form)** for `Wt` — grade-erased transcription of
+    `subst_lemma_tele`, with the extra `conv` case discharged by `conv_subst`. -/
+theorem Wt.subst_tele {A' Γ a} (ha : Wt Γ a A') :
+    ∀ {Γ0 e B}, Wt Γ0 e B → ∀ {Δ : List Expr}, Γ0 = Δ ++ A' :: Γ →
+      Wt (substTele a Δ ++ Γ) (subst Δ.length (shiftBy Δ.length 0 a) e)
+        (subst Δ.length (shiftBy Δ.length 0 a) B) := by
+  intro Γ0 e B h
+  induction h with
+  | @var Γ0 i A hlk =>
+      intro Δ heq; subst heq
+      rcases Nat.lt_trichotomy i Δ.length with hik | hik | hik
+      · rw [subst_var_lt hik]
+        have hlkΔ : ctxGet Δ i = some A := by rw [← ctxGet_append_lt Δ (A' :: Γ) hik]; exact hlk
+        exact Wt.var (by
+          rw [ctxGet_append_lt (substTele a Δ) Γ (by rw [substTele_length]; exact hik),
+            ctxGet_substTele a Δ hik, hlkΔ]; rfl)
+      · subst hik
+        rw [subst_var_eq]
+        have hAeq : A = shiftBy (Δ.length + 1) 0 A' := by
+          have h1 := ctxGet_append_eq Δ A' Γ; rw [hlk] at h1; exact Option.some.inj h1
+        have hsubTy : subst Δ.length (shiftBy Δ.length 0 a) A = shiftBy Δ.length 0 A' := by
+          rw [hAeq]
+          exact subst_shift_absorb A' Δ.length 0 Δ.length (shiftBy Δ.length 0 a) (Nat.zero_le _) (by omega)
+        rw [hsubTy]
+        have hw := ha.weaken_prefix (substTele a Δ)
+        rw [substTele_length] at hw; exact hw
+      · obtain ⟨i', rfl⟩ : ∃ i', i = i' + 1 := ⟨i - 1, by omega⟩
+        have hge : Δ.length ≤ i' := by omega
+        rw [subst_var_gt (by omega : i' + 1 > Δ.length), Nat.add_sub_cancel]
+        rw [ctxGet_append_gt Δ A' Γ hge] at hlk
+        obtain ⟨A0, hA0, hAeq⟩ := Option.map_eq_some_iff.mp hlk
+        have hsubTy : subst Δ.length (shiftBy Δ.length 0 a) A = shiftBy Δ.length 0 A0 := by
+          rw [← hAeq]
+          exact subst_shift_absorb A0 Δ.length 0 Δ.length (shiftBy Δ.length 0 a) (Nat.zero_le _) (by omega)
+        rw [hsubTy]
+        exact Wt.var (by
+          rw [ctxGet_append_ge (substTele a Δ) Γ (by rw [substTele_length]; exact hge),
+            substTele_length, hA0]; rfl)
+  | @lam Γ0 body A B ρ _ ih =>
+      intro Δ heq; subst heq
+      have hshift : shiftAbove 0 (shiftBy Δ.length 0 a) = shiftBy (Δ.length + 1) 0 a := by
+        show shiftBy 1 0 (shiftBy Δ.length 0 a) = shiftBy (Δ.length + 1) 0 a
+        rw [shiftBy_shiftBy_add a 1 Δ.length 0]; congr 1; omega
+      have hrec := ih (Δ := A :: Δ) rfl
+      show Wt (substTele a Δ ++ Γ) (Expr.lam _) (Expr.pi ρ _ _)
+      rw [hshift]
+      exact Wt.lam hrec
+  | @app Γ0 f arg A B ρ _ _ ihf iharg =>
+      intro Δ heq; subst heq
+      have hshift : shiftAbove 0 (shiftBy Δ.length 0 a) = shiftBy (Δ.length + 1) 0 a := by
+        show shiftBy 1 0 (shiftBy Δ.length 0 a) = shiftBy (Δ.length + 1) 0 a
+        rw [shiftBy_shiftBy_add a 1 Δ.length 0]; congr 1; omega
+      have hf' := ihf (Δ := Δ) rfl
+      have harg' := iharg (Δ := Δ) rfl
+      have hpi : subst Δ.length (shiftBy Δ.length 0 a) (Expr.pi ρ A B)
+          = Expr.pi ρ (subst Δ.length (shiftBy Δ.length 0 a) A)
+              (subst (Δ.length + 1) (shiftBy (Δ.length + 1) 0 a) B) := by
+        show Expr.pi ρ (subst Δ.length (shiftBy Δ.length 0 a) A)
+            (subst (Δ.length + 1) (shiftAbove 0 (shiftBy Δ.length 0 a)) B) = _
+        rw [hshift]
+      rw [hpi] at hf'
+      have htyeq : subst Δ.length (shiftBy Δ.length 0 a) (subst0 arg B)
+          = subst0 (subst Δ.length (shiftBy Δ.length 0 a) arg)
+              (subst (Δ.length + 1) (shiftBy (Δ.length + 1) 0 a) B) := by
+        show subst Δ.length (shiftBy Δ.length 0 a) (subst 0 arg B) = _
+        rw [subst_subst_comm B Δ.length 0 (shiftBy Δ.length 0 a) arg (Nat.zero_le _)]
+        congr 1
+        show subst (Δ.length + 1) (shiftAbove 0 (shiftBy Δ.length 0 a)) B = _
+        rw [hshift]
+      show Wt (substTele a Δ ++ Γ) (Expr.app _ _) (subst Δ.length (shiftBy Δ.length 0 a) (subst0 arg B))
+      rw [htyeq]
+      exact Wt.app hf' harg'
+  | tt => intro Δ heq; subst heq; exact Wt.tt
+  | ff => intro Δ heq; subst heq; exact Wt.ff
+  | @ite Γ0 cnd t el A _ _ _ ihc iht ihel =>
+      intro Δ heq; subst heq
+      exact Wt.ite (ihc (Δ := Δ) rfl) (iht (Δ := Δ) rfl) (ihel (Δ := Δ) rfl)
+  | @conv Γ0 e A B _ hAB ih =>
+      intro Δ heq; subst heq
+      exact Wt.conv (ih (Δ := Δ) rfl) (conv_subst hAB Δ.length (shiftBy Δ.length 0 a))
+
+/-- **Substitution lemma** (public, single binder): `Wt (A'::Γ) e B` and `Wt Γ a A'` give
+    `Wt Γ (subst0 a e) (subst0 a B)`. -/
+theorem Wt.subst {A' Γ a e B} (ha : Wt Γ a A') (h : Wt (A' :: Γ) e B) :
+    Wt Γ (subst0 a e) (subst0 a B) := by
+  have hb := Wt.subst_tele ha h (Δ := []) rfl
+  simpa [substTele, shiftBy_zero, subst0] using hb
+
+/-- **PRESERVATION for the conversion-augmented typing `Wt`** — the positive that `preservation_false`
+    said was impossible WITHOUT a conversion rule. Subject reduction holds over the *entire* `Step`
+    relation. The two non-structural cases are exactly the ones `preservation_false` exploited:
+    `app2` (argument step) closes via `Conv.subst0_congr`, and `beta` via `lam_inv` + `Conv.pi_inj`
+    (both machine-checked from Church-Rosser) + the substitution lemma. -/
+theorem Wt.preservation {Γ e A} (h : Wt Γ e A) : ∀ {e'}, Step e e' → Wt Γ e' A := by
+  induction h with
+  | var => intro e' hstep; cases hstep
+  | lam _ => intro e' hstep; cases hstep
+  | tt => intro e' hstep; cases hstep
+  | ff => intro e' hstep; cases hstep
+  | @app Γ f arg D B ρ hf harg ihf iharg =>
+      intro e' hstep
+      cases hstep with
+      | app1 hs => exact Wt.app (ihf hs) harg
+      | app2 _ hs => exact Wt.conv (Wt.app hf (iharg hs)) (Conv.subst0_congr B hs).symm
+      | beta _ =>
+          obtain ⟨_, D', B', hbody, hpiconv⟩ := hf.lam_inv
+          obtain ⟨_, hDD', hBB'⟩ := hpiconv.pi_inj
+          exact Wt.conv (Wt.subst (Wt.conv harg hDD') hbody) (conv_subst hBB'.symm 0 arg)
+  | @ite Γ cnd t el A hc ht hel ihc iht ihel =>
+      intro e' hstep
+      cases hstep with
+      | ite_cond hs => exact Wt.ite (ihc hs) ht hel
+      | ite_tt => exact ht
+      | ite_ff => exact hel
+  | conv _ hAB ih => intro e' hstep; exact Wt.conv (ih hstep) hAB
+
+-- Axiom audit (B2.2 summit): the conversion-augmented substitution lemma and PRESERVATION —
+-- the positive that flips preservation_false — are sorry-free.
+#print axioms Wt.subst
+#print axioms Wt.preservation
 
 end Dep
 end BlightMeta
