@@ -46,6 +46,7 @@ embedded_modules! {
     "std/tree.bl",
     "std/maybe.bl",
     "std/either.bl",
+    "std/result.bl",
     "std/function.bl",
     "std/pair.bl",
     "std/ordering.bl",

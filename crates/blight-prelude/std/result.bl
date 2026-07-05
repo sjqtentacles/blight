@@ -1,0 +1,35 @@
+; std/result.bl — the error-carrying result type `Result a e` and its combinators (D3 quick win).
+;
+; UNTRUSTED tower code. `Result` is `Either` specialized to the ubiquitous "value or error"
+; reading, with the mainstream parameter order (value first, error second) and the combinator
+; names real programs reach for (`map`/`bind`/`unwrap-or`). An `err` short-circuits a `bind`
+; chain, carrying its payload unchanged — the standard railway pattern. Loadable in isolation.
+
+(defdata Result ((a (Type 0)) (e (Type 0))) (ok (x a)) (err (y e)))
+
+; The case eliminator: `result f g r` applies `f` to an `ok` payload and `g` to an `err` payload.
+(deftotal result
+  (Pi
+    ((A (Type 0)) (E (Type 0)) (C (Type 0)) (f (Pi ((x A)) C)) (g (Pi ((y E)) C)) (r (Result A E)))
+    C)
+  (lam (A E C f g r) (match r [(ok x) (f x)] [(err y) (g y)])))
+
+; Map over the success payload (the `Result` functor); an `err` passes through unchanged.
+(deftotal result-map
+  (Pi ((A (Type 0)) (E (Type 0)) (B (Type 0)) (f (Pi ((x A)) B)) (r (Result A E))) (Result B E))
+  (lam (A E B f r) (match r [(ok x) (ok (f x))] [(err y) (err y)])))
+
+; Map over the error payload; an `ok` passes through unchanged.
+(deftotal result-map-err
+  (Pi ((A (Type 0)) (E (Type 0)) (F (Type 0)) (f (Pi ((y E)) F)) (r (Result A E))) (Result A F))
+  (lam (A E F f r) (match r [(ok x) (ok x)] [(err y) (err (f y))])))
+
+; Monadic bind (and-then): `ok x` continues into `f`; `err` short-circuits, carrying its payload.
+(deftotal result-bind
+  (Pi ((A (Type 0)) (E (Type 0)) (B (Type 0)) (r (Result A E)) (f (Pi ((x A)) (Result B E))))
+    (Result B E))
+  (lam (A E B r f) (match r [(ok x) (f x)] [(err y) (err y)])))
+
+; Extract the success payload, or the supplied default on `err`.
+(deftotal result-unwrap-or (Pi ((A (Type 0)) (E (Type 0)) (r (Result A E)) (d A)) A)
+  (lam (A E r d) (match r [(ok x) x] [(err y) d])))

@@ -1,0 +1,26 @@
+; Railway-style error handling with `Result` (std/result.bl).
+;
+; Two checked steps chained with `result-bind`: the happy path threads `ok` values through both
+; steps; the sad path short-circuits at the first `err`, skipping the rest of the chain. The
+; ground `main` pins both behaviors at once.
+(load "std/nat.bl")
+(load "std/result.bl")
+
+; A "checked decrement": Zero has no predecessor, so it errs (payload: a unit-ish 1).
+(deftotal checked-pred (Pi ((n Nat)) (Result Nat Nat))
+  (lam (n) (match n [(Zero) (err 1)] [(Succ m) (ok m)])))
+
+; Decrement twice, via the chain. `4 - 1 - 1 = 2` succeeds end-to-end.
+(define twice-from-four
+  (the (Result Nat Nat) (result-bind Nat Nat Nat (checked-pred 4) (lam (m) (checked-pred m)))))
+
+; `1 - 1 - 1` short-circuits at the second step: the first `checked-pred` gives `ok Zero`, the
+; second errs — and the chain carries that `err` out past the remaining steps.
+(define twice-from-one
+  (the (Result Nat Nat) (result-bind Nat Nat Nat (checked-pred 1) (lam (m) (checked-pred m)))))
+
+; Ground: the happy chain unwraps to 2; the short-circuited chain falls back to the default 9.
+; 2 + 9 = 11.
+(define main
+  (the Nat
+    (plus (result-unwrap-or Nat Nat twice-from-four 0) (result-unwrap-or Nat Nat twice-from-one 9))))

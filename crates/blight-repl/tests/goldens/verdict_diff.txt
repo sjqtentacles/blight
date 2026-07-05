@@ -782,6 +782,12 @@ GLOBAL std/regex.bl string-map Ok
 GLOBAL std/regex.bl string-reverse Ok
 GLOBAL std/regex.bl string-shift Ok
 GLOBAL std/regex.bl sub Ok
+FILE std/result.bl forms=6 declared=6 checked=0
+GLOBAL std/result.bl result Ok
+GLOBAL std/result.bl result-bind Ok
+GLOBAL std/result.bl result-map Ok
+GLOBAL std/result.bl result-map-err Ok
+GLOBAL std/result.bl result-unwrap-or Ok
 FILE std/string.bl forms=57 declared=51 checked=6
 GLOBAL std/string.bl Nat-Ord Ok
 GLOBAL std/string.bl ORD Ok
@@ -3508,6 +3514,27 @@ GLOBAL examples/region_scratch.bl plus Ok
 GLOBAL examples/region_scratch.bl plus-two-three-is-five Ok
 GLOBAL examples/region_scratch.bl pred Ok
 GLOBAL examples/region_scratch.bl sub Ok
+FILE examples/result_chain.bl forms=26 declared=23 checked=3
+GLOBAL examples/result_chain.bl and Ok
+GLOBAL examples/result_chain.bl checked-pred Ok
+GLOBAL examples/result_chain.bl even Ok
+GLOBAL examples/result_chain.bl four-is-even Ok
+GLOBAL examples/result_chain.bl max Ok
+GLOBAL examples/result_chain.bl min Ok
+GLOBAL examples/result_chain.bl mult Ok
+GLOBAL examples/result_chain.bl mult-two-three-is-six Ok
+GLOBAL examples/result_chain.bl not Ok
+GLOBAL examples/result_chain.bl odd Ok
+GLOBAL examples/result_chain.bl or Ok
+GLOBAL examples/result_chain.bl plus Ok
+GLOBAL examples/result_chain.bl plus-two-three-is-five Ok
+GLOBAL examples/result_chain.bl pred Ok
+GLOBAL examples/result_chain.bl result Ok
+GLOBAL examples/result_chain.bl result-bind Ok
+GLOBAL examples/result_chain.bl result-map Ok
+GLOBAL examples/result_chain.bl result-map-err Ok
+GLOBAL examples/result_chain.bl result-unwrap-or Ok
+GLOBAL examples/result_chain.bl sub Ok
 FILE examples/rle.bl forms=71 declared=65 checked=6
 GLOBAL examples/rle.bl Nat-Ord Ok
 GLOBAL examples/rle.bl ORD Ok
