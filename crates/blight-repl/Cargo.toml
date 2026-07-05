@@ -16,6 +16,7 @@ blight-elab = { path = "../blight-elab" }
 blight-codegen = { path = "../blight-codegen" }
 blight-recheck = { path = "../blight-recheck" }
 blight-prelude-embed = { path = "../blight-prelude-embed" }
+rustyline = "18.0.1"
 
 [features]
 default = []

@@ -729,10 +729,90 @@ fn parse_build_args(args: &[String]) -> Result<BuildOpts, String> {
     })
 }
 
+/// The REPL's line source (D4 quick win): a **rustyline** editor (history, arrow keys, Ctrl-C
+/// clears the in-progress form) when stdin is a terminal, or the plain buffered `read_line` loop
+/// when stdin is piped — so scripts, tests, and heredocs keep byte-identical behavior while
+/// humans get line editing. History persists best-effort to `~/.blight_history` (silently skipped
+/// when unavailable — history is a convenience, never an error source).
+enum LineSource {
+    Tty(Box<rustyline::DefaultEditor>, Option<std::path::PathBuf>),
+    Piped(io::Stdin),
+}
+
+impl LineSource {
+    fn new() -> io::Result<Self> {
+        use std::io::IsTerminal;
+        let stdin = io::stdin();
+        if !stdin.is_terminal() {
+            return Ok(LineSource::Piped(stdin));
+        }
+        match rustyline::DefaultEditor::new() {
+            Ok(mut ed) => {
+                let hist = std::env::var_os("HOME")
+                    .map(|h| std::path::PathBuf::from(h).join(".blight_history"));
+                if let Some(p) = &hist {
+                    let _ = ed.load_history(p); // best-effort: a missing file is the first run
+                }
+                Ok(LineSource::Tty(Box::new(ed), hist))
+            }
+            // A terminal rustyline cannot drive (odd TERM, restricted tty): degrade to the
+            // plain loop rather than refusing to start.
+            Err(_) => Ok(LineSource::Piped(stdin)),
+        }
+    }
+
+    /// Read one line (without trailing newline normalization — the caller appends as-is).
+    /// `Ok(None)` = EOF (Ctrl-D / closed pipe). `Ok(Some(""))` with `interrupted = true` is
+    /// surfaced by rustyline's Ctrl-C as a cleared line.
+    fn read_line(&mut self, prompt: &str, line: &mut String) -> io::Result<LineEvent> {
+        match self {
+            LineSource::Piped(stdin) => {
+                let mut stdout = io::stdout();
+                write!(stdout, "{prompt}")?;
+                stdout.flush()?;
+                if stdin.read_line(line)? == 0 {
+                    return Ok(LineEvent::Eof);
+                }
+                Ok(LineEvent::Line)
+            }
+            LineSource::Tty(ed, _) => match ed.readline(prompt) {
+                Ok(l) => {
+                    line.push_str(&l);
+                    line.push('\n');
+                    Ok(LineEvent::Line)
+                }
+                Err(rustyline::error::ReadlineError::Interrupted) => Ok(LineEvent::Interrupted),
+                Err(rustyline::error::ReadlineError::Eof) => Ok(LineEvent::Eof),
+                Err(e) => Err(io::Error::other(e)),
+            },
+        }
+    }
+
+    /// Record a completed input (a full balanced form or a `:` command) in the history.
+    fn remember(&mut self, input: &str) {
+        if let LineSource::Tty(ed, _) = self {
+            let _ = ed.add_history_entry(input.trim_end());
+        }
+    }
+
+    /// Persist the history on exit (best-effort).
+    fn save(&mut self) {
+        if let LineSource::Tty(ed, Some(p)) = self {
+            let _ = ed.save_history(p);
+        }
+    }
+}
+
+enum LineEvent {
+    Line,
+    Eof,
+    /// Ctrl-C: abandon the in-progress multi-line form, keep the session.
+    Interrupted,
+}
+
 fn repl() -> io::Result<()> {
-    let stdin = io::stdin();
-    let mut stdout = io::stdout();
     let mut env = ElabEnv::new();
+    let mut source = LineSource::new()?;
 
     eprintln!(
         "blight repl (M3). enter `(defdata …)`, `(define …)`, `(define-rec name T body)`, \
@@ -746,15 +826,19 @@ fn repl() -> io::Result<()> {
         } else {
             "   ...> "
         };
-        write!(stdout, "{prompt}")?;
-        stdout.flush()?;
 
         let mut line = String::new();
-        if stdin.read_line(&mut line)? == 0 {
-            break; // EOF
+        match source.read_line(prompt, &mut line)? {
+            LineEvent::Eof => break,
+            LineEvent::Interrupted => {
+                buffer.clear();
+                continue;
+            }
+            LineEvent::Line => {}
         }
         // REPL commands (only when not mid-form): `:help`, `:type <expr>`, `:load <file>`, `:quit`.
         if buffer.is_empty() && line.trim_start().starts_with(':') {
+            source.remember(&line);
             if repl_command(&mut env, line.trim()) {
                 break; // `:quit`
             }
@@ -769,6 +853,8 @@ fn repl() -> io::Result<()> {
         if input.trim().is_empty() {
             continue;
         }
+        // One history entry per *completed* form (multi-line forms recall as one unit).
+        source.remember(&input);
         match eval_program(&mut env, &input) {
             Ok(msgs) => {
                 for m in msgs {
@@ -788,6 +874,7 @@ fn repl() -> io::Result<()> {
             Err(rendered) => println!("{rendered}"),
         }
     }
+    source.save();
     Ok(())
 }
 
