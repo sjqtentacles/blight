@@ -293,6 +293,10 @@ module (a linked `.wasm` when a wasm toolchain is available, else the object).
   (`plus`/`mult`/`sub`/`min`/`max`/`even`/`odd`), `std/list` (`map`/`filter`/`reverse`/`foldr`/
   `concat`), `std/maybe`, `std/either`, `std/pair`, `std/function`, `std/ordering`, `std/vec`,
   `std/string`, `std/tree`, and the `std/prelude` aggregator.
+- [`docs/cookbook.md`](cookbook.md) — task-oriented recipes ("how do I …?"), the top-down
+  companion to this tutorial.
+- [`docs/performance-guide.md`](performance-guide.md) — how to stay fast (Int vs Nat, the
+  recognizer contract, regions).
 - [`docs/performance.md`](performance.md) — the cost model, benchmarks, and honest trade-offs.
 - [`docs/implementation.md`](implementation.md) — how the kernel, re-checker, and backend are built
   and tested.

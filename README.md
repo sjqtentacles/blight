@@ -33,6 +33,8 @@ syntax, and compiles checked terms to native (or WebAssembly) code.
 
 - Spec: [docs/blight-spec.md](docs/blight-spec.md) — the canonical language design.
 - Tutorial: [docs/tutorial.md](docs/tutorial.md) — a hands-on walk from `Nat` to a tactic proof.
+- Cookbook: [docs/cookbook.md](docs/cookbook.md) — task-oriented recipes (errors, hash maps, effect sequencing, totality measures, level polymorphism, proofs), every snippet anchored to an acceptance-tested example.
+- Performance guide: [docs/performance-guide.md](docs/performance-guide.md) — the user-facing "how to stay fast": the Int/Nat two-speed model, the recognizer contract, regions, and diagnosing a slow program.
 - Implementation notes: [docs/implementation.md](docs/implementation.md) — host architecture, the TCB boundary, the milestone map.
 - Performance: [docs/performance.md](docs/performance.md) — cost model, benchmarks, advantages/disadvantages.
 - Benchmarks game: [docs/benchmarks-game.md](docs/benchmarks-game.md) — scaling tables + a measured cross-language table (fib/sum/factorial vs C/Rust/OCaml/Haskell/Python) where Blight-Int lands in the C/Rust/OCaml cluster.
