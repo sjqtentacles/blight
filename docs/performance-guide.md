@@ -61,7 +61,7 @@ stack).
 
 1. `BL_GC_STATS=1` — is it allocation? (Usually yes.)
 2. Grep your hot loop for unary-`Nat` arithmetic or a redefinition shadowing a prelude name.
-3. The `BL_NO_*` flags (`BL_NO_NATPRIM`, `BL_NO_UNBOX`, `BL_NO_FLATTEN`, `BL_NO_STRPACK`,
+3. The `BL_NO_*` flags (`BL_NO_NATPRIM`, `BL_NO_NATPEEL`, `BL_NO_UNBOX`, `BL_NO_FLATTEN`, `BL_NO_STRPACK`,
    `BL_NO_ELIMLOOP`, `BL_NO_FUSION`, `BL_NO_CSE`, `BL_NO_CTNORM`, `BL_NO_SPINEFUSE`,
    `BL_NO_INLINE`, `BL_NO_LTO`, `BL_NO_DEFUNC`, `BL_NO_CAPSPEC`, `BL_NO_LINEARITY`,
    `BL_NO_ARITYRAISE`, `BL_NO_AUTOPAR`) each disable one optimization pass.

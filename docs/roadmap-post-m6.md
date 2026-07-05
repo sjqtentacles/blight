@@ -679,6 +679,13 @@ anyone chases GC churn here again — is root-causing and re-enabling `BL_NAT_PE
 packing; that is out of scope for this pass (it is a codegen partial-application interaction bug, not a
 runtime layout change) and is left as a flagged follow-up, not a new commitment.
 
+> **UPDATE (2026-07-05): the follow-up landed — the peel is ON by default.** The re-audit could not
+> reproduce the historical curried-spine crash on the post-A3/A1′/P10 pipeline (full example corpus,
+> codegen suite, bench goldens, and the hofold A/B pin all value-identical with the peel enabled —
+> the same stale-claim pattern `docs/c1-uncurry-investigation.md` §1 records for `binrec`). Flipped
+> default-ON behind the standard `BL_NO_NATPEEL` escape hatch and added to the B1 `DIFF_FLAGS`
+> bit-identity matrix; the hofold pin test's polarity updated accordingly.
+
 **P10 defunctionalization — scoped; the one remaining lever with a real target and a strong net.** Unlike P9,
 the opportunity is **confirmed present**: closures *survive* `mono`+`inline` in the compiled corpus
 (`mergesort` emits **44** `bl_app` call sites + 32 `bl_app_global`/`bl_compose_apply`; `fizzbuzz` 40 + 26),

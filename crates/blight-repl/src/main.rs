@@ -2317,6 +2317,9 @@ mod tests {
     #[cfg(feature = "llvm")]
     const DIFF_FLAGS: &[&str] = &[
         "BL_NO_NATPRIM",
+        // M25 zero-allocation Nat peel (default-ON since the 2026-07-05 re-audit; see
+        // llvm.rs::is_nat_eliminator_shape's history note).
+        "BL_NO_NATPEEL",
         "BL_NO_UNBOX",
         "BL_NO_LTO",
         "BL_NO_FLATTEN",

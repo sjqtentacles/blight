@@ -1963,13 +1963,21 @@ fn con_index_fallback(con: &blight_kernel::ConName) -> u64 {
 /// (extra arms, wrong binder counts, a user datatype that happens to name a `Succ`) does not match,
 /// so the generic `bl_nat_to_con` path is used — never a miscompile, only a missed optimization.
 fn is_nat_eliminator_shape(arms: &[TailArm]) -> bool {
-    // The no-alloc `Nat` peel (M25) is correct in isolation (its `bl_nat_is_succ` /
-    // `bl_nat_pred_value` helpers are differentially gated by numeric_diff.c `check_peel`), but on
-    // deep *curried* multi-arg eliminator loops it currently mis-drives the partial-application
-    // spine (a captured fast-`Nat` immediate is reached where a closure is expected, crashing). Until
-    // that interaction is fully root-caused it is opt-IN: the default path materializes one inductive
-    // layer via `bl_nat_to_con` (always correct), and `BL_NAT_PEEL=1` enables the experimental peel.
-    if std::env::var_os("BL_NAT_PEEL").is_none() {
+    // The no-alloc `Nat` peel (M25). Its `bl_nat_is_succ`/`bl_nat_pred_value` helpers are
+    // differentially gated by numeric_diff.c `check_peel`, and the peel keeps the generic path's
+    // exact CFG (same switch/arms/binder pushes — only the tag/field *sources* change).
+    //
+    // HISTORY: originally landed opt-in (`BL_NAT_PEEL=1`, commit 4bfd712) because the then-current
+    // pipeline crashed on deep curried multi-arg eliminator loops ("a captured fast-Nat immediate
+    // reached where a closure is expected"). Re-audited 2026-07-05, after the passes that rewrote
+    // exactly the implicated partial-application spines (A3 spine fusion, A1′ post-mono layout,
+    // P10/P10.1 defunc + capture specialization): the full example corpus, the codegen suite, the
+    // bench goldens, and the hofold A/B pin all run value-identical with the peel ON, and the
+    // historical crash could not be reproduced — the same stale-claim pattern
+    // docs/c1-uncurry-investigation.md §1 documents for `binrec`. Default is therefore ON, with
+    // the standard per-pass discipline: `BL_NO_NATPEEL=1` disables it, and the B1 differential
+    // matrix (DIFF_FLAGS) enforces bit-identity between the two paths on every corpus program.
+    if std::env::var_os("BL_NO_NATPEEL").is_some() {
         return false;
     }
     arms.len() == 2

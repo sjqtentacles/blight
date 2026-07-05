@@ -2794,13 +2794,14 @@ int main(void) {
     /// collection, and its per-iteration cost is dominated by a `bl_nat_to_con` materialization of
     /// the structural `Nat` eliminator's scrutinee (a 24-byte `Succ` cell: 16-byte header + one
     /// 8-byte field) — the *generic* fallback for the disabled-by-default M25 zero-allocation `Nat`
-    /// peel (`BL_NAT_PEEL`, `llvm.rs::is_nat_eliminator_shape`). This is the evidence behind
+    /// peel (`llvm.rs::is_nat_eliminator_shape`; default-ON since the 2026-07-05 re-audit, with
+    /// `BL_NO_NATPEEL` as the standard escape hatch). This is the evidence behind
     /// `docs/roadmap-post-m6.md`'s "P9.2 header packing — deferred" update: the one workload that
     /// looks like "header overhead binds" is actually dominated by an already-built, currently
     /// gated-off optimization, not by header *layout* — so a header repack is not the highest-leverage
-    /// fix here, `BL_NAT_PEEL` is. This test pins the exact, measured mechanism so the finding cannot
+    /// fix here, the peel is. This test pins the exact, measured mechanism so the finding cannot
     /// silently rot: compiling the *same* small `iterate`/`adder` loop (`hofold_int.bl`'s shape) with
-    /// `BL_NAT_PEEL` off (default) vs on must (1) print the identical result, (2) differ in
+    /// the peel disabled (`BL_NO_NATPEEL=1`) vs on (default) must (1) print the identical result, (2) differ in
     /// `bytes_allocated` by **exactly** `fuel * 24` bytes (the materialized `Succ` cell's header +
     /// field, eliminated one-for-one per loop iteration), and (3) never *increase* the collection
     /// count.
@@ -2839,17 +2840,17 @@ int main(void) {
   return 0;
 }
 "#;
-                let without_peel = build_run_with_main(&anf, main_c, &dir, "c4_peel_off");
                 // SAFETY (test-only): sets a process-wide env var read only by this pure, synchronous
                 // compile step (`llvm::emit_object`'s `is_nat_eliminator_shape` check), immediately
-                // restored after.
+                // restored after. The peel is ON by default, so the "off" phase opts out.
                 unsafe {
-                    std::env::set_var("BL_NAT_PEEL", "1");
+                    std::env::set_var("BL_NO_NATPEEL", "1");
+                }
+                let without_peel = build_run_with_main(&anf, main_c, &dir, "c4_peel_off");
+                unsafe {
+                    std::env::remove_var("BL_NO_NATPEEL");
                 }
                 let with_peel = build_run_with_main(&anf, main_c, &dir, "c4_peel_on");
-                unsafe {
-                    std::env::remove_var("BL_NAT_PEEL");
-                }
 
                 fn field(s: &str, key: &str) -> u64 {
                     s.split_whitespace()
