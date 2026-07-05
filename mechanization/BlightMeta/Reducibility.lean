@@ -969,4 +969,22 @@ theorem canonicity {d : Nat} {e : Tm} {σ : Grade} {φ : Usage} (h : HasType [] 
     · obtain ⟨e'', hsteps, hcanon⟩ := ih hstep (Typed.preservation hty hstep)
       exact ⟨e'', .cons hstep hsteps, hcanon⟩
 
+/-- **The usage bound, iterated** (M-A.1's headline made multi-step): along ANY finite reduction
+    sequence the usage vector is monotonically non-increasing — `preservation`'s single-step
+    `Usage.Le` bound composed along `Steps` by `le_trans`. A program can never step its way into
+    using a linear resource more than its original typing licensed, no matter how many steps it
+    takes. -/
+theorem preservation_steps {Γ : List Ty} {d : Nat} {e e' : Tm} {A : Ty} {σ : Grade} {φ : Usage}
+    (h : HasType Γ d e A σ φ) (hsteps : Steps e e') :
+    ∃ φ', HasType Γ d e' A σ φ' ∧ Usage.Le φ' φ := by
+  induction hsteps generalizing φ with
+  | refl => exact ⟨φ, h, Usage.le_refl φ⟩
+  | cons h1 _ ih =>
+    obtain ⟨φ1, hφ1, hb1⟩ := preservation h h1
+    obtain ⟨φ2, hφ2, hb2⟩ := ih hφ1
+    exact ⟨φ2, hφ2, Usage.le_trans hb2 hb1⟩
+
+-- Sorry-freedom receipt for the iterated bound.
+#print axioms preservation_steps
+
 end BlightMeta

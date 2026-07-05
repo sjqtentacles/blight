@@ -272,6 +272,75 @@ theorem le_scale_omega (u : Usage) : Le u (scale Grade.omega u) := by
   | nil => trivial
   | cons g gs ih => exact ⟨Grade.self_le_mul_omega g, ih⟩
 
+/-- `scale` is monotone in the *grade* argument (pointwise `mul_mono_left`, lifted): scaling by a
+    smaller demand keeps the vector below. This is the M-A.1 bound's workhorse — a β-redex charges
+    the argument's usage at the body's binder demand `δ`, and `δ ≤ σ·ρ` caps it. -/
+theorem scale_le_scale {s s' : Grade} (h : s ≤ s') (u : Usage) :
+    Le (scale s u) (scale s' u) := by
+  induction u with
+  | nil => trivial
+  | cons g gs ih => exact ⟨Grade.mul_mono_left h g, ih⟩
+
+/-- The left summand sits below the sum (pointwise `self_le_add_left`), for equal lengths. -/
+theorem le_add_self_left {u v : Usage} (hlen : u.length = v.length) : Le u (add u v) := by
+  induction u generalizing v with
+  | nil => cases v with
+    | nil => trivial
+    | cons _ _ => simp at hlen
+  | cons g gs ih =>
+    cases v with
+    | nil => simp at hlen
+    | cons h hs =>
+      exact ⟨Grade.self_le_add_left g h, ih (by simpa using hlen)⟩
+
+/-- The right summand sits below the sum (pointwise `self_le_add_right`), for equal lengths. -/
+theorem le_add_self_right {u v : Usage} (hlen : u.length = v.length) : Le v (add u v) := by
+  induction u generalizing v with
+  | nil => cases v with
+    | nil => trivial
+    | cons _ _ => simp at hlen
+  | cons g gs ih =>
+    cases v with
+    | nil => simp at hlen
+    | cons h hs =>
+      exact ⟨Grade.self_le_add_right h g, ih (by simpa using hlen)⟩
+
+/-- `scale` distributes over `add` (the semiring's `mul_add`, lifted entrywise). -/
+theorem scale_add (s : Grade) (u v : Usage) :
+    scale s (add u v) = add (scale s u) (scale s v) := by
+  induction u generalizing v with
+  | nil => cases v <;> rfl
+  | cons g gs ih =>
+    cases v with
+    | nil => rfl
+    | cons h hs => simp only [add, scale, Grade.mul_add, ih]
+
+/-- Composed scalings multiply (the semiring's `mul_assoc`, lifted entrywise). -/
+theorem scale_scale (s t : Grade) (u : Usage) : scale s (scale t u) = scale (s.mul t) u := by
+  induction u with
+  | nil => rfl
+  | cons g gs ih => simp only [scale, Grade.mul_assoc, ih]
+
+/-- Scaling the zero vector is the zero vector (`g·0 = 0` entrywise). -/
+theorem scale_zero_vec (s : Grade) (n : Nat) : scale s (zero n) = zero n := by
+  induction n with
+  | zero => rfl
+  | succ n ih =>
+    have : s.mul Grade.zero = Grade.zero := by cases s <;> rfl
+    simp only [zero, scale, this, ih]
+
+/-- Scaling a unit vector scales its one live entry. -/
+theorem scale_unit (s : Grade) (i n : Nat) (g : Grade) :
+    scale s (unit i n g) = unit i n (s.mul g) := by
+  induction n generalizing i with
+  | zero => cases i <;> rfl
+  | succ n ih =>
+    cases i with
+    | zero => simp only [unit, scale, scale_zero_vec]
+    | succ i =>
+      have : s.mul Grade.zero = Grade.zero := by cases s <;> rfl
+      simp only [unit, scale, this, ih]
+
 /-- The converse of `le_get`: for equal-length vectors, agreeing pointwise at every slot is enough
     to conclude `Le`. Lets the substitution lemma build a whole-vector bound out of a per-index
     case analysis (the `var`-hits-the-substituted-slot case, where the comparison naturally

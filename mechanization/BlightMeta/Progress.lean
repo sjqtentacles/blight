@@ -111,26 +111,30 @@ theorem progress {Γ : List Ty} {d : Nat} {e : Tm} {A : Ty} {σ : Grade} {φ : U
     | true => exact Or.inr ⟨_, .hcomp_true⟩
     | false => exact Or.inr ⟨_, .hcomp_false⟩
 
-/-- **Preservation**: stepping never changes a term's type (nor the ambient grade or dimension
-    count it was checked at) — only the resulting *usage* is left existentially quantified, since
-    pinning it down tightly is exactly `Substitution.lean`'s `subst_lemma`'s own achievement
-    (its `Usage.Le` bound), a distinct fact from type preservation itself. The one case doing real
-    work is `beta`: it discharges `subst_lemma`'s `hget` side-condition using exactly the grade
-    arithmetic `Weakening.lean`'s `demand_le_scale`/`ambient_zero_usage` were built for (per their
-    doc comments, anticipating this composition). -/
+/-- **Graded preservation** (M-A.1): stepping never changes a term's type (nor the ambient grade
+    or dimension count it was checked at), and the resulting usage vector is PINNED — it only ever
+    *shrinks* (`Usage.Le φ' φ`), never grows. Reduction consumes resources; it cannot mint them.
+
+    The bound's provenance, case by case: congruence cases lift the IH bound through `add_mono`;
+    eliminator cases (`ite_tt`/`ff`, `hcomp_*`) drop a summand (`le_add_self_*`, with lengths from
+    `usage_length`); `beta` is the real content — `subst_lemma`'s own `Usage.Le` bound charges the
+    argument at the binder demand `δ`, and `δ ≤ σ·ρ` (`demand_le_scale`) caps `scale δ φa` by
+    `φa` itself through **ambient absorption** (`usage_absorbs_ambient`: a judgement's usage is
+    saturated at its own ambient, `σ·σ = σ`). -/
 theorem preservation {Γ : List Ty} {d : Nat} {e e' : Tm} {A : Ty} {σ : Grade} {φ : Usage}
-    (h : HasType Γ d e A σ φ) (hstep : Step e e') : ∃ φ', HasType Γ d e' A σ φ' := by
+    (h : HasType Γ d e A σ φ) (hstep : Step e e') :
+    ∃ φ', HasType Γ d e' A σ φ' ∧ Usage.Le φ' φ := by
   induction hstep generalizing A σ φ with
   | app1 _ ih =>
     cases h with
     | app hf0 ha0 =>
-      obtain ⟨φf', hφf'⟩ := ih hf0
-      exact ⟨_, HasType.app hφf' ha0⟩
+      obtain ⟨φf', hφf', hb⟩ := ih hf0
+      exact ⟨_, HasType.app hφf' ha0, Usage.add_mono hb (Usage.le_refl _)⟩
   | app2 _ _ ih =>
     cases h with
     | app hf0 ha0 =>
-      obtain ⟨φa', hφa'⟩ := ih ha0
-      exact ⟨_, HasType.app hf0 hφa'⟩
+      obtain ⟨φa', hφa', hb⟩ := ih ha0
+      exact ⟨_, HasType.app hf0 hφa', Usage.add_mono (Usage.le_refl _) hb⟩
   | @beta body a haval =>
     cases h with
     | app hf0 ha0 =>
@@ -145,36 +149,68 @@ theorem preservation {Γ : List Ty} {d : Nat} {e e' : Tm} {A : Ty} {σ : Grade} 
         have hget : (δ :: φf).get 0 ≤ σ.mul ρ := demand_le_scale hle hzero
         have hbody' : HasType (insertTy Γ 0 Adom) d body A σ (δ :: φf) := by
           rw [insertTy_zero]; exact hbody
-        obtain ⟨φ', hφ', _⟩ := subst_lemma ha0 hbody' (Nat.zero_le _) hget
-        exact ⟨φ', hφ'⟩
+        obtain ⟨φ', hφ', hbound⟩ := subst_lemma ha0 hbody' (Nat.zero_le _) hget
+        refine ⟨φ', hφ', ?_⟩
+        -- Massage the substitution bound into the app node's usage `add φf φa`.
+        rw [insertUsage_cons_zero, insertUsage_cons_zero] at hbound
+        have hmulz : δ.mul Grade.zero = Grade.zero := by cases δ <;> rfl
+        simp only [Usage.get, Usage.scale, Usage.add, hmulz, Grade.add_zero] at hbound
+        obtain ⟨-, htail⟩ := hbound
+        have hδ : δ ≤ σ.mul ρ := by simpa [Usage.get] using hget
+        have hcap : Usage.Le (Usage.scale δ φa) φa := by
+          have hmono := Usage.scale_le_scale hδ φa
+          rwa [usage_absorbs_ambient ha0] at hmono
+        exact Usage.le_trans htail (Usage.add_mono (Usage.le_refl _) hcap)
   | ite_cond _ ih =>
     cases h with
     | ite hc0 ht0 he0 =>
-      obtain ⟨φc', hφc'⟩ := ih hc0
-      exact ⟨_, HasType.ite hφc' ht0 he0⟩
+      obtain ⟨φc', hφc', hb⟩ := ih hc0
+      exact ⟨_, HasType.ite hφc' ht0 he0, Usage.add_mono hb (Usage.le_refl _)⟩
   | ite_tt =>
     cases h with
-    | ite _ ht0 he0 => exact ⟨_, ht0⟩
+    | @ite Γ0 d0 c0 t0 e0 σ0 A0 φc φt φe hc0 ht0 he0 =>
+      refine ⟨_, ht0, ?_⟩
+      have lc := usage_length hc0
+      have lt := usage_length ht0
+      have le := usage_length he0
+      have h1 : Usage.Le φt (Usage.add φt φe) :=
+        Usage.le_add_self_left (by rw [lt, le])
+      have h2 : Usage.Le (Usage.add φt φe) (Usage.add φc (Usage.add φt φe)) :=
+        Usage.le_add_self_right (by rw [Usage.length_add, lt, le, lc, Nat.min_self])
+      exact Usage.le_trans h1 h2
   | ite_ff =>
     cases h with
-    | ite _ ht0 he0 => exact ⟨_, he0⟩
+    | @ite Γ0 d0 c0 t0 e0 σ0 A0 φc φt φe hc0 ht0 he0 =>
+      refine ⟨_, he0, ?_⟩
+      have lc := usage_length hc0
+      have lt := usage_length ht0
+      have le := usage_length he0
+      have h1 : Usage.Le φe (Usage.add φt φe) :=
+        Usage.le_add_self_right (by rw [lt, le])
+      have h2 : Usage.Le (Usage.add φt φe) (Usage.add φc (Usage.add φt φe)) :=
+        Usage.le_add_self_right (by rw [Usage.length_add, lt, le, lc, Nat.min_self])
+      exact Usage.le_trans h1 h2
   | transp_base _ ih =>
     cases h with
     | transp hbase0 =>
-      obtain ⟨φ', hφ'⟩ := ih hbase0
-      exact ⟨_, HasType.transp hφ'⟩
+      obtain ⟨φ', hφ', hb⟩ := ih hbase0
+      exact ⟨_, HasType.transp hφ', hb⟩
   | transp_val _ =>
     cases h with
-    | transp hbase0 => exact ⟨_, hbase0⟩
+    | transp hbase0 => exact ⟨_, hbase0, Usage.le_refl _⟩
   | hcomp_true =>
     cases h with
-    | hcomp htube0 hbase0 => exact ⟨_, htube0⟩
+    | hcomp htube0 hbase0 =>
+      exact ⟨_, htube0,
+        Usage.le_add_self_left (by rw [usage_length htube0, usage_length hbase0])⟩
   | hcomp_false =>
     cases h with
-    | hcomp htube0 hbase0 => exact ⟨_, hbase0⟩
+    | hcomp htube0 hbase0 =>
+      exact ⟨_, hbase0,
+        Usage.le_add_self_right (by rw [usage_length htube0, usage_length hbase0])⟩
   | iabs_elim =>
     cases h with
-    | iabs hbody0 => exact ⟨_, dim_change hbody0 d⟩
+    | iabs hbody0 => exact ⟨_, dim_change hbody0 d, Usage.le_refl _⟩
 
 /-- **Full type safety**: combining `progress` and `preservation`, a well-typed closed term never
     "gets stuck" partway through evaluation — at every point it is either already a value, or it
@@ -186,7 +222,27 @@ theorem type_safety {d : Nat} {e : Tm} {A : Ty} {σ : Grade} {φ : Usage}
     Value e ∨ ∃ e' φ', Step e e' ∧ HasType [] d e' A σ φ' := by
   rcases progress h rfl with hval | ⟨e', hstep⟩
   · exact Or.inl hval
-  · obtain ⟨φ', hφ'⟩ := preservation h hstep
+  · obtain ⟨φ', hφ', -⟩ := preservation h hstep
     exact Or.inr ⟨e', φ', hstep, hφ'⟩
+
+/-- **Graded type safety** (M-A.2, the headline): the standard corollary, WITH the resource bound
+    — a step's successor is well-typed at the same type *and* its usage is bounded by the
+    original's (`Usage.Le φ' φ`). Iterating: along ANY reduction sequence the usage vector is
+    monotonically non-increasing, so a closed program can never step its way into using a linear
+    resource more than its typing licensed. -/
+theorem type_safety_graded {d : Nat} {e : Tm} {A : Ty} {σ : Grade} {φ : Usage}
+    (h : HasType [] d e A σ φ) :
+    Value e ∨ ∃ e' φ', Step e e' ∧ HasType [] d e' A σ φ' ∧ Usage.Le φ' φ := by
+  rcases progress h rfl with hval | ⟨e', hstep⟩
+  · exact Or.inl hval
+  · obtain ⟨φ', hφ', hb⟩ := preservation h hstep
+    exact Or.inr ⟨e', φ', hstep, hφ', hb⟩
+
+-- House-style sorry-freedom receipts (M-A.1/M-A.2): the acceptable axiom set is
+-- `{propext, Classical.choice, Quot.sound}` — never `sorryAx`.
+#print axioms usage_absorbs_ambient
+#print axioms preservation
+#print axioms type_safety
+#print axioms type_safety_graded
 
 end BlightMeta

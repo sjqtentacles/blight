@@ -280,6 +280,35 @@ theorem usage_length {Γ : List Ty} {d : Nat} {e : Tm} {A : Ty} {σ : Grade} {φ
   | transp _ ihbase => exact ihbase
   | hcomp _ _ ihtube ihbase => simp [Usage.length_add, ihtube, ihbase]
 
+/-- **Ambient absorption** (M-A.1's load-bearing fact): a judgement's usage vector is already
+    saturated at its own ambient — `scale σ φ = φ`. The leaves record `unit … σ` (and `σ·σ = σ`
+    by idempotency), and every composite rule combines sub-usages checked at ambients `σ`
+    absorbs (`σ·(σ·ρ) = (σ·σ)·ρ = σ·ρ`). Consequence: the β-substitution charge
+    `scale δ φa` with `δ ≤ σ·ρ` is capped by `φa` itself
+    (`scale_le_scale` + this at the argument's ambient), which is exactly what pins the
+    preservation usage bound `Usage.Le φ' φ`. -/
+theorem usage_absorbs_ambient {Γ : List Ty} {d : Nat} {e : Tm} {A : Ty} {σ : Grade} {φ : Usage}
+    (h : HasType Γ d e A σ φ) : Usage.scale σ φ = φ := by
+  induction h with
+  | @var Γ d i A σ hlk =>
+    rw [Usage.scale_unit, Grade.mul_idem]
+  | lam hbody hle ih =>
+    -- `scale σ (δ :: rest) = δ :: rest` — the tail component is the goal.
+    simp only [Usage.scale, List.cons.injEq] at ih
+    exact ih.2
+  | @app Γ d f a ρ σ A B φf φa hf ha ihf iha =>
+    rw [Usage.scale_add, ihf]
+    -- `scale σ φa = φa`: compose σ into the argument's own ambient `σ·ρ` and absorb there.
+    have : Usage.scale σ φa = Usage.scale (σ.mul (σ.mul ρ)) φa := by
+      rw [← Usage.scale_scale, iha]
+    rw [this, ← Grade.mul_assoc, Grade.mul_idem, iha]
+  | tt => exact Usage.scale_zero_vec _ _
+  | ff => exact Usage.scale_zero_vec _ _
+  | ite _ _ _ ihc iht ihe => rw [Usage.scale_add, Usage.scale_add, ihc, iht, ihe]
+  | iabs _ ihbody => exact ihbody
+  | transp _ ihbase => exact ihbase
+  | hcomp _ _ ihtube ihbase => rw [Usage.scale_add, ihtube, ihbase]
+
 /-- **Grade demotion**: a term checked at ambient `σ` also checks at any *smaller* ambient `σ'`
     (`σ' ≤ σ`), with usage that only *shrinks* (`Usage.Le`). This is the mechanized form of §1.2's
     "the layered/erasure reading is exactly what standard metatheory predicts" for the general

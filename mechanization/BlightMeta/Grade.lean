@@ -70,6 +70,10 @@ theorem add_assoc (g h k : Grade) : (g.add h).add k = g.add (h.add k) := by
 
 theorem mul_comm (g h : Grade) : g.mul h = h.mul g := by cases g <;> cases h <;> rfl
 
+/-- Multiplication is idempotent on `{0,1,ω}` — the fact that makes a judgement's usage vector
+    *absorb* its own ambient (`Weakening.lean`'s `usage_absorbs_ambient`). -/
+theorem mul_idem (g : Grade) : g.mul g = g := by cases g <;> rfl
+
 theorem mul_assoc (g h k : Grade) : (g.mul h).mul k = g.mul (h.mul k) := by
   cases g <;> cases h <;> cases k <;> rfl
 

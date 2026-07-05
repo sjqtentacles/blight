@@ -67,6 +67,19 @@ standard "well-typed closed programs never get stuck" guarantee, mechanized rath
 built to unlock, discharging its `hget` side-condition via `Weakening.lean`'s `demand_le_scale`/
 `ambient_zero_usage` — both written, per their own doc comments, in anticipation of this composition.
 
+**M-A.1/M-A.2 (graded preservation, 2026-07-05):** `preservation` now additionally **pins the
+usage vector** — the successor's usage is bounded, `Usage.Le φ' φ`: reduction consumes resources,
+never mints them. The load-bearing new fact is `Weakening.lean`'s `usage_absorbs_ambient` (a
+judgement's usage is saturated at its own ambient, `scale σ φ = φ` — grade idempotency `σ·σ = σ`
+propagated through every rule), which caps the β-case's `scale δ φa` charge by `φa` itself via
+`δ ≤ σ·ρ` (`scale_le_scale`). Headlines: `type_safety_graded` (the safety corollary carrying the
+bound) and `Reducibility.lean`'s `preservation_steps` (the bound iterated along any finite
+reduction sequence — usage is monotonically non-increasing under evaluation). All sorry-free
+(inline `#print axioms` receipts). M-A.3's "graded SN" is discharged by the existing composition
+`strong_normalization : HasType → SN` (the `Typed.of_has_type` erasure hop — `Step`/`SN` are
+grade-blind, so SN composes directly; per the master-plan review, no separate graded
+reducibility development is needed).
+
 **A genuine mechanized gotcha, not present in the non-cubical core:** `HasType.iabs`'s conclusion
 reuses its body's type `A` verbatim (this fragment has no `Line`/`PathP` type former to distinguish
 "a line of `A`s" from "an `A`"), so `.iabs body` can inhabit an *arrow* type without being a `lam`.
