@@ -140,7 +140,12 @@ ever *did* claim it, the claim could be falsified.
 ## The nearest open edges (where help is welcome)
 
 - **A dependent conversion relation** for `Dependent.lean`, to turn `preservation_false` into a
-  positive preservation. Well-scoped, real metatheory.
+  positive preservation. *Started (B2.1):* `DefEq` (reduction-join) is defined and machine-checked to
+  **repair the `preservation_false` counterexample** — the stepped term is well-typed at a
+  `DefEq`-equal type (`conversion_repairs_preservation_false`, sorry-free). The remaining step (B2.2)
+  is the general conversion-rule preservation; it is unusually tractable *here* because `Step` is
+  deterministic (so `DefEq` is confluent) and `pi` never reduces (so it is `DefEq`-injective — the
+  beta case's usual Church-Rosser obligation evaporates).
 - **A re-grading substitution lemma** for `Effects.lean`, to push `handle_perform_preserving` past
   base-type operation arguments (the wall characterized by `handle_perform_regrade_obstruction`).
 - **The kernel↔tower effect equivalence** — proving the CPS elaboration preserves the pure kernel's

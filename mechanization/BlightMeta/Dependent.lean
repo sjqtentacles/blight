@@ -1513,5 +1513,73 @@ theorem preservation_false :
   obtain ⟨φ, hgood⟩ := ctr_good
   exact ctr_bad (pres hgood ctr_step)
 
+-- ══════════════════════════════════════════════════════════════════════════════════════════════
+-- B2.1: definitional equality, and the conversion repair of `preservation_false`.
+--
+-- `preservation_false` shows subject reduction fails ON THE NOSE for the conversion-free,
+-- syntax-directed presentation: `app ctrF ctrA : ctrA` steps to `app ctrF ctrA'` whose only type is
+-- `ctrA' = subst0 tt (var 0) = tt`, and `tt ≠ ite tt tt ff = ctrA`. The standard remedy is a
+-- CONVERSION rule identifying definitionally-equal types. Here we (1) define definitional equality
+-- `DefEq` as reduction-join, and (2) machine-check that it repairs THIS counterexample: the stepped
+-- term is well-typed at `ctrA'`, and `DefEq ctrA ctrA'`, so a conversion rule would retype it at
+-- `ctrA`. (Full conversion-rule preservation is B2.2 — tractable here because `Step` is
+-- deterministic, so definitional equality is confluent, and `pi` never reduces, so it is injective
+-- under `DefEq`; see docs/research-frontier.md.)
+-- ══════════════════════════════════════════════════════════════════════════════════════════════
+
+/-- Reflexive-transitive closure of `Step` (multi-step reduction). -/
+inductive Steps : Expr → Expr → Prop where
+  | refl (a : Expr) : Steps a a
+  | tail {a b c : Expr} (hab : Steps a b) (hbc : Step b c) : Steps a c
+
+/-- Definitional equality as reduction-join: `a` and `b` share a common reduct. -/
+def DefEq (a b : Expr) : Prop := ∃ c, Steps a c ∧ Steps b c
+
+theorem DefEq.refl (a : Expr) : DefEq a a := ⟨a, Steps.refl a, Steps.refl a⟩
+
+theorem DefEq.symm {a b : Expr} (h : DefEq a b) : DefEq b a :=
+  let ⟨c, hac, hbc⟩ := h; ⟨c, hbc, hac⟩
+
+/-- A single reduction step is a definitional equality. -/
+theorem defeq_of_step {a b : Expr} (h : Step a b) : DefEq a b :=
+  ⟨b, Steps.tail (Steps.refl a) h, Steps.refl b⟩
+
+/-- `ctrF` has type `pi ω bool (var 0)` — factored from `ctr_good`'s construction for reuse. -/
+private theorem ctrF_ty :
+    ∃ rest, HasType CtrGam ctrF (pi Grade.omega bool (var 0)) Grade.one rest := by
+  have hf : HasType [bool, CtrP] (var 1) (pi Grade.one bool (var 0)) Grade.one _ :=
+    HasType.var (Γ := [bool, CtrP]) (i := 1) (σ := Grade.one) (A := pi Grade.one bool (var 0)) rfl
+  have haBody : HasType [bool, CtrP] (var 0) bool (Grade.one.mul Grade.one) _ :=
+    HasType.var (Γ := [bool, CtrP]) (i := 0) (σ := Grade.one.mul Grade.one) (A := bool) rfl
+  have hbody := HasType.app hf haBody
+  have hlen := HasType.usage_length hbody
+  obtain ⟨δ, rest, hcons⟩ :
+      ∃ δ rest, (Usage.add (Usage.unit 1 [bool, CtrP].length Grade.one)
+        (Usage.unit 0 [bool, CtrP].length (Grade.one.mul Grade.one))) = δ :: rest := by
+    generalize hg : (Usage.add (Usage.unit 1 [bool, CtrP].length Grade.one)
+      (Usage.unit 0 [bool, CtrP].length (Grade.one.mul Grade.one))) = φb
+    rw [hg] at hlen
+    cases φb with
+    | nil => simp at hlen
+    | cons x xs => exact ⟨x, xs, rfl⟩
+  have hbody' : HasType [bool, CtrP] ctrBody (var 0) Grade.one (δ :: rest) := by
+    rw [← hcons]; exact hbody
+  exact ⟨rest, HasType.lam (ρ := Grade.omega) hbody' (by cases δ <;> decide)⟩
+
+/-- **B2.1 — conversion repairs `preservation_false`.** The very term on which on-the-nose subject
+    reduction fails (`app ctrF ctrA'`, the `Step.app2` reduct of the well-typed `app ctrF ctrA`) IS
+    well-typed — at `ctrA' = tt` — and `DefEq ctrA ctrA'`. So a conversion rule
+    `Γ ⊢ e : A → DefEq A B → Γ ⊢ e : B` retypes it at the original `ctrA`, exactly closing the gap
+    `preservation_false` exposes. -/
+theorem conversion_repairs_preservation_false :
+    (∃ φ, HasType CtrGam (app ctrF ctrA') ctrA' Grade.one φ) ∧ DefEq ctrA ctrA' := by
+  refine ⟨?_, defeq_of_step Step.ite_tt⟩
+  obtain ⟨rest, hf⟩ := ctrF_ty
+  exact ⟨_, HasType.app hf HasType.tt⟩
+
+-- Axiom audit (B2.1): the negative and its conversion repair are both sorry-free.
+#print axioms preservation_false
+#print axioms conversion_repairs_preservation_false
+
 end Dep
 end BlightMeta
