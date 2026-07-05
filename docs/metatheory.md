@@ -482,6 +482,25 @@ negative results feeding the checkpoint in §2.6. See
 [docs/metatheory-mechanized.md](metatheory-mechanized.md) for the full scope and simplifications
 (single operation, closed single-label row).
 
+**RB1 (post-P1): the fix, mechanized — and where it stops.** The prescribed remedy — bind the
+continuation at its *function* type — was carried out. `Effects.lean` now retypes `HasType.handle`'s
+op-clause continuation binder to `.arr ω opCod B` (exactly the shipping kernel's `k : Π^ω(_:Bᵢ). C`,
+`check.rs`), keeping the old value-typed rule as a frozen `HasTypeVC` so the `handle_perform_not_preserving`
+negative *remains* proved as the documented "before". Against the retyped rule the result is nuanced,
+and every part is `sorry`-free:
+- **`handle_perform_preserving` / `preservation` (positive)** — the deep-handler reduct is well-typed,
+  and full subject reduction holds over the *entire* `Step` relation, for **closed terms with a
+  base-type operation argument (`opDom = bool`)**, at runtime ambient `σ ∈ {ω,0}`, general in the
+  continuation grade. `handle_perform_preserving_nonvacuous` pins an anti-vacuity witness whose
+  op-clause genuinely *applies* the captured continuation.
+- **`handle_perform_regrade_obstruction` (sharp negative / scope)** — for a *higher-typed* operation
+  argument (`opDom = arrow`) the reduct still types, but only through an arrow **re-grading** (`1→ω`)
+  that the substitution lemma structurally cannot supply (the performed value does not inhabit its
+  declared arrow type at the raised ambient). So the residual gap is an obstruction to the *proof
+  method*, precisely characterized — not a refutation. Net: first-class continuation typing recovers
+  effect subject reduction for base-type operations; the general case is a documented, machine-pinned
+  open edge.
+
 ### 2.6 The fused-theory checkpoint (P4)
 
 The v0.1 proof track (P1–P3) was a timeboxed probe of the two "research-bet" corners — quantities ×
@@ -499,7 +518,10 @@ is a *data-driven* decision, because the proof track produced two concrete machi
 - **Deep-handler effect subject reduction is false against a value-typed continuation** (P1,
   `Effects.lean`'s `handle_perform_not_preserving`, `[propext]`). The static `handle` rule types the
   continuation as a value (`opCod`), not a function (`opCod → B`), so the faithful reduction is not
-  type-preserving.
+  type-preserving. *(Refined post-P1 by RB1, §2.5: retyping the continuation to `opCod → B` — the
+  rule the kernel already ships — recovers `preservation` for base-type operations, `sorry`-free,
+  and machine-characterizes the remaining higher-type obstruction. The stratification decision below
+  is unchanged: the recovery is partial and does not re-open the unified fusion.)*
 
 What **is** machine-checked and stands (all zero-`sorryAx`): SN + canonicity for the constant-family
 Kan + graded fragment (`Reducibility.lean`); the grade-skeleton preservation across Kan lines and the
