@@ -176,9 +176,11 @@ pub enum RCofib {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RTerm {
     Var(usize),
-    /// A universe at a *concrete* level (the only levels the core fragment needs). Level variables
-    /// are declined at translation time.
-    Univ(u32),
+    /// A universe at a symbolic [`RLevel`] (T2.3): concrete `Suc`-chains for the closed fragment,
+    /// plus prenex level *variables* for level-polymorphic judgements (re-verified under the
+    /// `n_levels` the leveled door is told; a `Var` out of that scope is **Rejected** at formation,
+    /// mirroring the kernel's `level_wf` gate — no longer declined at translation time).
+    Univ(RLevel),
     Pi(RGrade, Box<RTerm>, Box<RTerm>),
     Lam(Box<RTerm>),
     App(Box<RTerm>, Box<RTerm>),
@@ -302,7 +304,7 @@ pub enum RTerm {
 pub fn from_kernel(t: &Term) -> Result<RTerm, RecheckError> {
     Ok(match t {
         Term::Var(i) => RTerm::Var(*i),
-        Term::Univ(l) => RTerm::Univ(level_to_nat(l)?),
+        Term::Univ(l) => RTerm::Univ(rlevel_from_kernel(l)),
         Term::Pi(g, a, b) => RTerm::Pi(
             (*g).into(),
             Box::new(from_kernel(a)?),
@@ -499,13 +501,203 @@ fn cofib_from_kernel(c: &blight_kernel::term::Cofib) -> RCofib {
     }
 }
 
-/// Collapse a concrete kernel [`Level`] to a natural number, declining on level *variables* (the
-/// core fragment the prelude needs uses only concrete levels).
-fn level_to_nat(l: &Level) -> Result<u32, RecheckError> {
+// =================================================================================================
+// Symbolic universe levels (T2.3). The re-checker's OWN level representation and operations —
+// structurally parallel to the kernel's `Level`, but a distinct type with independently-written
+// order/lub/well-formedness, so the second checker re-derives every level decision itself. The
+// decision RELATION is the spec'd sound symbolic order (kernel `check.rs` `level_leq` doc-comment,
+// rules restated below); parity requires agreeing on decisions, and independence requires deriving
+// them from the rules, not sharing the code.
+// =================================================================================================
+
+/// The re-checker's symbolic universe level: `0`, successor, least upper bound, or a prenex level
+/// variable (de Bruijn index into the level context a leveled judgement is checked under).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RLevel {
+    Zero,
+    Suc(Box<RLevel>),
+    Max(Box<RLevel>, Box<RLevel>),
+    Var(usize),
+}
+
+/// Build a concrete [`RLevel`] from a natural number (a canonical `Suc`-chain).
+pub(crate) fn rlevel_of_nat(n: u32) -> RLevel {
+    let mut l = RLevel::Zero;
+    for _ in 0..n {
+        l = RLevel::Suc(Box::new(l));
+    }
+    l
+}
+
+/// The successor level.
+pub(crate) fn rlevel_suc(l: &RLevel) -> RLevel {
+    RLevel::Suc(Box::new(l.clone()))
+}
+
+/// Translate a kernel [`Level`] — **total**: level variables are modeled (T2.3), no longer
+/// declined; their well-formedness (`Var u` valid iff `u < n_levels`) is the *type checker's*
+/// obligation, gated where the level is consumed (`RTerm::Univ` formation), because only the
+/// checker knows the judgement's declared prenex level count.
+fn rlevel_from_kernel(l: &Level) -> RLevel {
     match l {
-        Level::Zero => Ok(0),
-        Level::Suc(inner) => Ok(level_to_nat(inner)? + 1),
-        Level::Max(a, b) => Ok(level_to_nat(a)?.max(level_to_nat(b)?)),
-        Level::Var(_) => Err(RecheckError::Declined("universe level variable".into())),
+        Level::Zero => RLevel::Zero,
+        Level::Suc(inner) => RLevel::Suc(Box::new(rlevel_from_kernel(inner))),
+        Level::Max(a, b) => RLevel::Max(
+            Box::new(rlevel_from_kernel(a)),
+            Box::new(rlevel_from_kernel(b)),
+        ),
+        Level::Var(u) => RLevel::Var(*u),
+    }
+}
+
+/// The sound symbolic order `a ≤ b` — true only when it holds for **every** assignment of the level
+/// variables; where the order cannot be decided structurally it answers `false` (a spurious `false`
+/// only rejects, never accepts). Decides the same relation as the kernel's `level_leq`, written here
+/// as a case split on the *pair*:
+/// - `0 ≤ b`; `max(a₁,a₂) ≤ b` iff both summands are (max is the least upper bound);
+/// - otherwise `a ≤ max(b₁,b₂)` if `a` is under either arm (sound: each arm is `≤` the max);
+/// - `suc a' ≤ suc b'` iff `a' ≤ b'`; a variable `u ≤ suc b'` only by descending (`u ≤ b'`);
+/// - `u ≤ v` iff `u = v` (distinct variables are incomparable without constraints);
+/// - everything else (`suc _ ≤ 0`/`≤ v`, `u ≤ 0`) is `false`.
+pub(crate) fn rlevel_leq(a: &RLevel, b: &RLevel) -> bool {
+    match (a, b) {
+        (RLevel::Zero, _) => true,
+        (RLevel::Max(a1, a2), _) => rlevel_leq(a1, b) && rlevel_leq(a2, b),
+        // `a` is now `Suc`/`Var`. A max on the right needs only one arm to dominate `a`.
+        (_, RLevel::Max(b1, b2)) => rlevel_leq(a, b1) || rlevel_leq(a, b2),
+        (RLevel::Suc(a1), RLevel::Suc(b1)) => rlevel_leq(a1, b1),
+        (RLevel::Var(u), RLevel::Var(v)) => u == v,
+        (RLevel::Var(_), RLevel::Suc(b1)) => rlevel_leq(a, b1),
+        // `suc _ ≤ 0`, `suc _ ≤ v`, `u ≤ 0`: false under some assignment.
+        (RLevel::Suc(_), RLevel::Zero | RLevel::Var(_)) | (RLevel::Var(_), RLevel::Zero) => false,
+    }
+}
+
+/// The least upper bound, in the same canonical form the kernel's `level_max` produces: a dominated
+/// summand is dropped (`a ≤ b ⟹ max = b`), and a residual `Max` node is built only when neither
+/// side dominates. On concrete levels this returns the larger `Suc`-chain — identical to the
+/// kernel's — so recheck-formed `Pi`/`Sigma` levels compare structurally equal to kernel-formed
+/// ones (conversion on `Univ` is structural, mirroring the kernel).
+pub(crate) fn rlevel_max(a: &RLevel, b: &RLevel) -> RLevel {
+    if rlevel_leq(a, b) {
+        return b.clone();
+    }
+    if rlevel_leq(b, a) {
+        return a.clone();
+    }
+    RLevel::Max(Box::new(a.clone()), Box::new(b.clone()))
+}
+
+/// Well-formedness in a context of `n_levels` prenex level variables: every `Var(u)` must satisfy
+/// `u < n_levels`. This is the soundness gate on the only user-supplied level (the one carried by
+/// `Univ`) — an out-of-scope variable would let `Univ` inhabit an arbitrary universe.
+pub(crate) fn rlevel_wf(l: &RLevel, n_levels: usize) -> bool {
+    match l {
+        RLevel::Zero => true,
+        RLevel::Suc(a) => rlevel_wf(a, n_levels),
+        RLevel::Max(a, b) => rlevel_wf(a, n_levels) && rlevel_wf(b, n_levels),
+        RLevel::Var(u) => *u < n_levels,
+    }
+}
+
+// =================================================================================================
+// White-box tests for the symbolic level operations (T2.3). Expected values are derived from the
+// SEMANTIC reading (`a ≤ b` for every variable assignment), not transcribed from the kernel — the
+// independent derivation is the point; the cross-checker parity is pinned separately
+// (`tests/level_parity.rs` drives both checkers' doors over random levels).
+// =================================================================================================
+#[cfg(test)]
+mod level_tests {
+    use super::*;
+
+    fn v(u: usize) -> RLevel {
+        RLevel::Var(u)
+    }
+    fn suc(l: RLevel) -> RLevel {
+        RLevel::Suc(Box::new(l))
+    }
+    fn max(a: RLevel, b: RLevel) -> RLevel {
+        RLevel::Max(Box::new(a), Box::new(b))
+    }
+
+    /// Concrete levels: the order coincides with `≤` on naturals; reflexive.
+    #[test]
+    fn rlevel_leq_concrete() {
+        for a in 0..4u32 {
+            for b in 0..4u32 {
+                assert_eq!(
+                    rlevel_leq(&rlevel_of_nat(a), &rlevel_of_nat(b)),
+                    a <= b,
+                    "concrete {a} ≤ {b}"
+                );
+            }
+        }
+    }
+
+    /// Variables: reflexive; distinct variables incomparable; `u ≤ suc u`; never `suc u ≤ u`;
+    /// never `u ≤ 0`; `0 ≤ u`.
+    #[test]
+    fn rlevel_leq_variables() {
+        assert!(rlevel_leq(&v(0), &v(0)));
+        assert!(!rlevel_leq(&v(0), &v(1)));
+        assert!(!rlevel_leq(&v(1), &v(0)));
+        assert!(rlevel_leq(&v(0), &suc(v(0))));
+        assert!(!rlevel_leq(&suc(v(0)), &v(0)));
+        assert!(!rlevel_leq(&v(0), &RLevel::Zero));
+        assert!(rlevel_leq(&RLevel::Zero, &v(0)));
+        // A variable is not ≤ a *different* variable even under sucs: u ≤ suc v fails for u := v+2.
+        assert!(!rlevel_leq(&v(0), &suc(v(1))));
+    }
+
+    /// Max: least-upper-bound laws — each arm ≤ the max; the max ≤ a common upper bound;
+    /// symmetric maxes mutually ≤ (the order sees through argument swap).
+    #[test]
+    fn rlevel_leq_max_laws() {
+        let uv = || max(v(0), v(1));
+        let vu = || max(v(1), v(0));
+        assert!(rlevel_leq(&v(0), &uv()));
+        assert!(rlevel_leq(&v(1), &uv()));
+        assert!(rlevel_leq(&uv(), &vu()), "max(u,v) ≤ max(v,u)");
+        assert!(rlevel_leq(&vu(), &uv()));
+        assert!(rlevel_leq(&uv(), &suc(uv())));
+        // max(u, 0) ≡ u both ways (0 is the unit).
+        assert!(rlevel_leq(&max(v(0), RLevel::Zero), &v(0)));
+        assert!(rlevel_leq(&v(0), &max(v(0), RLevel::Zero)));
+        // NOT ≤: max(u,v) ≰ u alone (v may exceed u).
+        assert!(!rlevel_leq(&uv(), &v(0)));
+    }
+
+    /// The documented *incompleteness* is only ever a spurious `false` (safe): the semantically
+    /// true `suc (max u v) ≤ max (suc u) (suc v)` is not decided structurally — pin it so a future
+    /// "improvement" that flips it (diverging from the kernel's decisions) is caught.
+    #[test]
+    fn rlevel_leq_known_incompleteness_is_false() {
+        let l = suc(max(v(0), v(1)));
+        let r = max(suc(v(0)), suc(v(1)));
+        assert!(!rlevel_leq(&l, &r), "structural order stays incomplete here (kernel parity)");
+        // The reverse direction IS decided (max-left splits, each summand descends).
+        assert!(rlevel_leq(&r, &l), "max(suc u, suc v) ≤ suc (max u v) is decided");
+    }
+
+    /// `rlevel_max` canonical form: dominated summands are dropped (concrete pairs return the
+    /// larger chain; `max(l, 0)` returns `l`), and only incomparable pairs build a `Max` node.
+    #[test]
+    fn rlevel_max_canonical() {
+        assert_eq!(rlevel_max(&rlevel_of_nat(1), &rlevel_of_nat(3)), rlevel_of_nat(3));
+        assert_eq!(rlevel_max(&rlevel_of_nat(3), &rlevel_of_nat(1)), rlevel_of_nat(3));
+        assert_eq!(rlevel_max(&v(0), &RLevel::Zero), v(0));
+        assert_eq!(rlevel_max(&v(0), &suc(v(0))), suc(v(0)));
+        assert_eq!(rlevel_max(&v(0), &v(1)), max(v(0), v(1)), "incomparable ⟹ residual Max");
+    }
+
+    /// `rlevel_wf`: the gate is exactly `u < n_levels`, recursively through `Suc`/`Max`.
+    #[test]
+    fn rlevel_wf_gate() {
+        assert!(rlevel_wf(&rlevel_of_nat(7), 0), "closed levels need no context");
+        assert!(rlevel_wf(&v(0), 1));
+        assert!(!rlevel_wf(&v(1), 1));
+        assert!(!rlevel_wf(&suc(v(1)), 1), "wf recurses under suc");
+        assert!(!rlevel_wf(&max(v(0), v(1)), 1), "wf recurses under max");
+        assert!(rlevel_wf(&max(v(0), v(1)), 2));
     }
 }

@@ -1,0 +1,22 @@
+; Universe polymorphism (T2): one `id`, every universe.
+;
+; `define-level` declares a definition under PRENEX universe-level variables (`u`), checked once by
+; the trusted kernel's leveled door (`check_top_leveled`) and independently re-verified by the
+; re-checker's leveled door — then `inst` stamps out monomorphic copies at concrete levels. The
+; prenex design never forms a first-class `∀u.` type, so no impredicativity sneaks in.
+(defdata Nat () (Zero) (Succ (n Nat)))
+
+; The level-polymorphic identity: `id : ∀u. (A : Type u) → A → A`.
+(define-level id (u)
+  (Pi ((A (Type u) omega)) (Pi ((x A omega)) A))
+  (lam (A x) x))
+
+; Instantiate at level 0 (values): `(inst id 0) Nat Zero : Nat`.
+(define id-at-nat (the Nat ((inst id 0) Nat Zero)))
+
+; Instantiate at level 1 (types): `(inst id 1) (Type 0) Nat : Type 0` — the same definition, one
+; universe up, applied to a *type*.
+(define id-at-type (the (Type 0) ((inst id 1) (Type 0) Nat)))
+
+; A ground result so the example runs: 2, via the level-0 identity.
+(define main (the Nat (Succ (Succ ((inst id 0) Nat Zero)))))

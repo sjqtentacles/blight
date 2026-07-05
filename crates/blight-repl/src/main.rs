@@ -596,7 +596,15 @@ fn recheck_before_emit(env: &ElabEnv, outcomes: &[Outcome]) -> Result<(), String
     let mut declined = 0usize;
     for (name, term, ty) in env.typed_globals() {
         let j = Judgement::HasType { term, ty };
-        match blight_recheck::recheck_judgement(sig, &j) {
+        // A `define-level` global was kernel-checked under its prenex level variables
+        // (`check_top_leveled`), so its independent re-verification runs through the leveled door
+        // with the same `n_levels` — the elaborator is the source of truth for that count (T2.3).
+        // Every other global goes through the ordinary (0-level) door.
+        let verdict = match env.level_arity(&name) {
+            Some(n_levels) => blight_recheck::recheck_judgement_leveled(sig, &j, n_levels),
+            None => blight_recheck::recheck_judgement(sig, &j),
+        };
+        match verdict {
             Ok(()) => checked += 1,
             Err(blight_recheck::RecheckError::Declined(_)) => declined += 1,
             Err(blight_recheck::RecheckError::Rejected(m)) => {

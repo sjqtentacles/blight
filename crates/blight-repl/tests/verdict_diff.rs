@@ -103,13 +103,17 @@ fn cached_verdict(
     name: &str,
     term: blight_kernel::Term,
     ty: blight_kernel::Term,
+    n_levels: usize,
 ) -> &'static str {
     let key = judgement_key(name, &term, &ty);
     if let Some(v) = cache.lock().unwrap().get(&key) {
         return v;
     }
     let j = blight_kernel::Judgement::HasType { term, ty };
-    let verdict = match blight_recheck::recheck_judgement(sig, &j) {
+    // A `define-level` global (n_levels > 0) is re-verified through the leveled door with the
+    // prenex count the elaborator recorded — the kernel checked it through `check_top_leveled`
+    // under the same count (T2.3). n_levels == 0 is the ordinary door.
+    let verdict = match blight_recheck::recheck_judgement_leveled(sig, &j, n_levels) {
         Ok(()) => "Ok",
         Err(blight_recheck::RecheckError::Declined(_)) => "Declined",
         Err(blight_recheck::RecheckError::Rejected(m)) => {
@@ -176,7 +180,8 @@ fn verdict_block(label: &str, source: &str, cache: &VerdictCache) -> String {
             // so exactly the unit's own unique globals miss and report `Skipped`.
             cached_lookup(cache, &name, &term, &ty).unwrap_or("Skipped")
         } else {
-            cached_verdict(cache, sig, &name, term, ty)
+            let n_levels = env.level_arity(&name).unwrap_or(0);
+            cached_verdict(cache, sig, &name, term, ty, n_levels)
         };
         report.push_str(&format!("GLOBAL {label} {name} {verdict}\n"));
     }

@@ -2076,6 +2076,15 @@ fn elab(
             // 5) a global definition: inline it. When a type is known, wrap in an ascription so
             //    the kernel can infer through applications of an otherwise-bare `Lam`.
             if let Some((t, ty)) = env.globals.get(name) {
+                // A `define-level` global's stored type carries `Level::Var`s, which are only
+                // well-formed under its prenex binders — a bare reference would surface as a
+                // confusing universe error downstream. Require the explicit instantiation (T2.2).
+                if let Some(arity) = env.level_arity(name) {
+                    return Err(ElabError::BadForm(format!(
+                        "`{name}` is level-polymorphic ({arity} level parameter(s)) — \
+                         instantiate it with `(inst {name} ℓ …)`"
+                    )));
+                }
                 return Ok(match ty {
                     Some(ty) => Term::Ann(Rc::new(t.clone()), Rc::new(ty.clone())),
                     None => t.clone(),

@@ -72,9 +72,10 @@ use blight_kernel::{Judgement, Proof, Signature};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecheckError {
     /// The judgement is outside the supported core fragment (cubical `Glue`/partial-element/system,
-    /// a `foreign` postulate, or a universe-level variable was reached). Effects/handlers, `Int`,
-    /// and partiality-via-`Delay` are modeled and checked, not declined. This is an honest refusal,
-    /// **not** a rejection of the proof.
+    /// or a `foreign` postulate was reached). Effects/handlers, `Int`, partiality-via-`Delay`, and
+    /// symbolic universe levels (T2.3 — including prenex level variables, re-verified under the
+    /// leveled door's told `n_levels`) are modeled and checked, not declined. This is an honest
+    /// refusal, **not** a rejection of the proof.
     Declined(String),
     /// The independent checker genuinely *rejected* the term: it does not have the claimed type
     /// under this crate's own rules. If the kernel accepted it, the two checkers disagree — a
@@ -103,15 +104,30 @@ pub type RecheckResult = Result<(), RecheckError>;
 /// fragment; and [`RecheckError::Rejected`] when the independent checker disagrees with the
 /// kernel (a soundness alarm).
 pub fn recheck_judgement(sig: &Signature, judgement: &Judgement) -> RecheckResult {
+    recheck_judgement_leveled(sig, judgement, 0)
+}
+
+/// Like [`recheck_judgement`], but re-verified under `n_levels` prenex universe-level variables
+/// (T2.3) — the re-checker's twin of the kernel's `check_top_leveled` door for a level-polymorphic
+/// definition. `n_levels` must be *told* by the caller (the elaborator records each
+/// `define-level`'s binder count): a faithful independent re-checker cannot re-derive it from the
+/// term, because scanning for the largest `Level::Var` would make the well-formedness gate
+/// vacuous. `n_levels == 0` is exactly [`recheck_judgement`].
+pub fn recheck_judgement_leveled(
+    sig: &Signature,
+    judgement: &Judgement,
+    n_levels: usize,
+) -> RecheckResult {
     let Judgement::HasType { term, ty } = judgement;
     // Translate both the term and its claimed type into this crate's own `RTerm`, declining if
-    // either touches an unsupported variant.
+    // either touches an unsupported variant. Universe levels translate totally (level variables
+    // are modeled, T2.3); their scope is gated by the checker below against `n_levels`.
     let rterm = term::from_kernel(term)?;
     let rty = term::from_kernel(ty)?;
     // The general typing door: re-derive the effect-row + grade discipline (so a mis-graded handler
     // is Rejected), but do *not* demand top-level purity — a buildable definition may legitimately
     // be partial/effectful (the kernel's `Checker` allows it; only a `Proof` must be pure).
-    typecheck::Recheck::new(sig).check_top(&rterm, &rty, false)
+    typecheck::Recheck::new(sig).check_top_leveled(&rterm, &rty, false, n_levels)
 }
 
 /// Re-verify a kernel [`Judgement`] *as a proof obligation*: like [`recheck_judgement`] but
@@ -121,10 +137,21 @@ pub fn recheck_judgement(sig: &Signature, judgement: &Judgement) -> RecheckResul
 /// is exposed so the purity re-derivation can be exercised on a hand-built `Judgement` (a `Proof`
 /// itself can never be forged with an impure conclusion, by construction).
 pub fn recheck_judgement_as_proof(sig: &Signature, judgement: &Judgement) -> RecheckResult {
+    recheck_judgement_as_proof_leveled(sig, judgement, 0)
+}
+
+/// The proof-strength door under `n_levels` prenex level variables (T2.3): purity is re-derived
+/// *and* every universe level is re-verified in scope — the second opinion on the kernel's
+/// `check_top_leveled`.
+pub fn recheck_judgement_as_proof_leveled(
+    sig: &Signature,
+    judgement: &Judgement,
+    n_levels: usize,
+) -> RecheckResult {
     let Judgement::HasType { term, ty } = judgement;
     let rterm = term::from_kernel(term)?;
     let rty = term::from_kernel(ty)?;
-    typecheck::Recheck::new(sig).check_top(&rterm, &rty, true)
+    typecheck::Recheck::new(sig).check_top_leveled(&rterm, &rty, true, n_levels)
 }
 
 /// Re-verify the conclusion of a kernel [`Proof`]. A `Proof` is the kernel's certified
@@ -176,6 +203,52 @@ mod tests {
     }
     fn zero() -> Term {
         Term::Con(ConName("Zero".into()), vec![])
+    }
+
+    /// T2.3 headline: the re-checker **agrees** (Ok — not Declined, not Rejected) on the
+    /// level-polymorphic identity, the exact judgement the kernel pin
+    /// `level_polymorphic_identity_checks` certifies through `check_top_leveled`:
+    /// `λA.λx.x : Π^ω(A : Univ u). Π^ω(x : A). A` under one prenex level variable. This is the
+    /// two-checker guarantee extended to the level-polymorphic fragment — and the same judgement is
+    /// (a) *kernel*-verified here first, so the pin re-checks a genuinely kernel-accepted
+    /// judgement, and (b) Rejected by the recheck with **no** level context, so the agreement is
+    /// not vacuous.
+    #[test]
+    fn recheck_agrees_on_level_poly_identity() {
+        use blight_kernel::Grade;
+        let ty = || {
+            Term::Pi(
+                Grade::Omega,
+                Rc::new(Term::Univ(Level::Var(0))),
+                Rc::new(Term::Pi(
+                    Grade::Omega,
+                    Rc::new(Term::Var(0)),
+                    Rc::new(Term::Var(1)),
+                )),
+            )
+        };
+        let id = || Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Var(0)))));
+        assert!(
+            blight_kernel::check_top_leveled(Signature::empty(), id(), ty(), 1).is_ok(),
+            "the kernel accepts the level-polymorphic identity (premise of the parity pin)"
+        );
+        let j = Judgement::HasType {
+            term: id(),
+            ty: ty(),
+        };
+        let sig = Signature::empty();
+        assert_eq!(
+            recheck_judgement_leveled(&sig, &j, 1),
+            Ok(()),
+            "the independent re-checker agrees under u : Level"
+        );
+        assert!(
+            matches!(
+                recheck_judgement(&sig, &j),
+                Err(RecheckError::Rejected(_))
+            ),
+            "with no level context the same judgement is Rejected (gate is real)"
+        );
     }
 
     /// `from_kernel` declines (never rejects, never silently passes) the Glue univalence layer.
@@ -255,15 +328,66 @@ mod tests {
         ));
     }
 
-    /// `from_kernel` declines a universe *level variable* (the supported fragment uses concrete
-    /// levels only).
+    /// T2.3: universe level variables are **modeled**, no longer declined at translation — the
+    /// trio that replaces the pre-T2.3 `from_kernel_declines_level_variable` pin:
+    /// 1. `from_kernel` translates `Univ (Var 0)` totally;
+    /// 2. the **unleveled** door *Rejects* it (out-of-scope level variable — mirroring the kernel's
+    ///    `check_top_with`, which errors on a var-level with no level context; an honest Decline
+    ///    would be wrong now that levels are modeled);
+    /// 3. the **leveled** door with `n_levels = 1` re-verifies `Univ u : Univ (suc u)` — Ok.
     #[test]
-    fn from_kernel_declines_level_variable() {
+    fn level_variable_modeled_rejected_unleveled_ok_leveled() {
         let t = Term::Univ(Level::Var(0));
-        assert!(matches!(
-            term::from_kernel(&t),
-            Err(RecheckError::Declined(_))
-        ));
+        assert!(
+            term::from_kernel(&t).is_ok(),
+            "level variables translate totally (modeled, not declined)"
+        );
+        let j = Judgement::HasType {
+            term: Term::Univ(Level::Var(0)),
+            ty: Term::Univ(Level::Suc(Box::new(Level::Var(0)))),
+        };
+        let sig = Signature::empty();
+        assert!(
+            matches!(
+                recheck_judgement(&sig, &j),
+                Err(RecheckError::Rejected(_))
+            ),
+            "an out-of-scope level variable is Rejected through the unleveled door"
+        );
+        assert_eq!(
+            recheck_judgement_leveled(&sig, &j, 1),
+            Ok(()),
+            "Univ u : Univ (suc u) re-verifies under one prenex level variable"
+        );
+    }
+
+    /// T2.3 twin negative: the level well-formedness gate is exact — `Var(1)` under `n_levels = 1`
+    /// is out of scope and Rejected (the gate is `u < n_levels`, not merely "some level context
+    /// exists"). The kernel agrees (parity on the boundary).
+    #[test]
+    fn recheck_rejects_level_var_beyond_n_levels() {
+        let j = Judgement::HasType {
+            term: Term::Univ(Level::Var(1)),
+            ty: Term::Univ(Level::Suc(Box::new(Level::Var(1)))),
+        };
+        let sig = Signature::empty();
+        assert!(
+            matches!(
+                recheck_judgement_leveled(&sig, &j, 1),
+                Err(RecheckError::Rejected(_))
+            ),
+            "Var(1) under n_levels = 1 must be Rejected"
+        );
+        assert!(
+            blight_kernel::check_top_leveled(
+                Signature::empty(),
+                Term::Univ(Level::Var(1)),
+                Term::Univ(Level::Suc(Box::new(Level::Var(1)))),
+                1,
+            )
+            .is_err(),
+            "the kernel rejects the same out-of-scope level (boundary parity)"
+        );
     }
 
     /// The `require_pure` flag *is* the proof boundary: a partial `later (now Zero) : Delay Nat`

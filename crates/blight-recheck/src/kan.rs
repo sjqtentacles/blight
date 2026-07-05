@@ -461,7 +461,7 @@ mod tests {
         RValue::Con(ConName("Succ".into()), Rc::new(vec![v]))
     }
     fn univ(n: u32) -> RValue {
-        RValue::Univ(n)
+        RValue::Univ(crate::term::rlevel_of_nat(n))
     }
     fn const_line(body: RTerm) -> DimClosure {
         DimClosure {
@@ -480,7 +480,7 @@ mod tests {
     #[test]
     fn transp_constant_family_is_identity() {
         let s = sig();
-        let out = transp(&s, &const_line(RTerm::Univ(0)), &RCofib::Top, &univ(0));
+        let out = transp(&s, &const_line(RTerm::Univ(crate::term::rlevel_of_nat(0))), &RCofib::Top, &univ(0));
         assert!(veq(&s, &out, &univ(0)));
     }
 
@@ -536,7 +536,7 @@ mod tests {
             &s,
             &univ(0),
             &RCofib::Top,
-            &const_line(RTerm::Univ(0)),
+            &const_line(RTerm::Univ(crate::term::rlevel_of_nat(0))),
             &univ(1),
         );
         assert!(veq(&s, &out, &univ(0)), "total face: composite is tube@1");
@@ -549,7 +549,7 @@ mod tests {
             &s,
             &univ(0),
             &RCofib::Bot,
-            &const_line(RTerm::Univ(0)),
+            &const_line(RTerm::Univ(crate::term::rlevel_of_nat(0))),
             &univ(1),
         );
         assert!(veq(&s, &out, &univ(1)));
@@ -564,7 +564,7 @@ mod tests {
             &s,
             &univ(0),
             &partial,
-            &const_line(RTerm::Univ(1)),
+            &const_line(RTerm::Univ(crate::term::rlevel_of_nat(1))),
             &univ(1),
         );
         assert!(
@@ -576,8 +576,8 @@ mod tests {
     #[test]
     fn comp_agrees_with_hcomp_transp() {
         let s = sig();
-        let family = const_line(RTerm::Univ(0));
-        let tube = const_line(RTerm::Univ(0));
+        let family = const_line(RTerm::Univ(crate::term::rlevel_of_nat(0)));
+        let tube = const_line(RTerm::Univ(crate::term::rlevel_of_nat(0)));
         let base = univ(0);
         let out = comp(&s, &family, &RCofib::Top, &tube, &base);
         let manual = hcomp(

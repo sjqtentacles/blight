@@ -119,15 +119,30 @@ struct Ctx {
     env: Env,            // value environment (term + dim bindings)
     lvl: usize,          // number of term binders (de Bruijn level depth)
     dlvl: usize,         // number of dimension binders
+    /// Number of prenex universe-level variables in scope (T2.3): `RLevel::Var(u)` is well-formed
+    /// iff `u < ulvl`. Constant through a derivation (the prenex design has no level binder inside
+    /// a term), set once at the door from the `n_levels` the leveled entry is *told* — the
+    /// re-checker never re-derives it from the term (scanning for the max `Var` would make the
+    /// well-formedness gate vacuous).
+    ulvl: usize,
 }
 
 impl Ctx {
+    /// The plain empty context (no prenex level variables) — `leveled(0)`.
+    #[cfg(test)]
     fn empty() -> Self {
+        Ctx::leveled(0)
+    }
+
+    /// The empty context under `n_levels` prenex universe-level variables (T2.3); `leveled(0)` is
+    /// the plain empty context.
+    fn leveled(n_levels: usize) -> Self {
         Ctx {
             entries: Vec::new(),
             env: Env::new(),
             lvl: 0,
             dlvl: 0,
+            ulvl: n_levels,
         }
     }
 
@@ -146,6 +161,7 @@ impl Ctx {
             env: self.env.extend(fresh),
             lvl: self.lvl + 1,
             dlvl: self.dlvl,
+            ulvl: self.ulvl,
         }
     }
 
@@ -160,6 +176,7 @@ impl Ctx {
             env: self.env.extend(val),
             lvl: self.lvl + 1,
             dlvl: self.dlvl,
+            ulvl: self.ulvl,
         }
     }
 
@@ -170,6 +187,7 @@ impl Ctx {
             env: self.env.extend_dim(RInterval::Dim(self.dlvl)),
             lvl: self.lvl,
             dlvl: self.dlvl + 1,
+            ulvl: self.ulvl,
         }
     }
 
@@ -214,8 +232,27 @@ impl<'a> Recheck<'a> {
     ///   effect row must be *empty* (in particular `Partial` at grade 0). A proof can only ever be
     ///   minted by the kernel after this check, so re-deriving it is the second opinion on the
     ///   purity invariant. This is what [`crate::recheck_proof`] uses.
+    ///
+    /// (Retained for the crate's white-box tests; the public doors now route through
+    /// [`Self::check_top_leveled`], of which this is the `n_levels == 0` case.)
+    #[cfg(test)]
     pub fn check_top(&self, term: &RTerm, ty: &RTerm, require_pure: bool) -> RResult<()> {
-        let ctx = Ctx::empty();
+        self.check_top_leveled(term, ty, require_pure, 0)
+    }
+
+    /// Like [`Self::check_top`], but under `n_levels` prenex universe-level variables (T2.3) — the
+    /// re-checker's twin of the kernel's `check_top_leveled` door. The declared type is re-formed
+    /// first (so a `Univ (Var u)` with `u ≥ n_levels` is Rejected here, at formation), then the
+    /// term is checked against it, all under the told level count. `n_levels == 0` is exactly
+    /// [`Self::check_top`], so the closed fragment is unchanged.
+    pub fn check_top_leveled(
+        &self,
+        term: &RTerm,
+        ty: &RTerm,
+        require_pure: bool,
+        n_levels: usize,
+    ) -> RResult<()> {
+        let ctx = Ctx::leveled(n_levels);
         self.infer_universe(&ctx, ty)?;
         let ty_val = eval(self.sig, &ctx.env, ty);
         let (row, _u) = self.check(&ctx, term, &ty_val, RGrade::One)?;
@@ -241,20 +278,45 @@ impl<'a> Recheck<'a> {
                     .ok_or_else(|| reject(format!("unbound de Bruijn index {i}")))?;
                 Ok((ty, RRow::empty(), Usage::unit(*i, n, sigma)))
             }
-            RTerm::Univ(l) => Ok((RValue::Univ(l + 1), RRow::empty(), Usage::zero(n))),
+            // `Univ ℓ : Univ (suc ℓ)` — symbolic formation (T2.3), after the level well-formedness
+            // gate: `Var(u)` is valid iff `u < ulvl`, the prenex count this judgement was checked
+            // under. This is the re-checker's own `level_wf` — the only user-supplied level is the
+            // one `Univ` carries, so gating it here closes the door on out-of-scope universes.
+            RTerm::Univ(l) => {
+                if !crate::term::rlevel_wf(l, ctx.ulvl) {
+                    return Err(reject(format!(
+                        "universe level {l:?} mentions a level variable out of scope \
+                         (n_levels = {})",
+                        ctx.ulvl
+                    )));
+                }
+                Ok((
+                    RValue::Univ(crate::term::rlevel_suc(l)),
+                    RRow::empty(),
+                    Usage::zero(n),
+                ))
+            }
             RTerm::Pi(grade, dom, cod) => {
                 let dl = self.infer_universe(ctx, dom)?;
                 let dom_v = eval(self.sig, &ctx.env, dom);
                 let ctx2 = ctx.extend(self.sig, dom_v, *grade);
                 let cl = self.infer_universe(&ctx2, cod)?;
-                Ok((RValue::Univ(dl.max(cl)), RRow::empty(), Usage::zero(n)))
+                Ok((
+                    RValue::Univ(crate::term::rlevel_max(&dl, &cl)),
+                    RRow::empty(),
+                    Usage::zero(n),
+                ))
             }
             RTerm::Sigma(dom, cod) => {
                 let dl = self.infer_universe(ctx, dom)?;
                 let dom_v = eval(self.sig, &ctx.env, dom);
                 let ctx2 = ctx.extend(self.sig, dom_v, RGrade::Omega);
                 let cl = self.infer_universe(&ctx2, cod)?;
-                Ok((RValue::Univ(dl.max(cl)), RRow::empty(), Usage::zero(n)))
+                Ok((
+                    RValue::Univ(crate::term::rlevel_max(&dl, &cl)),
+                    RRow::empty(),
+                    Usage::zero(n),
+                ))
             }
             // App: the result row is the union of the function's and argument's rows (spec §4.1).
             RTerm::App(f, a) => {
@@ -361,7 +423,11 @@ impl<'a> Recheck<'a> {
                     self.check(ctx, ix, &ixty_val, RGrade::Zero)?;
                     tele = tele.extend(eval(self.sig, &ctx.env, ix));
                 }
-                Ok((RValue::Univ(decl.level), RRow::empty(), Usage::zero(n)))
+                Ok((
+                    RValue::Univ(crate::term::rlevel_of_nat(decl.level)),
+                    RRow::empty(),
+                    Usage::zero(n),
+                ))
             }
             RTerm::Con(name, args) => self.infer_con(ctx, name, args, sigma),
             // A bare introduction form (λ / pair / path-λ) in *inference* position has no synthesizable
@@ -530,7 +596,11 @@ impl<'a> Recheck<'a> {
             } => self.infer_handle(ctx, body, return_clause, op_clauses, None, sigma),
 
             // ---- primitive machine integers (M11): pure arithmetic ----
-            RTerm::IntTy => Ok((RValue::Univ(0), RRow::empty(), Usage::zero(n))),
+            RTerm::IntTy => Ok((
+                RValue::Univ(crate::term::RLevel::Zero),
+                RRow::empty(),
+                Usage::zero(n),
+            )),
             RTerm::IntLit(_) => Ok((RValue::IntTy, RRow::empty(), Usage::zero(n))),
             RTerm::IntPrim { lhs, rhs, .. } => {
                 let (rl, ul) = self.check(ctx, lhs, &RValue::IntTy, sigma)?;
@@ -556,7 +626,7 @@ impl<'a> Recheck<'a> {
     /// Infer a term that must be a type, returning its universe level. Type formation lives in the
     /// 0-fragment, so its effect row is discarded (it is empty by construction — every label is
     /// added at grade 0, the absent grade — matching the kernel's `infer_universe`).
-    fn infer_universe(&self, ctx: &Ctx, ty: &RTerm) -> RResult<u32> {
+    fn infer_universe(&self, ctx: &Ctx, ty: &RTerm) -> RResult<crate::term::RLevel> {
         let (k, _row, _u) = self.infer(ctx, ty, RGrade::Zero)?;
         match k {
             RValue::Univ(l) => Ok(l),
@@ -2363,7 +2433,7 @@ mod tests {
         let sig = nat_vec_sig();
         let rc = Recheck::new(&sig);
         // Nat takes 0 params; supplying one is an arity error.
-        let bad = RTerm::Data(DataName("Nat".into()), vec![RTerm::Univ(0)], vec![]);
+        let bad = RTerm::Data(DataName("Nat".into()), vec![RTerm::Univ(crate::term::rlevel_of_nat(0))], vec![]);
         assert!(rc.infer(&Ctx::empty(), &bad, RGrade::Zero).is_err());
         // Vec needs 1 param + 1 index; supplying none is an arity error.
         let bad2 = RTerm::Data(DataName("Vec".into()), vec![], vec![]);

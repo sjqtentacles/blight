@@ -724,6 +724,25 @@ mod tests {
         );
     }
 
+    /// T2.2 twin negative: a *bare* reference to a level-polymorphic global (no `inst`) is a clear
+    /// early error naming the fix, not a confusing downstream universe error.
+    #[test]
+    fn bare_reference_to_level_poly_global_names_inst() {
+        let mut env = ElabEnv::new();
+        let mut prog = Program::new(&mut env);
+        let result = prog.run(
+            "(defdata Nat () (Zero) (Succ (n Nat)))\n\
+             (define-level id (u) (Pi ((A (Type u) omega)) (Pi ((x A omega)) A)) (lam (A x) x))\n\
+             (the Nat (id Nat Zero))",
+        );
+        match result {
+            Err(ElabError::BadForm(m)) => {
+                assert!(m.contains("inst"), "the error must name `inst`, got: {m}")
+            }
+            other => panic!("expected a BadForm naming `inst`, got {other:?}"),
+        }
+    }
+
     /// T2.1 twin negative: a universe level variable with no `(define-level … (u) …)` binder in
     /// scope is *rejected*, never silently treated as a fresh universe — `(Type u)` outside a level
     /// binder is unbound.

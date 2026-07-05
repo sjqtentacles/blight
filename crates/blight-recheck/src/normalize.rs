@@ -123,7 +123,7 @@ pub fn eval(sig: &Signature, env: &Env, t: &RTerm) -> RValue {
             .lookup(*i)
             .cloned()
             .unwrap_or(RValue::Neutral(Neutral::Var(usize::MAX))), // unbound: a fresh stuck var
-        RTerm::Univ(l) => RValue::Univ(*l),
+        RTerm::Univ(l) => RValue::Univ(l.clone()),
         RTerm::Pi(g, dom, cod) => RValue::Pi(
             *g,
             Rc::new(eval(sig, env, dom)),
@@ -501,7 +501,7 @@ pub fn reflect(sig: &Signature, neutral: Neutral, ty: &RValue) -> RValue {
 pub fn quote(sig: &Signature, lvl: usize, dlvl: usize, v: &RValue) -> RTerm {
     match v {
         RValue::Neutral(n) => quote_neutral(sig, lvl, dlvl, n),
-        RValue::Univ(l) => RTerm::Univ(*l),
+        RValue::Univ(l) => RTerm::Univ(l.clone()),
         RValue::Pi(g, dom, cod) => RTerm::Pi(
             *g,
             Box::new(quote(sig, lvl, dlvl, dom)),
@@ -701,16 +701,16 @@ mod rp3_tests {
         let env = Env::new().extend(RValue::Neutral(Neutral::Var(0)));
         // `(the (PathP (_.Univ0) (Univ 3) (Univ 7)) x0) @ 0`
         let path_ty = RTerm::PathP {
-            family: Box::new(RTerm::Univ(0)),
-            lhs: Box::new(RTerm::Univ(3)),
-            rhs: Box::new(RTerm::Univ(7)),
+            family: Box::new(RTerm::Univ(crate::term::rlevel_of_nat(0))),
+            lhs: Box::new(RTerm::Univ(crate::term::rlevel_of_nat(3))),
+            rhs: Box::new(RTerm::Univ(crate::term::rlevel_of_nat(7))),
         };
         let term = RTerm::PApp(
             Box::new(RTerm::Ann(Box::new(RTerm::Var(0)), Box::new(path_ty))),
             RInterval::I0,
         );
         assert!(
-            matches!(eval(&sig, &env, &term), RValue::Univ(3)),
+            matches!(eval(&sig, &env, &term), RValue::Univ(ref l) if *l == crate::term::rlevel_of_nat(3)),
             "@0 through an ascribed path neutral must reduce to lhs (Univ 3)"
         );
     }
@@ -721,15 +721,15 @@ mod rp3_tests {
         let sig = Signature::empty();
         let env = Env::new().extend(RValue::Neutral(Neutral::Var(0)));
         let path_ty = RTerm::PathP {
-            family: Box::new(RTerm::Univ(0)),
-            lhs: Box::new(RTerm::Univ(3)),
-            rhs: Box::new(RTerm::Univ(7)),
+            family: Box::new(RTerm::Univ(crate::term::rlevel_of_nat(0))),
+            lhs: Box::new(RTerm::Univ(crate::term::rlevel_of_nat(3))),
+            rhs: Box::new(RTerm::Univ(crate::term::rlevel_of_nat(7))),
         };
         let term = RTerm::PApp(
             Box::new(RTerm::Ann(Box::new(RTerm::Var(0)), Box::new(path_ty))),
             RInterval::I1,
         );
-        assert!(matches!(eval(&sig, &env, &term), RValue::Univ(7)));
+        assert!(matches!(eval(&sig, &env, &term), RValue::Univ(ref l) if *l == crate::term::rlevel_of_nat(7)));
     }
 }
 
@@ -768,7 +768,7 @@ mod n5_tests {
     /// distinguishing `+1` from `-1`/`×1`, and the dimension-binder no-shift pin.
     #[test]
     fn uses_binder_pins_every_arm_and_shift() {
-        let z = || Box::new(RTerm::Univ(0));
+        let z = || Box::new(RTerm::Univ(crate::term::rlevel_of_nat(0)));
         let v = |i: usize| Box::new(RTerm::Var(i));
         let d = 1usize;
 
@@ -922,7 +922,7 @@ mod n5_tests {
         for (label, t) in &probes {
             assert!(uses_binder(t, d), "{label}: the single using field must be found");
         }
-        assert!(!uses_binder(&RTerm::Univ(0), d));
+        assert!(!uses_binder(&RTerm::Univ(crate::term::rlevel_of_nat(0)), d));
         assert!(!uses_binder(&RTerm::IntTy, d));
     }
 }

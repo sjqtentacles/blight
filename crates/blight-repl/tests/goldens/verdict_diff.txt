@@ -2734,6 +2734,8 @@ GLOBAL examples/json_scratch.bl t14 Ok
 GLOBAL examples/json_scratch.bl t15 Ok
 GLOBAL examples/json_scratch.bl t16 Ok
 GLOBAL examples/json_scratch.bl t17 Ok
+FILE examples/level_poly.bl forms=5 declared=5 checked=0
+GLOBAL examples/level_poly.bl id Ok
 FILE examples/list_sort.bl forms=66 declared=60 checked=6
 GLOBAL examples/list_sort.bl Nat-Ord Ok
 GLOBAL examples/list_sort.bl ORD Ok

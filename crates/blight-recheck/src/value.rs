@@ -3,14 +3,14 @@
 //! form that carries enough type information to realize η and the path boundary rules on neutrals
 //! (the same trick the kernel uses, re-implemented here so the two NbEs are independent).
 
-use crate::term::{RGrade, RInterval, RTerm};
+use crate::term::{RGrade, RInterval, RLevel, RTerm};
 use std::rc::Rc;
 
 /// A semantic value.
 #[derive(Debug, Clone)]
 pub enum RValue {
     Neutral(Neutral),
-    Univ(u32),
+    Univ(RLevel),
     Pi(RGrade, Rc<RValue>, Closure),
     Lam(Closure),
     Sigma(Rc<RValue>, Closure),
