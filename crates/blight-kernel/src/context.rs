@@ -19,6 +19,12 @@ pub struct Context {
     /// Number of dimension (interval) variables in scope. Dimensions are not graded and have no
     /// type, so we only track their count to manage their de Bruijn space (spec §2.6).
     dims: usize,
+    /// Number of **universe-level** variables in scope (T2, universe polymorphism). Like dimensions,
+    /// level variables are untyped and ungraded — they inhabit their own de Bruijn space (`Level::Var`
+    /// is an index into it) — so we track only the count. A `Level::Var(u)` is well-formed exactly
+    /// when `u < levels`. Non-zero only while checking a level-polymorphic definition's body (the
+    /// prenex `∀u.` binders are introduced at the checking boundary; see `check_top_leveled`).
+    levels: usize,
     /// Per-branch *value overrides* for dependent pattern-match refinement (spec §2.7, kernel item
     /// 1b): a list of `(de-Bruijn-level, value-term)` pairs that specialize an ambient variable to a
     /// concrete value within a refined match branch (e.g. the scrutinee index `n ↦ Succ m` in the
@@ -34,6 +40,7 @@ impl Context {
         Context {
             entries: Vec::new(),
             dims: 0,
+            levels: 0,
             overrides: Vec::new(),
         }
     }
@@ -47,6 +54,7 @@ impl Context {
         Context {
             entries,
             dims: self.dims,
+            levels: self.levels,
             overrides: self.overrides.clone(),
         }
     }
@@ -56,6 +64,7 @@ impl Context {
         Context {
             entries: self.entries.clone(),
             dims: self.dims + 1,
+            levels: self.levels,
             overrides: self.overrides.clone(),
         }
     }
@@ -63,6 +72,22 @@ impl Context {
     /// Number of dimension variables in scope.
     pub fn dim_len(&self) -> usize {
         self.dims
+    }
+
+    /// Extend with a fresh universe-level variable (T2). Returns a context with one more level var
+    /// in scope (the new `Level::Var(levels)` becoming valid); mirrors [`Self::extend_dim`].
+    pub fn extend_level(&self) -> Self {
+        Context {
+            entries: self.entries.clone(),
+            dims: self.dims,
+            levels: self.levels + 1,
+            overrides: self.overrides.clone(),
+        }
+    }
+
+    /// Number of universe-level variables in scope.
+    pub fn level_len(&self) -> usize {
+        self.levels
     }
 
     /// The per-branch value overrides (de-Bruijn-level → value-term) for dependent-match refinement.
@@ -85,6 +110,7 @@ impl Context {
         Context {
             entries: self.entries.clone(),
             dims: self.dims,
+            levels: self.levels,
             overrides,
         }
     }
@@ -116,6 +142,7 @@ impl Context {
                 })
                 .collect(),
             dims: self.dims,
+            levels: self.levels,
             overrides: self.overrides.clone(),
         }
     }
@@ -141,6 +168,7 @@ impl Context {
                 })
                 .collect(),
             dims: self.dims,
+            levels: self.levels,
             overrides: self.overrides.clone(),
         }
     }

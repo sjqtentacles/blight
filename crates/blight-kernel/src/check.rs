@@ -168,6 +168,38 @@ fn level_leq(a: &Level, b: &Level) -> bool {
     }
 }
 
+/// Whether a [`Level`] is well-formed in a context with `n_levels` universe-level variables in scope
+/// (T2): every `Level::Var(u)` it mentions must satisfy `u < n_levels`. This is the soundness gate on
+/// the *only* user-supplied level — the one carried by `Term::Univ` — so an out-of-scope level
+/// variable (which would let `Univ` inhabit an arbitrary universe) is rejected at formation.
+fn level_wf(l: &Level, n_levels: usize) -> bool {
+    match l {
+        Level::Zero => true,
+        Level::Suc(a) => level_wf(a, n_levels),
+        Level::Max(a, b) => level_wf(a, n_levels) && level_wf(b, n_levels),
+        Level::Var(u) => *u < n_levels,
+    }
+}
+
+/// The least upper bound of two [`Level`]s, kept in a canonical form (T2). This is the symbolic
+/// version of `nat::max` used by `Pi`/`Sigma`/`Univ` formation once level variables can occur. It
+/// keeps the **concrete-level fragment byte-identical**: when both levels concretize, it returns
+/// exactly `nat_to_level(max(na, nb))` — the same value the old `nat_to_level(a.max(b))` produced —
+/// so no corpus term changes. Otherwise it drops a dominated summand (`a ≤ b ⟹ max = b`, using the
+/// sound `level_leq`) and only builds a residual `Max` node when neither side dominates.
+fn level_max(a: &Level, b: &Level) -> Level {
+    if let (Ok(na), Ok(nb)) = (level_to_nat(a), level_to_nat(b)) {
+        return nat_to_level(na.max(nb));
+    }
+    if level_leq(a, b) {
+        return b.clone();
+    }
+    if level_leq(b, a) {
+        return a.clone();
+    }
+    Level::Max(Box::new(a.clone()), Box::new(b.clone()))
+}
+
 /// Build a [`Level`] from a natural number.
 fn nat_to_level(n: u32) -> Level {
     let mut l = Level::Zero;
@@ -282,11 +314,17 @@ impl Checker {
                 Ok((ty_val, Row::empty(), Usage::unit(*i, n, sigma)))
             }
 
-            // Univ ℓ : Univ (ℓ+1)  (spec §2.4, U-Type). A universe is pure type formation: no usage.
+            // Univ ℓ : Univ (suc ℓ)  (spec §2.4, U-Type). A universe is pure type formation: no usage.
+            // The level `ℓ` must be well-formed in the current level context (T2) — its only
+            // user-supplied occurrence — else an out-of-scope level variable would leak in.
             Term::Univ(l) => {
-                let lv = level_to_nat(l)?;
+                if !level_wf(l, ctx.level_len()) {
+                    return Err(TypeError::UniverseError(format!(
+                        "universe level mentions an out-of-scope level variable: {l:?}"
+                    )));
+                }
                 Ok((
-                    Value::Univ(nat_to_level(lv + 1)),
+                    Value::Univ(Level::Suc(Box::new(l.clone()))),
                     Row::empty(),
                     Usage::zero(n),
                 ))
@@ -299,7 +337,7 @@ impl Checker {
                 let ctx2 = ctx.extend((**dom).clone(), *grade);
                 let cod_lvl = self.infer_universe(&ctx2, cod)?;
                 Ok((
-                    Value::Univ(nat_to_level(dom_lvl.max(cod_lvl))),
+                    Value::Univ(level_max(&dom_lvl, &cod_lvl)),
                     Row::empty(),
                     Usage::zero(n),
                 ))
@@ -311,7 +349,7 @@ impl Checker {
                 let ctx2 = ctx.extend((**dom).clone(), Grade::Omega);
                 let cod_lvl = self.infer_universe(&ctx2, cod)?;
                 Ok((
-                    Value::Univ(nat_to_level(dom_lvl.max(cod_lvl))),
+                    Value::Univ(level_max(&dom_lvl, &cod_lvl)),
                     Row::empty(),
                     Usage::zero(n),
                 ))
@@ -548,14 +586,14 @@ impl Checker {
             // `! E A` is the effectful computation *type* (spec §4.1): a type, formed in the 0-fragment.
             Term::EffTy(_row, a) => {
                 let lvl = self.infer_universe(ctx, a)?;
-                Ok((Value::Univ(nat_to_level(lvl)), Row::empty(), Usage::zero(n)))
+                Ok((Value::Univ(lvl), Row::empty(), Usage::zero(n)))
             }
 
             // ---- partiality (spec §4.5): the intensional Capretta delay ----
             // `Delay A` is a *type former*: if `A : Univ l` then `Delay A : Univ l`. Pure (a type).
             Term::Delay(a) => {
                 let lvl = self.infer_universe(ctx, a)?;
-                Ok((Value::Univ(nat_to_level(lvl)), Row::empty(), Usage::zero(n)))
+                Ok((Value::Univ(lvl), Row::empty(), Usage::zero(n)))
             }
             // `now a : Delay A` when `a : A`. An immediately-available value is *total*: empty row.
             Term::Now(a) => {
@@ -772,7 +810,7 @@ impl Checker {
                 let a1 = self.family_at(ctx, family, crate::term::Interval::I1);
                 self.check(ctx, lhs, &a0)?;
                 self.check(ctx, rhs, &a1)?;
-                Ok((Value::Univ(nat_to_level(lvl)), Row::empty(), Usage::zero(n)))
+                Ok((Value::Univ(lvl), Row::empty(), Usage::zero(n)))
             }
 
             // Path application (spec §2.6): `p @ r : A[r/i]`; usage flows from the path term.
@@ -939,7 +977,7 @@ impl Checker {
                 self.infer_universe(ctx, ty)?;
                 let equiv_ty = eval(&self.env_for(ctx), &equiv_type(ty, base));
                 self.check_g(ctx, equiv, &equiv_ty, Grade::Zero)?;
-                Ok((Value::Univ(nat_to_level(l)), Row::empty(), Usage::zero(n)))
+                Ok((Value::Univ(l), Row::empty(), Usage::zero(n)))
             }
 
             // `glue` introduction (spec §2.6): partial and base carry σ.
@@ -1262,7 +1300,7 @@ impl Checker {
                         }
                         let fresh = Value::Neutral(Neutral::Var(ctx.len()));
                         match cod.apply(fresh) {
-                            Value::Univ(l) => level_to_nat(&l)?,
+                            Value::Univ(l) => l,
                             other => {
                                 return Err(TypeError::Mismatch {
                                     expected: "motive codomain Univ ℓ".into(),
@@ -2077,14 +2115,17 @@ impl Checker {
     /// Infer the universe level of a type-valued term, or error if it is not a universe. This is a
     /// *type-formation* subgoal, so it runs in the 0-fragment (spec §3.7): the type is demanded at
     /// grade `0` and may charge no runtime usage (debug-asserted).
-    fn infer_universe(&self, ctx: &Context, term: &Term) -> Result<u32, TypeError> {
+    fn infer_universe(&self, ctx: &Context, term: &Term) -> Result<Level, TypeError> {
         let (ty, _row, usage) = self.infer_g(ctx, term, Grade::Zero)?;
         debug_assert!(
             usage.is_all_zero(),
             "0-fragment type formation charged nonzero usage: {usage:?}"
         );
         match ty {
-            Value::Univ(l) => level_to_nat(&l),
+            // Return the (possibly symbolic) level itself — callers that only need well-formedness
+            // discard it; formation rules combine it via `level_max`/`Suc` (T2). This preserves the
+            // concrete-level fragment exactly (levels stay concrete when the inputs are).
+            Value::Univ(l) => Ok(l),
             other => Err(TypeError::Mismatch {
                 expected: "a universe".into(),
                 found: format!("{other:?}"),
@@ -2950,6 +2991,38 @@ pub fn check_top_with(sig: Signature, term: Term, ty: Term) -> Result<Proof, Typ
     Ok(Proof::trusted_new(Judgement::HasType { term, ty }))
 }
 
+/// Like [`check_top_with`], but checks a **level-polymorphic** definition (T2): `term : ty` under
+/// `n_levels` universe-level variables `u₀ … u_{n-1}` in scope (the prenex `∀u.` binders of a
+/// level-polymorphic definition, introduced here at the checking boundary rather than as a
+/// first-class type former — so no impredicative `∀u. : Univ ω_lvl` is ever formed). A `Level::Var(u)`
+/// occurring in a `Univ` is well-formed iff `u < n_levels`. `check_top_with` is the `n_levels == 0`
+/// case, and this reduces to it exactly there, so the closed fragment is unchanged.
+pub fn check_top_leveled(
+    sig: Signature,
+    term: Term,
+    ty: Term,
+    n_levels: usize,
+) -> Result<Proof, TypeError> {
+    let mut ctx = Context::empty();
+    for _ in 0..n_levels {
+        ctx = ctx.extend_level();
+    }
+    let checker = Checker::new(std::rc::Rc::new(sig));
+    // Validate the declared type is itself a well-formed type in the level context (so a `Univ(Var
+    // u)` with `u` out of scope is rejected *here*, when the type is formed — the closed door
+    // `check_top_with` trusts its type, but a level-polymorphic type must be re-formed to enforce
+    // level well-formedness).
+    checker.infer_universe(&ctx, &ty)?;
+    let expected = eval(&checker.env_for(&ctx), &ty);
+    let (row, _usage) = checker.check_g(&ctx, &term, &expected, Grade::One)?;
+    if !row.is_empty() {
+        return Err(TypeError::EffectError(format!(
+            "a top-level proof must be pure (empty effect row), but it carries effects: {row:?}"
+        )));
+    }
+    Ok(Proof::trusted_new(Judgement::HasType { term, ty }))
+}
+
 /// Like [`check_top_with`], but with normalization metered at `budget` reduction steps
 /// (Wave 5/N2, see `crate::normalize::run_metered`'s doc-comment for the mechanism): a genuinely
 /// diverging (or just very deep) `conv`/`eval`/`quote` during checking returns
@@ -3406,6 +3479,50 @@ mod tests {
         assert!(level_leq(&u, &max(u.clone(), v.clone())), "u ≤ max(u,v)");
         assert!(level_leq(&max(z.clone(), u.clone()), &u), "max(0,u) ≤ u");
         assert!(!level_leq(&max(u.clone(), v.clone()), &u), "max(u,v) ⊄ u");
+    }
+
+    /// T2: a **level-polymorphic** identity type-checks under a level variable in scope, is rejected
+    /// with none, and `Univ u : Univ (suc u)`. Exercises the level context, the `Univ`
+    /// well-formedness gate, and symbolic formation.
+    #[test]
+    fn level_polymorphic_identity_checks() {
+        // Π^ω(A : Univ u). Π^ω(x : A). A     with u = Level::Var(0).
+        let ty = || {
+            Term::Pi(
+                Grade::Omega,
+                Rc::new(Term::Univ(Level::Var(0))),
+                Rc::new(Term::Pi(
+                    Grade::Omega,
+                    Rc::new(Term::Var(0)),
+                    Rc::new(Term::Var(1)),
+                )),
+            )
+        };
+        let id = || Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Var(0)))));
+        assert!(
+            check_top_leveled(Signature::empty(), id(), ty(), 1).is_ok(),
+            "λA.λx.x : (A : Univ u) → A → A checks under u : Level"
+        );
+        assert!(
+            matches!(
+                check_top_leveled(Signature::empty(), id(), ty(), 0),
+                Err(TypeError::UniverseError(_))
+            ),
+            "a level variable with no level context must be rejected as ill-formed"
+        );
+        // Direct: `Univ u : Univ (suc u)` under one level var; ill-formed under none.
+        let checker = Checker::new(std::rc::Rc::new(Signature::empty()));
+        let (uty, _, _) = checker
+            .infer_g(&Context::empty().extend_level(), &Term::Univ(Level::Var(0)), Grade::Zero)
+            .expect("Univ u types");
+        assert!(matches!(uty, Value::Univ(Level::Suc(_))), "Univ u : Univ (suc u)");
+        assert!(
+            matches!(
+                checker.infer_g(&Context::empty(), &Term::Univ(Level::Var(0)), Grade::Zero),
+                Err(TypeError::UniverseError(_))
+            ),
+            "Univ u is ill-formed with no level context"
+        );
     }
 
     /// The polymorphic identity at `Univ 0`: `λ A. λ x. x : (A :^ω Univ 0) → (x :^ω A) → A`.
