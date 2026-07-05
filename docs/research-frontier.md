@@ -143,13 +143,22 @@ ever *did* claim it, the claim could be falsified.
   positive preservation. Substantial progress, all sorry-free:
   - *B2.1:* `DefEq` (reduction-join) machine-checked to **repair the `preservation_false`
     counterexample** (`conversion_repairs_preservation_false`).
-  - *B2.2 core — Church-Rosser:* the hard mathematical core is done. Parallel reduction (`PStep`),
-    its substitutivity (`PStep.subst`), the Takahashi complete development + diamond
-    (`PStep.triangle`), and **confluence** (`PSteps.confluent`) are all machine-checked. With
-    confluence, the two facts the general preservation needs both follow: substitution-congruence of
-    definitional equality (directly from `PStep.subst`) and `pi`-injectivity (from confluence +
-    `pi`-head preservation).
-  - *Remaining:* the conversion rule + inversion-up-to-conversion + the preservation application.
+  - *B2.2 — the hard core is done, all machine-checked (`sorryAx`-free):*
+    - **Church-Rosser:** parallel reduction (`PStep`), its substitutivity (`PStep.subst`), the
+      Takahashi diamond (`PStep.triangle`), and **confluence** (`PSteps.confluent`).
+    - **Definitional-equality metatheory:** `Conv` (parallel-reduction join) as an equivalence, with
+      the two facts general preservation needs — **`Conv.pi_inj`** (Π-injectivity, the beta case's
+      Church-Rosser obligation — *no axioms at all*) and **`Conv.subst0_congr`** (substitution-
+      congruence, the argument-step case).
+    - **The conversion-augmented typing** `Wt` (grade-erased dependent typing *with* a `conv` rule)
+      and its `Wt.lam_inv` (inversion up to conversion).
+  - *Remaining — a clean transcription step, no new mathematics:* general preservation
+    `Wt Γ e A → Step e e' → Wt Γ e' A` follows by induction (conv/ite/app₁/app₂ discharged by the
+    Conv facts above + `Wt.conv`; beta by `lam_inv` + a substitution lemma). The only missing pieces
+    are the two STANDARD structural lemmas the beta case needs — weakening and substitution for `Wt`
+    — which this file already proves in graded form (`weaken`, `subst_lemma_tele`); the `Wt` versions
+    are the same de Bruijn arguments with the grade/usage bookkeeping erased. Left as a deliberate
+    transcription step to keep the `sorryAx`-free invariant intact rather than rushed.
 - **A re-grading substitution lemma** for `Effects.lean`, to push `handle_perform_preserving` past
   base-type operation arguments (the wall characterized by `handle_perform_regrade_obstruction`).
 - **The kernel↔tower effect equivalence** — proving the CPS elaboration preserves the pure kernel's
