@@ -105,7 +105,9 @@ Why the **re-checker declines** (rather than rejects) a *cubical or foreign* `ma
 the effect row, and enforces the continuation multiplicity (resuming above the operation's
 `cont_grade` is `Rejected`) — so an effectful program is a genuine second opinion at the type level
 (**Checked**), and only the truly out-of-fragment forms (cubical `Glue`/`ua`/partial elements,
-`foreign` postulates, universe-level variables) are **Declined**. Declining ≠ accepting a falsehood, which is exactly what
+`foreign` postulates) are **Declined** — universe-level *variables*, formerly on that list, are
+modeled since T2 (the re-checker re-verifies level-polymorphic judgements under its own symbolic
+`RLevel` order through a leveled door). Declining ≠ accepting a falsehood, which is exactly what
 `effects_demo.bl` documents. The headline: **I/O is a library + a runtime handler, not a kernel
 feature.**
 

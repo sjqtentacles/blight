@@ -343,11 +343,21 @@ a `Π`'s **grade `ρ` must match exactly** — a grade is a promise about the al
 never something cumulativity relaxes. The subtyping relation stays `⊇ conv`, so nothing typable before
 is rejected.
 
-> **Implementation status.** As of this writing the kernel implements the cumulativity above
-> (`U-Cumul` + the structural Π/Σ lift). *Universe polymorphism* (`U-Poly`, `∀ u.`, level variables)
-> is the design target but is **not yet implemented** — concrete levels only; a level *variable* is
-> currently rejected (roadmap: universe-polymorphism milestone). The `∀ u.` forms above describe the
-> intended rule.
+> **Implementation status.** Implemented end-to-end (T2). The kernel implements the cumulativity
+> above (`U-Cumul` on a sound *symbolic* level order + the structural Π/Σ lift) and checks
+> level-polymorphic definitions through a dedicated door (`check_top_leveled`, under **prenex**
+> `∀ u.` binders — the quantifier is *not* a first-class type former, so no `∀u. : Univ ω_lvl` is
+> ever formed and no impredicativity sneaks in). Surface: `(define-level name (u …) T body)`
+> declares, `(Type u)` references a bound level variable, and `(inst name ℓ …)` instantiates at
+> concrete levels (a use site never sees an open level). The independent re-checker models
+> symbolic levels with its own `RLevel` order and re-verifies level-polymorphic judgements under
+> the same told prenex count (an out-of-scope level variable is *rejected*, mirroring the
+> kernel's `level_wf` gate). The order's soundness, reflexivity, cumulativity-transitivity,
+> level-context weakening, and closed-fragment exactness are machine-checked in
+> `mechanization/BlightMeta/Universe.lean` (sorry-free). Known *completeness* (not soundness)
+> limit: the order is structural, so e.g. `suc (u ⊔ v) ≤ (suc u ⊔ suc v)` is conservatively
+> rejected; and conversion on universes is structural (`u ⊔ v ≢ v ⊔ u` syntactically) — both
+> only ever reject, never accept. See `examples/level_poly.bl`.
 
 > **Design note (Prop / proof irrelevance).** Because we chose univalence (§2.6), we
 > **cannot** have definitional UIP (it contradicts univalence). Proof irrelevance, where we
