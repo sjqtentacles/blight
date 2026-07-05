@@ -47,6 +47,7 @@ embedded_modules! {
     "std/maybe.bl",
     "std/either.bl",
     "std/result.bl",
+    "std/hashmap.bl",
     "std/function.bl",
     "std/pair.bl",
     "std/ordering.bl",

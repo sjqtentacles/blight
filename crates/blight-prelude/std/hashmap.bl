@@ -1,0 +1,129 @@
+; std/hashmap.bl — an O(1)-amortized mutable hash map over the A3b `Array A` effect (D4).
+;
+; UNTRUSTED tower code. The first *effectful* associative container: buckets live in a boxed
+; mutable array (`Array (List (Pair Int V))`, std/array.bl), so `put`/`get` cost one array read
+; (+ a bucket walk) instead of std/map.bl's O(depth) pure-tree descent. Keys are machine `Int`s
+; (native arithmetic — hashing unary `Nat` would allocate the hash itself); values are any boxed
+; `V`. The map is named by its opaque `Int` handle, the `Arrays`/`Bytes`/`Array` convention.
+;
+; Design notes:
+;   * Bucket index = `min(int-mod (int-abs key) capacity, capacity-1)` — `int-abs` folds negative
+;     keys in, `int-mod` (std/int.bl) picks the bucket, and the bounded `Int -> Nat` bridge below
+;     converts to the `Nat` index the array ops take. Deterministic per key, which is the only
+;     property indexing needs (the one pathological key `i64::MIN`, whose negation wraps, still
+;     lands on a *fixed* bucket).
+;   * `hm-new` clamps the capacity to ≥ 1, so the modulus is never 0 (kernel `int/` by zero
+;     deliberately stays stuck) and every index is in range.
+;   * `hm-put` PREPENDS: the newest binding for a key shadows older ones (`hm-get` returns the
+;     first hit). Old bindings stay in the bucket — classic association-list semantics, honest
+;     about not being a compacting store.
+;   * No `Hash`/`Eq` typeclass constraints exist yet (D3 gap), which is exactly why keys are
+;     concretely `Int` in v1: equality is the primitive `int=` flag, branched with `if-zero`.
+;
+; Depends on std/{nat,int,pair,maybe,list,array}.
+
+(load "std/nat.bl")
+(load "std/int.bl")
+(load "std/pair.bl")
+(load "std/maybe.bl")
+(load "std/list.bl")
+(load "std/array.bl")
+
+; ── Int ↔ Nat bridges (local: std/int.bl stays Nat-free / loadable in isolation) ────────────────
+
+; `Nat -> Int`, structurally.
+(deftotal hm-nat-to-int (Pi ((n Nat)) Int)
+  (lam (n) (match n [(Zero) (int 0)] [(Succ k) (int+ (int 1) (hm-nat-to-int k))])))
+
+; Bounded `Int -> Nat`: `min(i, bound)` for `i ≥ 0` (and a fixed in-range value for a negative
+; `i`). Structural on `bound` — the trailing `i` varies freely — so it is total with no fuel; the
+; bound is always the capacity, and a bucket index is always `< capacity`, so the conversion is
+; exact where it matters.
+(deftotal hm-int-to-nat-below (Pi ((bound Nat) (i Int)) Nat)
+  (lam (bound i)
+    (match bound [(Zero) Zero]
+      [(Succ b) (if-zero i Zero (Succ (hm-int-to-nat-below b (int- i (int 1)))))])))
+
+; The bucket index of `key` in a `cap`-bucket table.
+(deftotal hm-idx (Pi ((cap Nat) (key Int)) Nat)
+  (lam (cap key) (hm-int-to-nat-below cap (int-mod (int-abs key) (hm-nat-to-int cap)))))
+
+; ── The pure bucket walk ─────────────────────────────────────────────────────────────────────────
+
+; First binding for `key` in a bucket, newest-first (`hm-put` prepends).
+(deftotal hm-bucket-find (Pi ((V (Type 0)) (key Int) (b (List (Pair Int V)))) (Maybe V))
+  (lam (V key b)
+    (match b [(nil) nothing]
+      [(cons p rest)
+        (match p [(mk-pair k v) (if-zero (int= k key) (hm-bucket-find V key rest) (just v))])])))
+
+; ── The effectful API (rows: `! Array …`, folded by the same native top-level handler) ──────────
+;
+; Sequencing is nested `let`s over BARE `perform`s (the `boxed_array_scratch.bl` idiom): a `let`
+; binding a performed operation binds its *result*, with the row ambient in the declared
+; conclusion. The bucket element type instantiates the parameterized effect at each site:
+; `(perform op ((List (Pair Int V))) arg)`.
+
+; Allocate a map with (at least) `cap` buckets (clamped ≥ 1), every bucket empty; returns the handle.
+(deftotal hm-new (Pi ((V (Type 0)) (cap Nat)) (! Array Int))
+  (lam (V cap) (perform new-boxed-array ((List (Pair Int V))) (mk-pair (max 1 cap) nil))))
+
+; Bind `key ↦ v` (prepend: shadows any earlier binding of `key`).
+(deftotal hm-put (Pi ((V (Type 0)) (h Int) (key Int) (v V)) (! Array Unit))
+  (lam (V h key v)
+    (let ((cap (perform boxed-len ((List (Pair Int V))) h)))
+      (let ((b (perform get-boxed ((List (Pair Int V))) (mk-pair h (hm-idx cap key)))))
+        (perform set-boxed ((List (Pair Int V)))
+          (mk-pair h (mk-pair (hm-idx cap key) (cons (mk-pair key v) b))))))))
+
+; Look `key` up: `just` the newest binding, or `nothing`.
+(deftotal hm-get (Pi ((V (Type 0)) (h Int) (key Int)) (! Array (Maybe V)))
+  (lam (V h key)
+    (let ((cap (perform boxed-len ((List (Pair Int V))) h)))
+      (let ((b (perform get-boxed ((List (Pair Int V))) (mk-pair h (hm-idx cap key)))))
+        (hm-bucket-find V key b)))))
+
+; ── CPS combinators: the COMPOSABLE forms ────────────────────────────────────────────────────────
+;
+; A `let` unwraps only a BARE `perform`; an application returning `(! Array T)` binds the
+; computation, not the `T` (there is no general monadic bind yet). So each `*-then` takes the rest
+; of the program as an explicit continuation and calls it in tail position with the operation's
+; RESULT — chains of these compose arbitrarily, and a pure final continuation body is fine
+; (a pure term checks against `(! E A)`).
+
+; Allocate, then continue with the handle.
+(deftotal hm-new-then
+  (Pi ((V (Type 0)) (R (Type 0)) (cap Nat) (k (Pi ((h Int)) (! Array R)))) (! Array R))
+  (lam (V R cap k)
+    (let ((h (perform new-boxed-array ((List (Pair Int V))) (mk-pair (max 1 cap) nil)))) (k h))))
+
+; Bind `key ↦ v`, then continue.
+(deftotal hm-put-then
+  (Pi ((V (Type 0)) (R (Type 0)) (h Int) (key Int) (v V) (k (Pi ((u Unit)) (! Array R))))
+    (! Array R))
+  (lam (V R h key v k)
+    (let ((cap (perform boxed-len ((List (Pair Int V))) h)))
+      (let ((b (perform get-boxed ((List (Pair Int V))) (mk-pair h (hm-idx cap key)))))
+        (let
+          ((u (perform set-boxed ((List (Pair Int V))) (mk-pair h (mk-pair (hm-idx cap key) (cons (mk-pair key v) b))))))
+          (k u))))))
+
+; Look up, then continue with the `Maybe V`.
+(deftotal hm-get-then
+  (Pi ((V (Type 0)) (R (Type 0)) (h Int) (key Int) (k (Pi ((m (Maybe V))) (! Array R)))) (! Array R))
+  (lam (V R h key k)
+    (let ((cap (perform boxed-len ((List (Pair Int V))) h)))
+      (let ((b (perform get-boxed ((List (Pair Int V))) (mk-pair h (hm-idx cap key)))))
+        (k (hm-bucket-find V key b))))))
+
+; ── Kernel-checked pins (define-by … compute): the pure indexing layer ───────────────────────────
+
+; Bridges: 3 → int 3; min(2, bound 8) = 2; negative folds to a valid index.
+(define-by hm-nat-to-int-3 (Path Int (hm-nat-to-int 3) (int 3)) compute)
+
+(define-by hm-int-to-nat-below-2-of-8 (Path Nat (hm-int-to-nat-below 8 (int 2)) 2) compute)
+
+; Indexing: key 10 in 8 buckets → 10 mod 8 = 2; key -7 folds via abs → 7 mod 8 = 7.
+(define-by hm-idx-10-of-8 (Path Nat (hm-idx 8 (int 10)) 2) compute)
+
+(define-by hm-idx-neg7-of-8 (Path Nat (hm-idx 8 (int -7)) 7) compute)

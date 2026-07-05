@@ -1,0 +1,26 @@
+; A mutable hash map in action (std/hashmap.bl): three puts — including a NEGATIVE key (folded in
+; by `int-abs`) and a shadowing re-put of key 1 — then three gets: two hits and a miss.
+;
+; `main : (! Array Nat)`, written as a chain of the CPS `*-then` combinators (each passes its
+; result to an explicit continuation in tail position — the composable form, since a `let` unwraps
+; only bare `perform`s). The final continuation is pure. Folded by the same native top-level
+; handler that runs every effectful example. Expected: newest binding of key 1 (11) + binding of
+; key -7 (20) + 0 for the miss = 31.
+(load "std/hashmap.bl")
+
+(define main (! Array Nat)
+  (hm-new-then Nat Nat 8
+    (lam (h)
+      (hm-put-then Nat Nat h (int 1) 10
+        (lam (u1)
+          (hm-put-then Nat Nat h (int -7) 20
+            (lam (u2)
+              (hm-put-then Nat Nat h (int 1) 11
+                (lam (u3)
+                  (hm-get-then Nat Nat h (int 1)
+                    (lam (a)
+                      (hm-get-then Nat Nat h (int -7)
+                        (lam (b)
+                          (hm-get-then Nat Nat h (int 99)
+                            (lam (c)
+                              (plus (from-maybe 0 a) (plus (from-maybe 0 b) (from-maybe 0 c))))))))))))))))))

@@ -160,6 +160,44 @@ fn std_either_loads_in_isolation() {
 }
 
 #[test]
+fn std_hashmap_loads_in_isolation() {
+    // The effectful Int-keyed hash map over `Array A` (D4): pure indexing layer + effectful API +
+    // CPS `*-then` combinators. The four in-file `define-by … compute` Path pins (bridges +
+    // bucket indexing incl. a negative key) are kernel-checked by the load itself.
+    with_module("std/hashmap.bl", |env| {
+        for f in [
+            "hm-nat-to-int",
+            "hm-int-to-nat-below",
+            "hm-idx",
+            "hm-bucket-find",
+            "hm-new",
+            "hm-put",
+            "hm-get",
+            "hm-new-then",
+            "hm-put-then",
+            "hm-get-then",
+        ] {
+            assert!(env.global_term(f).is_some(), "std/hashmap defines `{f}`");
+        }
+        // Re-check the pure indexing core through the *independent* re-checker (agree or honestly
+        // decline, never reject).
+        for f in ["hm-idx", "hm-bucket-find"] {
+            let ty = env.global_type(f).expect("hashmap member type").clone();
+            let term = env.global_term(f).expect("hashmap member term").clone();
+            match blight_recheck::recheck_judgement(
+                env.signature(),
+                &blight_kernel::Judgement::HasType { term, ty },
+            ) {
+                Ok(()) | Err(blight_recheck::RecheckError::Declined(_)) => {}
+                Err(blight_recheck::RecheckError::Rejected(m)) => {
+                    panic!("re-checker REJECTED std/hashmap `{f}` (soundness alarm): {m}")
+                }
+            }
+        }
+    });
+}
+
+#[test]
 fn std_result_loads_in_isolation() {
     // `Result a e` — Either specialized to value-or-error, with the railway combinators (D3).
     with_module("std/result.bl", |env| {
@@ -984,6 +1022,7 @@ fn every_std_module_loads_in_isolation() {
         "graphics.bl",
         "int.bl",
         "io.bl",
+        "hashmap.bl",
         "json.bl",
         "lexer.bl",
         "list.bl",
