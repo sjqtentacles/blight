@@ -743,6 +743,27 @@ mod tests {
         }
     }
 
+    /// T2.2 hygiene-path twin: a *macro-introduced* bare reference to a level-polymorphic global
+    /// (which resolves through the marked-identifier fallback, not the primary Var path) gets the
+    /// same clear `inst` error — the guard covers both global-lookup paths.
+    #[test]
+    fn macro_introduced_level_poly_reference_names_inst() {
+        let mut env = ElabEnv::new();
+        let mut prog = Program::new(&mut env);
+        let result = prog.run(
+            "(defdata Nat () (Zero) (Succ (n Nat)))\n\
+             (define-level id (u) (Pi ((A (Type u) omega)) (Pi ((x A omega)) A)) (lam (A x) x))\n\
+             (define-macro apply-id (syntax-rules () ((apply-id v) (id Nat v))))\n\
+             (the Nat (apply-id Zero))",
+        );
+        match result {
+            Err(ElabError::BadForm(m)) => {
+                assert!(m.contains("inst"), "the error must name `inst`, got: {m}")
+            }
+            other => panic!("expected a BadForm naming `inst`, got {other:?}"),
+        }
+    }
+
     /// T2.1 twin negative: a universe level variable with no `(define-level … (u) …)` binder in
     /// scope is *rejected*, never silently treated as a fresh universe — `(Type u)` outside a level
     /// binder is unbound.

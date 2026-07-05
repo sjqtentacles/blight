@@ -2108,6 +2108,15 @@ fn elab(
                     ));
                 }
                 if let Some((t, ty)) = env.globals.get(base) {
+                    // Same level-poly guard as the primary global path (T2.2): a macro-introduced
+                    // bare reference to a `define-level` global must error clearly, not inline a
+                    // type carrying out-of-scope `Level::Var`s.
+                    if let Some(arity) = env.level_arity(base) {
+                        return Err(ElabError::BadForm(format!(
+                            "`{base}` is level-polymorphic ({arity} level parameter(s)) — \
+                             instantiate it with `(inst {base} ℓ …)`"
+                        )));
+                    }
                     return Ok(match ty {
                         Some(ty) => Term::Ann(Rc::new(t.clone()), Rc::new(ty.clone())),
                         None => t.clone(),
