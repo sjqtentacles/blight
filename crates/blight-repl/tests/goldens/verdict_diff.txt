@@ -31,7 +31,7 @@ GLOBAL std/actor.bl pred Ok
 GLOBAL std/actor.bl reverse Ok
 GLOBAL std/actor.bl reverse-onto Ok
 GLOBAL std/actor.bl sub Ok
-FILE std/array.bl forms=42 declared=39 checked=3
+FILE std/array.bl forms=48 declared=41 checked=7
 GLOBAL std/array.bl and Ok
 GLOBAL std/array.bl array-get Ok
 GLOBAL std/array.bl array-length Ok
@@ -43,11 +43,17 @@ GLOBAL std/array.bl boxed-array-new Ok
 GLOBAL std/array.bl boxed-array-set Ok
 GLOBAL std/array.bl even Ok
 GLOBAL std/array.bl four-is-even Ok
+GLOBAL std/array.bl int-abs Ok
+GLOBAL std/array.bl int-abs-4-is-4 Ok
+GLOBAL std/array.bl int-abs-neg9-is-9 Ok
 GLOBAL std/array.bl int-add Ok
 GLOBAL std/array.bl int-div Ok
 GLOBAL std/array.bl int-double Ok
 GLOBAL std/array.bl int-eq Ok
 GLOBAL std/array.bl int-lt Ok
+GLOBAL std/array.bl int-mod Ok
+GLOBAL std/array.bl int-mod-17-5-is-2 Ok
+GLOBAL std/array.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL std/array.bl int-mul Ok
 GLOBAL std/array.bl int-one Ok
 GLOBAL std/array.bl int-pred Ok
@@ -72,7 +78,7 @@ FILE std/bool.bl forms=4 declared=4 checked=0
 GLOBAL std/bool.bl and Ok
 GLOBAL std/bool.bl not Ok
 GLOBAL std/bool.bl or Ok
-FILE std/bytes.bl forms=37 declared=34 checked=3
+FILE std/bytes.bl forms=43 declared=36 checked=7
 GLOBAL std/bytes.bl and Ok
 GLOBAL std/bytes.bl bytes-get Ok
 GLOBAL std/bytes.bl bytes-length Ok
@@ -80,11 +86,17 @@ GLOBAL std/bytes.bl bytes-new Ok
 GLOBAL std/bytes.bl bytes-set Ok
 GLOBAL std/bytes.bl even Ok
 GLOBAL std/bytes.bl four-is-even Ok
+GLOBAL std/bytes.bl int-abs Ok
+GLOBAL std/bytes.bl int-abs-4-is-4 Ok
+GLOBAL std/bytes.bl int-abs-neg9-is-9 Ok
 GLOBAL std/bytes.bl int-add Ok
 GLOBAL std/bytes.bl int-div Ok
 GLOBAL std/bytes.bl int-double Ok
 GLOBAL std/bytes.bl int-eq Ok
 GLOBAL std/bytes.bl int-lt Ok
+GLOBAL std/bytes.bl int-mod Ok
+GLOBAL std/bytes.bl int-mod-17-5-is-2 Ok
+GLOBAL std/bytes.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL std/bytes.bl int-mul Ok
 GLOBAL std/bytes.bl int-one Ok
 GLOBAL std/bytes.bl int-pred Ok
@@ -153,7 +165,7 @@ GLOBAL std/equiv.bl fiber Ok
 GLOBAL std/equiv.bl id-equiv Ok
 GLOBAL std/equiv.bl is-contr Ok
 GLOBAL std/equiv.bl is-equiv Ok
-FILE std/f64.bl forms=33 declared=33 checked=0
+FILE std/f64.bl forms=39 declared=35 checked=4
 GLOBAL std/f64.bl F64 Declined
 GLOBAL std/f64.bl f64-add Declined
 GLOBAL std/f64.bl f64-div Declined
@@ -172,11 +184,17 @@ GLOBAL std/f64.bl f64-round Declined
 GLOBAL std/f64.bl f64-sub Declined
 GLOBAL std/f64.bl f64-times Declined
 GLOBAL std/f64.bl f64-zero Declined
+GLOBAL std/f64.bl int-abs Ok
+GLOBAL std/f64.bl int-abs-4-is-4 Ok
+GLOBAL std/f64.bl int-abs-neg9-is-9 Ok
 GLOBAL std/f64.bl int-add Ok
 GLOBAL std/f64.bl int-div Ok
 GLOBAL std/f64.bl int-double Ok
 GLOBAL std/f64.bl int-eq Ok
 GLOBAL std/f64.bl int-lt Ok
+GLOBAL std/f64.bl int-mod Ok
+GLOBAL std/f64.bl int-mod-17-5-is-2 Ok
+GLOBAL std/f64.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL std/f64.bl int-mul Ok
 GLOBAL std/f64.bl int-one Ok
 GLOBAL std/f64.bl int-pred Ok
@@ -205,17 +223,23 @@ GLOBAL std/function.bl compose Ok
 GLOBAL std/function.bl const Ok
 GLOBAL std/function.bl flip Ok
 GLOBAL std/function.bl id Ok
-FILE std/graphics.bl forms=22 declared=22 checked=0
+FILE std/graphics.bl forms=28 declared=24 checked=4
 GLOBAL std/graphics.bl gfx-clear Ok
 GLOBAL std/graphics.bl gfx-draw-rect Ok
 GLOBAL std/graphics.bl gfx-init-window Ok
 GLOBAL std/graphics.bl gfx-poll-input Ok
 GLOBAL std/graphics.bl gfx-present Ok
+GLOBAL std/graphics.bl int-abs Ok
+GLOBAL std/graphics.bl int-abs-4-is-4 Ok
+GLOBAL std/graphics.bl int-abs-neg9-is-9 Ok
 GLOBAL std/graphics.bl int-add Ok
 GLOBAL std/graphics.bl int-div Ok
 GLOBAL std/graphics.bl int-double Ok
 GLOBAL std/graphics.bl int-eq Ok
 GLOBAL std/graphics.bl int-lt Ok
+GLOBAL std/graphics.bl int-mod Ok
+GLOBAL std/graphics.bl int-mod-17-5-is-2 Ok
+GLOBAL std/graphics.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL std/graphics.bl int-mul Ok
 GLOBAL std/graphics.bl int-one Ok
 GLOBAL std/graphics.bl int-pred Ok
@@ -225,12 +249,18 @@ GLOBAL std/graphics.bl int-zero Ok
 GLOBAL std/graphics.bl pair-fst Ok
 GLOBAL std/graphics.bl pair-snd Ok
 GLOBAL std/graphics.bl pair-swap Ok
-FILE std/int.bl forms=11 declared=11 checked=0
+FILE std/int.bl forms=17 declared=13 checked=4
+GLOBAL std/int.bl int-abs Ok
+GLOBAL std/int.bl int-abs-4-is-4 Ok
+GLOBAL std/int.bl int-abs-neg9-is-9 Ok
 GLOBAL std/int.bl int-add Ok
 GLOBAL std/int.bl int-div Ok
 GLOBAL std/int.bl int-double Ok
 GLOBAL std/int.bl int-eq Ok
 GLOBAL std/int.bl int-lt Ok
+GLOBAL std/int.bl int-mod Ok
+GLOBAL std/int.bl int-mod-17-5-is-2 Ok
+GLOBAL std/int.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL std/int.bl int-mul Ok
 GLOBAL std/int.bl int-one Ok
 GLOBAL std/int.bl int-pred Ok
@@ -337,7 +367,7 @@ GLOBAL std/json.bl string-map Ok
 GLOBAL std/json.bl string-reverse Ok
 GLOBAL std/json.bl string-shift Ok
 GLOBAL std/json.bl sub Ok
-FILE std/lexer.bl forms=113 declared=104 checked=9
+FILE std/lexer.bl forms=119 declared=106 checked=13
 GLOBAL std/lexer.bl Nat-Ord Ok
 GLOBAL std/lexer.bl ORD Ok
 GLOBAL std/lexer.bl Ord Ok
@@ -359,11 +389,17 @@ GLOBAL std/lexer.bl cmp Ok
 GLOBAL std/lexer.bl even Ok
 GLOBAL std/lexer.bl fill-from Ok
 GLOBAL std/lexer.bl four-is-even Ok
+GLOBAL std/lexer.bl int-abs Ok
+GLOBAL std/lexer.bl int-abs-4-is-4 Ok
+GLOBAL std/lexer.bl int-abs-neg9-is-9 Ok
 GLOBAL std/lexer.bl int-add Ok
 GLOBAL std/lexer.bl int-div Ok
 GLOBAL std/lexer.bl int-double Ok
 GLOBAL std/lexer.bl int-eq Ok
 GLOBAL std/lexer.bl int-lt Ok
+GLOBAL std/lexer.bl int-mod Ok
+GLOBAL std/lexer.bl int-mod-17-5-is-2 Ok
+GLOBAL std/lexer.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL std/lexer.bl int-mul Ok
 GLOBAL std/lexer.bl int-one Ok
 GLOBAL std/lexer.bl int-pred Ok
@@ -584,7 +620,7 @@ FILE std/pair.bl forms=4 declared=4 checked=0
 GLOBAL std/pair.bl pair-fst Ok
 GLOBAL std/pair.bl pair-snd Ok
 GLOBAL std/pair.bl pair-swap Ok
-FILE std/parser.bl forms=167 declared=155 checked=12
+FILE std/parser.bl forms=173 declared=157 checked=16
 GLOBAL std/parser.bl Nat-Ord Ok
 GLOBAL std/parser.bl ORD Ok
 GLOBAL std/parser.bl Ord Ok
@@ -615,11 +651,17 @@ GLOBAL std/parser.bl flush Ok
 GLOBAL std/parser.bl foldr Ok
 GLOBAL std/parser.bl four-is-even Ok
 GLOBAL std/parser.bl from-maybe Ok
+GLOBAL std/parser.bl int-abs Ok
+GLOBAL std/parser.bl int-abs-4-is-4 Ok
+GLOBAL std/parser.bl int-abs-neg9-is-9 Ok
 GLOBAL std/parser.bl int-add Ok
 GLOBAL std/parser.bl int-div Ok
 GLOBAL std/parser.bl int-double Ok
 GLOBAL std/parser.bl int-eq Ok
 GLOBAL std/parser.bl int-lt Ok
+GLOBAL std/parser.bl int-mod Ok
+GLOBAL std/parser.bl int-mod-17-5-is-2 Ok
+GLOBAL std/parser.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL std/parser.bl int-mul Ok
 GLOBAL std/parser.bl int-one Ok
 GLOBAL std/parser.bl int-pred Ok
@@ -929,14 +971,20 @@ GLOBAL std/test.bl sub Ok
 GLOBAL std/test.bl suite-all-passed Ok
 GLOBAL std/test.bl suite-passed Ok
 GLOBAL std/test.bl suite-total Ok
-FILE std/time.bl forms=15 declared=15 checked=0
+FILE std/time.bl forms=21 declared=17 checked=4
 GLOBAL std/time.bl clock-now Ok
 GLOBAL std/time.bl elapsed-ms Ok
+GLOBAL std/time.bl int-abs Ok
+GLOBAL std/time.bl int-abs-4-is-4 Ok
+GLOBAL std/time.bl int-abs-neg9-is-9 Ok
 GLOBAL std/time.bl int-add Ok
 GLOBAL std/time.bl int-div Ok
 GLOBAL std/time.bl int-double Ok
 GLOBAL std/time.bl int-eq Ok
 GLOBAL std/time.bl int-lt Ok
+GLOBAL std/time.bl int-mod Ok
+GLOBAL std/time.bl int-mod-17-5-is-2 Ok
+GLOBAL std/time.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL std/time.bl int-mul Ok
 GLOBAL std/time.bl int-one Ok
 GLOBAL std/time.bl int-pred Ok
@@ -1353,7 +1401,7 @@ GLOBAL spore_print.bl sub Ok
 GLOBAL spore_print.bl sv-flat Ok
 GLOBAL spore_print.bl var-name Ok
 GLOBAL spore_print.bl verdict-of Ok
-FILE spore_reader.bl forms=311 declared=295 checked=16
+FILE spore_reader.bl forms=317 declared=297 checked=20
 GLOBAL spore_reader.bl Nat-Ord Ok
 GLOBAL spore_reader.bl ORD Ok
 GLOBAL spore_reader.bl Ord Ok
@@ -1441,11 +1489,17 @@ GLOBAL spore_reader.bl flush Ok
 GLOBAL spore_reader.bl foldr Ok
 GLOBAL spore_reader.bl four-is-even Ok
 GLOBAL spore_reader.bl from-maybe Ok
+GLOBAL spore_reader.bl int-abs Ok
+GLOBAL spore_reader.bl int-abs-4-is-4 Ok
+GLOBAL spore_reader.bl int-abs-neg9-is-9 Ok
 GLOBAL spore_reader.bl int-add Ok
 GLOBAL spore_reader.bl int-div Ok
 GLOBAL spore_reader.bl int-double Ok
 GLOBAL spore_reader.bl int-eq Ok
 GLOBAL spore_reader.bl int-lt Ok
+GLOBAL spore_reader.bl int-mod Ok
+GLOBAL spore_reader.bl int-mod-17-5-is-2 Ok
+GLOBAL spore_reader.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL spore_reader.bl int-mul Ok
 GLOBAL spore_reader.bl int-one Ok
 GLOBAL spore_reader.bl int-pred Ok
@@ -1628,7 +1682,7 @@ GLOBAL examples/actor_pingpong.bl pred Ok
 GLOBAL examples/actor_pingpong.bl reverse Ok
 GLOBAL examples/actor_pingpong.bl reverse-onto Ok
 GLOBAL examples/actor_pingpong.bl sub Ok
-FILE examples/array_scratch.bl forms=46 declared=43 checked=3
+FILE examples/array_scratch.bl forms=52 declared=45 checked=7
 GLOBAL examples/array_scratch.bl and Ok
 GLOBAL examples/array_scratch.bl array-get Ok
 GLOBAL examples/array_scratch.bl array-length Ok
@@ -1641,11 +1695,17 @@ GLOBAL examples/array_scratch.bl boxed-array-set Ok
 GLOBAL examples/array_scratch.bl even Ok
 GLOBAL examples/array_scratch.bl four Ok
 GLOBAL examples/array_scratch.bl four-is-even Ok
+GLOBAL examples/array_scratch.bl int-abs Ok
+GLOBAL examples/array_scratch.bl int-abs-4-is-4 Ok
+GLOBAL examples/array_scratch.bl int-abs-neg9-is-9 Ok
 GLOBAL examples/array_scratch.bl int-add Ok
 GLOBAL examples/array_scratch.bl int-div Ok
 GLOBAL examples/array_scratch.bl int-double Ok
 GLOBAL examples/array_scratch.bl int-eq Ok
 GLOBAL examples/array_scratch.bl int-lt Ok
+GLOBAL examples/array_scratch.bl int-mod Ok
+GLOBAL examples/array_scratch.bl int-mod-17-5-is-2 Ok
+GLOBAL examples/array_scratch.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL examples/array_scratch.bl int-mul Ok
 GLOBAL examples/array_scratch.bl int-one Ok
 GLOBAL examples/array_scratch.bl int-pred Ok
@@ -1731,7 +1791,7 @@ GLOBAL examples/bench_sum.bl reverse Ok
 GLOBAL examples/bench_sum.bl reverse-onto Ok
 GLOBAL examples/bench_sum.bl sub Ok
 GLOBAL examples/bench_sum.bl ten Ok
-FILE examples/boxed_array_scratch.bl forms=46 declared=43 checked=3
+FILE examples/boxed_array_scratch.bl forms=52 declared=45 checked=7
 GLOBAL examples/boxed_array_scratch.bl and Ok
 GLOBAL examples/boxed_array_scratch.bl array-get Ok
 GLOBAL examples/boxed_array_scratch.bl array-length Ok
@@ -1743,11 +1803,17 @@ GLOBAL examples/boxed_array_scratch.bl boxed-array-new Ok
 GLOBAL examples/boxed_array_scratch.bl boxed-array-set Ok
 GLOBAL examples/boxed_array_scratch.bl even Ok
 GLOBAL examples/boxed_array_scratch.bl four-is-even Ok
+GLOBAL examples/boxed_array_scratch.bl int-abs Ok
+GLOBAL examples/boxed_array_scratch.bl int-abs-4-is-4 Ok
+GLOBAL examples/boxed_array_scratch.bl int-abs-neg9-is-9 Ok
 GLOBAL examples/boxed_array_scratch.bl int-add Ok
 GLOBAL examples/boxed_array_scratch.bl int-div Ok
 GLOBAL examples/boxed_array_scratch.bl int-double Ok
 GLOBAL examples/boxed_array_scratch.bl int-eq Ok
 GLOBAL examples/boxed_array_scratch.bl int-lt Ok
+GLOBAL examples/boxed_array_scratch.bl int-mod Ok
+GLOBAL examples/boxed_array_scratch.bl int-mod-17-5-is-2 Ok
+GLOBAL examples/boxed_array_scratch.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL examples/boxed_array_scratch.bl int-mul Ok
 GLOBAL examples/boxed_array_scratch.bl int-one Ok
 GLOBAL examples/boxed_array_scratch.bl int-pred Ok
@@ -1772,7 +1838,7 @@ GLOBAL examples/boxed_array_scratch.bl pred Ok
 GLOBAL examples/boxed_array_scratch.bl seven Ok
 GLOBAL examples/boxed_array_scratch.bl sub Ok
 GLOBAL examples/boxed_array_scratch.bl three Ok
-FILE examples/bytes_scratch.bl forms=41 declared=38 checked=3
+FILE examples/bytes_scratch.bl forms=47 declared=40 checked=7
 GLOBAL examples/bytes_scratch.bl and Ok
 GLOBAL examples/bytes_scratch.bl bytes-get Ok
 GLOBAL examples/bytes_scratch.bl bytes-length Ok
@@ -1781,11 +1847,17 @@ GLOBAL examples/bytes_scratch.bl bytes-set Ok
 GLOBAL examples/bytes_scratch.bl even Ok
 GLOBAL examples/bytes_scratch.bl four Ok
 GLOBAL examples/bytes_scratch.bl four-is-even Ok
+GLOBAL examples/bytes_scratch.bl int-abs Ok
+GLOBAL examples/bytes_scratch.bl int-abs-4-is-4 Ok
+GLOBAL examples/bytes_scratch.bl int-abs-neg9-is-9 Ok
 GLOBAL examples/bytes_scratch.bl int-add Ok
 GLOBAL examples/bytes_scratch.bl int-div Ok
 GLOBAL examples/bytes_scratch.bl int-double Ok
 GLOBAL examples/bytes_scratch.bl int-eq Ok
 GLOBAL examples/bytes_scratch.bl int-lt Ok
+GLOBAL examples/bytes_scratch.bl int-mod Ok
+GLOBAL examples/bytes_scratch.bl int-mod-17-5-is-2 Ok
+GLOBAL examples/bytes_scratch.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL examples/bytes_scratch.bl int-mul Ok
 GLOBAL examples/bytes_scratch.bl int-one Ok
 GLOBAL examples/bytes_scratch.bl int-pred Ok
@@ -1843,14 +1915,20 @@ FILE examples/calculator.bl forms=4 declared=4 checked=0
 GLOBAL examples/calculator.bl eval Ok
 GLOBAL examples/calculator.bl expr Ok
 GLOBAL examples/calculator.bl main Ok
-FILE examples/clock_scratch.bl forms=16 declared=16 checked=0
+FILE examples/clock_scratch.bl forms=22 declared=18 checked=4
 GLOBAL examples/clock_scratch.bl clock-now Ok
 GLOBAL examples/clock_scratch.bl elapsed-ms Ok
+GLOBAL examples/clock_scratch.bl int-abs Ok
+GLOBAL examples/clock_scratch.bl int-abs-4-is-4 Ok
+GLOBAL examples/clock_scratch.bl int-abs-neg9-is-9 Ok
 GLOBAL examples/clock_scratch.bl int-add Ok
 GLOBAL examples/clock_scratch.bl int-div Ok
 GLOBAL examples/clock_scratch.bl int-double Ok
 GLOBAL examples/clock_scratch.bl int-eq Ok
 GLOBAL examples/clock_scratch.bl int-lt Ok
+GLOBAL examples/clock_scratch.bl int-mod Ok
+GLOBAL examples/clock_scratch.bl int-mod-17-5-is-2 Ok
+GLOBAL examples/clock_scratch.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL examples/clock_scratch.bl int-mul Ok
 GLOBAL examples/clock_scratch.bl int-one Ok
 GLOBAL examples/clock_scratch.bl int-pred Ok
@@ -2115,7 +2193,7 @@ GLOBAL examples/equations.bl reverse Ok
 GLOBAL examples/equations.bl reverse-onto Ok
 GLOBAL examples/equations.bl sub Ok
 GLOBAL examples/equations.bl sum Ok
-FILE examples/f64_scratch.bl forms=45 declared=45 checked=0
+FILE examples/f64_scratch.bl forms=57 declared=49 checked=8
 GLOBAL examples/f64_scratch.bl F64 Declined
 GLOBAL examples/f64_scratch.bl f64-add Declined
 GLOBAL examples/f64_scratch.bl f64-div Declined
@@ -2134,11 +2212,17 @@ GLOBAL examples/f64_scratch.bl f64-round Declined
 GLOBAL examples/f64_scratch.bl f64-sub Declined
 GLOBAL examples/f64_scratch.bl f64-times Declined
 GLOBAL examples/f64_scratch.bl f64-zero Declined
+GLOBAL examples/f64_scratch.bl int-abs Ok
+GLOBAL examples/f64_scratch.bl int-abs-4-is-4 Ok
+GLOBAL examples/f64_scratch.bl int-abs-neg9-is-9 Ok
 GLOBAL examples/f64_scratch.bl int-add Ok
 GLOBAL examples/f64_scratch.bl int-div Ok
 GLOBAL examples/f64_scratch.bl int-double Ok
 GLOBAL examples/f64_scratch.bl int-eq Ok
 GLOBAL examples/f64_scratch.bl int-lt Ok
+GLOBAL examples/f64_scratch.bl int-mod Ok
+GLOBAL examples/f64_scratch.bl int-mod-17-5-is-2 Ok
+GLOBAL examples/f64_scratch.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL examples/f64_scratch.bl int-mul Ok
 GLOBAL examples/f64_scratch.bl int-one Ok
 GLOBAL examples/f64_scratch.bl int-pred Ok
@@ -2433,17 +2517,23 @@ GLOBAL examples/gcd.bl plus-two-three-is-five Ok
 GLOBAL examples/gcd.bl pred Ok
 GLOBAL examples/gcd.bl show Ok
 GLOBAL examples/gcd.bl sub Ok
-FILE examples/graphics_scratch.bl forms=23 declared=23 checked=0
+FILE examples/graphics_scratch.bl forms=29 declared=25 checked=4
 GLOBAL examples/graphics_scratch.bl gfx-clear Ok
 GLOBAL examples/graphics_scratch.bl gfx-draw-rect Ok
 GLOBAL examples/graphics_scratch.bl gfx-init-window Ok
 GLOBAL examples/graphics_scratch.bl gfx-poll-input Ok
 GLOBAL examples/graphics_scratch.bl gfx-present Ok
+GLOBAL examples/graphics_scratch.bl int-abs Ok
+GLOBAL examples/graphics_scratch.bl int-abs-4-is-4 Ok
+GLOBAL examples/graphics_scratch.bl int-abs-neg9-is-9 Ok
 GLOBAL examples/graphics_scratch.bl int-add Ok
 GLOBAL examples/graphics_scratch.bl int-div Ok
 GLOBAL examples/graphics_scratch.bl int-double Ok
 GLOBAL examples/graphics_scratch.bl int-eq Ok
 GLOBAL examples/graphics_scratch.bl int-lt Ok
+GLOBAL examples/graphics_scratch.bl int-mod Ok
+GLOBAL examples/graphics_scratch.bl int-mod-17-5-is-2 Ok
+GLOBAL examples/graphics_scratch.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL examples/graphics_scratch.bl int-mul Ok
 GLOBAL examples/graphics_scratch.bl int-one Ok
 GLOBAL examples/graphics_scratch.bl int-pred Ok
@@ -2539,17 +2629,23 @@ GLOBAL examples/hello_string.bl string-map Ok
 GLOBAL examples/hello_string.bl string-reverse Ok
 GLOBAL examples/hello_string.bl string-shift Ok
 GLOBAL examples/hello_string.bl sub Ok
-FILE examples/hofold.bl forms=33 declared=30 checked=3
+FILE examples/hofold.bl forms=39 declared=32 checked=7
 GLOBAL examples/hofold.bl adder Ok
 GLOBAL examples/hofold.bl and Ok
 GLOBAL examples/hofold.bl even Ok
 GLOBAL examples/hofold.bl four-is-even Ok
 GLOBAL examples/hofold.bl hundred Ok
+GLOBAL examples/hofold.bl int-abs Ok
+GLOBAL examples/hofold.bl int-abs-4-is-4 Ok
+GLOBAL examples/hofold.bl int-abs-neg9-is-9 Ok
 GLOBAL examples/hofold.bl int-add Ok
 GLOBAL examples/hofold.bl int-div Ok
 GLOBAL examples/hofold.bl int-double Ok
 GLOBAL examples/hofold.bl int-eq Ok
 GLOBAL examples/hofold.bl int-lt Ok
+GLOBAL examples/hofold.bl int-mod Ok
+GLOBAL examples/hofold.bl int-mod-17-5-is-2 Ok
+GLOBAL examples/hofold.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL examples/hofold.bl int-mul Ok
 GLOBAL examples/hofold.bl int-one Ok
 GLOBAL examples/hofold.bl int-pred Ok
@@ -2583,7 +2679,7 @@ GLOBAL examples/int_branch.bl not Ok
 GLOBAL examples/int_branch.bl not0 Ok
 GLOBAL examples/int_branch.bl or Ok
 GLOBAL examples/int_branch.bl sign Ok
-FILE examples/int_sum.bl forms=42 declared=39 checked=3
+FILE examples/int_sum.bl forms=48 declared=41 checked=7
 GLOBAL examples/int_sum.bl and Ok
 GLOBAL examples/int_sum.bl append Ok
 GLOBAL examples/int_sum.bl build-int-ones Ok
@@ -2593,11 +2689,17 @@ GLOBAL examples/int_sum.bl even Ok
 GLOBAL examples/int_sum.bl filter Ok
 GLOBAL examples/int_sum.bl foldr Ok
 GLOBAL examples/int_sum.bl four-is-even Ok
+GLOBAL examples/int_sum.bl int-abs Ok
+GLOBAL examples/int_sum.bl int-abs-4-is-4 Ok
+GLOBAL examples/int_sum.bl int-abs-neg9-is-9 Ok
 GLOBAL examples/int_sum.bl int-add Ok
 GLOBAL examples/int_sum.bl int-div Ok
 GLOBAL examples/int_sum.bl int-double Ok
 GLOBAL examples/int_sum.bl int-eq Ok
 GLOBAL examples/int_sum.bl int-lt Ok
+GLOBAL examples/int_sum.bl int-mod Ok
+GLOBAL examples/int_sum.bl int-mod-17-5-is-2 Ok
+GLOBAL examples/int_sum.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL examples/int_sum.bl int-mul Ok
 GLOBAL examples/int_sum.bl int-one Ok
 GLOBAL examples/int_sum.bl int-pred Ok
@@ -2809,7 +2911,7 @@ GLOBAL examples/list_sum.bl sample Ok
 GLOBAL examples/list_sum.bl sub Ok
 GLOBAL examples/list_sum.bl three Ok
 GLOBAL examples/list_sum.bl two Ok
-FILE examples/listfold.bl forms=39 declared=36 checked=3
+FILE examples/listfold.bl forms=45 declared=38 checked=7
 GLOBAL examples/listfold.bl and Ok
 GLOBAL examples/listfold.bl append Ok
 GLOBAL examples/listfold.bl concat Ok
@@ -2817,11 +2919,17 @@ GLOBAL examples/listfold.bl even Ok
 GLOBAL examples/listfold.bl filter Ok
 GLOBAL examples/listfold.bl foldr Ok
 GLOBAL examples/listfold.bl four-is-even Ok
+GLOBAL examples/listfold.bl int-abs Ok
+GLOBAL examples/listfold.bl int-abs-4-is-4 Ok
+GLOBAL examples/listfold.bl int-abs-neg9-is-9 Ok
 GLOBAL examples/listfold.bl int-add Ok
 GLOBAL examples/listfold.bl int-div Ok
 GLOBAL examples/listfold.bl int-double Ok
 GLOBAL examples/listfold.bl int-eq Ok
 GLOBAL examples/listfold.bl int-lt Ok
+GLOBAL examples/listfold.bl int-mod Ok
+GLOBAL examples/listfold.bl int-mod-17-5-is-2 Ok
+GLOBAL examples/listfold.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL examples/listfold.bl int-mul Ok
 GLOBAL examples/listfold.bl int-one Ok
 GLOBAL examples/listfold.bl int-pred Ok
@@ -3115,7 +3223,7 @@ GLOBAL examples/palindrome.bl string-map Ok
 GLOBAL examples/palindrome.bl string-reverse Ok
 GLOBAL examples/palindrome.bl string-shift Ok
 GLOBAL examples/palindrome.bl sub Ok
-FILE examples/paren_depth.bl forms=115 declared=106 checked=9
+FILE examples/paren_depth.bl forms=121 declared=108 checked=13
 GLOBAL examples/paren_depth.bl Nat-Ord Ok
 GLOBAL examples/paren_depth.bl ORD Ok
 GLOBAL examples/paren_depth.bl Ord Ok
@@ -3137,11 +3245,17 @@ GLOBAL examples/paren_depth.bl cmp Ok
 GLOBAL examples/paren_depth.bl even Ok
 GLOBAL examples/paren_depth.bl fill-from Ok
 GLOBAL examples/paren_depth.bl four-is-even Ok
+GLOBAL examples/paren_depth.bl int-abs Ok
+GLOBAL examples/paren_depth.bl int-abs-4-is-4 Ok
+GLOBAL examples/paren_depth.bl int-abs-neg9-is-9 Ok
 GLOBAL examples/paren_depth.bl int-add Ok
 GLOBAL examples/paren_depth.bl int-div Ok
 GLOBAL examples/paren_depth.bl int-double Ok
 GLOBAL examples/paren_depth.bl int-eq Ok
 GLOBAL examples/paren_depth.bl int-lt Ok
+GLOBAL examples/paren_depth.bl int-mod Ok
+GLOBAL examples/paren_depth.bl int-mod-17-5-is-2 Ok
+GLOBAL examples/paren_depth.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL examples/paren_depth.bl int-mul Ok
 GLOBAL examples/paren_depth.bl int-one Ok
 GLOBAL examples/paren_depth.bl int-pred Ok
@@ -3183,7 +3297,7 @@ GLOBAL examples/paren_depth.bl string-map Ok
 GLOBAL examples/paren_depth.bl string-reverse Ok
 GLOBAL examples/paren_depth.bl string-shift Ok
 GLOBAL examples/paren_depth.bl sub Ok
-FILE examples/parse_demo.bl forms=169 declared=157 checked=12
+FILE examples/parse_demo.bl forms=175 declared=159 checked=16
 GLOBAL examples/parse_demo.bl Nat-Ord Ok
 GLOBAL examples/parse_demo.bl ORD Ok
 GLOBAL examples/parse_demo.bl Ord Ok
@@ -3214,11 +3328,17 @@ GLOBAL examples/parse_demo.bl flush Ok
 GLOBAL examples/parse_demo.bl foldr Ok
 GLOBAL examples/parse_demo.bl four-is-even Ok
 GLOBAL examples/parse_demo.bl from-maybe Ok
+GLOBAL examples/parse_demo.bl int-abs Ok
+GLOBAL examples/parse_demo.bl int-abs-4-is-4 Ok
+GLOBAL examples/parse_demo.bl int-abs-neg9-is-9 Ok
 GLOBAL examples/parse_demo.bl int-add Ok
 GLOBAL examples/parse_demo.bl int-div Ok
 GLOBAL examples/parse_demo.bl int-double Ok
 GLOBAL examples/parse_demo.bl int-eq Ok
 GLOBAL examples/parse_demo.bl int-lt Ok
+GLOBAL examples/parse_demo.bl int-mod Ok
+GLOBAL examples/parse_demo.bl int-mod-17-5-is-2 Ok
+GLOBAL examples/parse_demo.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL examples/parse_demo.bl int-mul Ok
 GLOBAL examples/parse_demo.bl int-one Ok
 GLOBAL examples/parse_demo.bl int-pred Ok
@@ -3777,7 +3897,7 @@ GLOBAL examples/selfhost_bridge.bl sv-flat Ok
 GLOBAL examples/selfhost_bridge.bl var-name Ok
 GLOBAL examples/selfhost_bridge.bl verdict-of Ok
 GLOBAL examples/selfhost_bridge.bl write-file-str Ok
-FILE examples/selfhost_check.bl forms=450 declared=422 checked=28
+FILE examples/selfhost_check.bl forms=456 declared=424 checked=32
 GLOBAL examples/selfhost_check.bl Nat-Ord Ok
 GLOBAL examples/selfhost_check.bl ORD Ok
 GLOBAL examples/selfhost_check.bl Ord Ok
@@ -3881,11 +4001,17 @@ GLOBAL examples/selfhost_check.bl from-maybe Ok
 GLOBAL examples/selfhost_check.bl get-line Ok
 GLOBAL examples/selfhost_check.bl good Ok
 GLOBAL examples/selfhost_check.bl inc-digits Ok
+GLOBAL examples/selfhost_check.bl int-abs Ok
+GLOBAL examples/selfhost_check.bl int-abs-4-is-4 Ok
+GLOBAL examples/selfhost_check.bl int-abs-neg9-is-9 Ok
 GLOBAL examples/selfhost_check.bl int-add Ok
 GLOBAL examples/selfhost_check.bl int-div Ok
 GLOBAL examples/selfhost_check.bl int-double Ok
 GLOBAL examples/selfhost_check.bl int-eq Ok
 GLOBAL examples/selfhost_check.bl int-lt Ok
+GLOBAL examples/selfhost_check.bl int-mod Ok
+GLOBAL examples/selfhost_check.bl int-mod-17-5-is-2 Ok
+GLOBAL examples/selfhost_check.bl int-mod-neg7-3-is-neg1 Ok
 GLOBAL examples/selfhost_check.bl int-mul Ok
 GLOBAL examples/selfhost_check.bl int-one Ok
 GLOBAL examples/selfhost_check.bl int-pred Ok

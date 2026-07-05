@@ -50,3 +50,25 @@
 (deftotal int-succ (Pi ((a Int)) Int) (lam (a) (int+ a (int 1))))
 
 (deftotal int-pred (Pi ((a Int)) Int) (lam (a) (int- a (int 1))))
+
+; Truncated remainder: `a - b*(a/b)` — the exact complement of the kernel's truncating `int/`
+; (so `(int-add (int-mul b (int-div a b)) (int-mod a b)) = a` whenever `b ≠ 0`; division by zero
+; follows the kernel's primitive behavior, same caveat as `int-div`). The bucket-index primitive a
+; hash table needs (D4 groundwork).
+(deftotal int-mod (Pi ((a Int) (b Int)) Int) (lam (a b) (int- a (int* b (int/ a b)))))
+
+; Absolute value, branching on the `int<` flag with the primitive `if-zero` eliminator (T1a) —
+; flag `0` (not negative) keeps `a`, flag `1` negates. The first stdlib use of `if-zero`; still no
+; `Bool` dependency, so the file stays loadable in isolation.
+(deftotal int-abs (Pi ((a Int)) Int) (lam (a) (if-zero (int< a (int 0)) a (int- (int 0) a))))
+
+; Kernel-checked semantic pins (the std/nat.bl `define-by … compute` discipline): the remainder is
+; TRUNCATED (`-7 mod 3 = -1`, matching `int/`'s truncation — not Euclidean/floored), and `int-abs`
+; branches correctly on both signs.
+(define-by int-mod-17-5-is-2 (Path Int (int-mod (int 17) (int 5)) (int 2)) compute)
+
+(define-by int-mod-neg7-3-is-neg1 (Path Int (int-mod (int -7) (int 3)) (int -1)) compute)
+
+(define-by int-abs-neg9-is-9 (Path Int (int-abs (int -9)) (int 9)) compute)
+
+(define-by int-abs-4-is-4 (Path Int (int-abs (int 4)) (int 4)) compute)
