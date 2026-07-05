@@ -336,6 +336,13 @@ fn mentions_data(term: &Term, name: &DataName) -> bool {
         Term::IntPrim { lhs, rhs, .. } => {
             mentions_data(lhs, name) || mentions_data(rhs, name)
         }
+        Term::IfZero {
+            scrut, then_, else_, ..
+        } => {
+            mentions_data(scrut, name)
+                || mentions_data(then_, name)
+                || mentions_data(else_, name)
+        }
         // Leaves with no `Term` child: cannot mention a data type.
         Term::Var(_)
         | Term::Univ(_)

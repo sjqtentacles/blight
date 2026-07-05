@@ -433,6 +433,11 @@ impl Cfa {
                     }
                 }
             }
+            // `if-zero` binds no variables; analyze both branch continuations.
+            Tail::IfZero(_scrut, then_, else_) => {
+                self.tail(then_, scope, curfn);
+                self.tail(else_, scope, curfn);
+            }
             Tail::Region(body) => self.tail(body, scope, curfn),
             Tail::Handle {
                 body,

@@ -1519,6 +1519,9 @@ pub mod bench_support {
                 Tail::Case(scrut, arms) => {
                     atom(scrut) + arms.iter().map(|a| in_tail(&a.body)).sum::<usize>()
                 }
+                Tail::IfZero(scrut, then_, else_) => {
+                    atom(scrut) + in_tail(then_) + in_tail(else_)
+                }
                 Tail::Region(b) => in_tail(b),
                 Tail::Handle {
                     body,

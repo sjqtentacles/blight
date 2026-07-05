@@ -1,0 +1,36 @@
+; int_branch.bl — the primitive `Int` eliminator `if-zero` (T1a), and the real `Bool`-returning
+; comparison predicates it unlocks.
+;
+; `Int` is a primitive kernel base type with no inductive structure, so before T1a there was no way
+; to *branch* on an integer: the comparison primitives `int=`/`int<` deliberately return an `Int`
+; flag (`1`/`0`), keeping the kernel's Int fragment self-contained (no `Bool` in its typing rule).
+; `if-zero s t e` is the one kernel eliminator that closes that gap — it reduces to `t` when `s : Int`
+; is `0` and to `e` otherwise — so untrusted tower code can finally bridge an `Int` flag to a `Bool`.
+;
+;   cargo run -p blight-repl --features llvm -- build examples/int_branch.bl -o int_branch && ./int_branch  # => 111
+
+(load "std/bool.bl")
+
+; Is a machine integer zero? `if-zero` used directly as the `Int -> Bool` bridge.
+(deftotal int-zero? (Pi ((a Int)) Bool) (lam (a) (if-zero a true false)))
+
+; Equality / strict-less-than as real `Bool`s. The kernel primitive returns a `1`/`0` flag; the flag
+; is `1` (≠ 0) exactly on success, so the branches read `false` (flag = 0 ⇒ fail) then `true`.
+(deftotal int-eq? (Pi ((a Int) (b Int)) Bool) (lam (a b) (if-zero (int= a b) false true)))
+(deftotal int-lt? (Pi ((a Int) (b Int)) Bool) (lam (a b) (if-zero (int< a b) false true)))
+
+; Logical negation of an integer flag, entirely inside the Int fragment (no `Bool`): `not0 0 = 1`,
+; `not0 n = 0`. Shows `if-zero` composing without leaving `Int`.
+(deftotal not0 (Pi ((a Int)) Int) (lam (a) (if-zero a (int 1) (int 0))))
+
+; The sign of an integer as `-1 / 0 / 1`, branching with nested `if-zero` (zero first, then
+; negative-vs-positive via the `int<` flag).
+(deftotal sign (Pi ((n Int)) Int)
+  (lam (n)
+    (if-zero n
+      (int 0)
+      (if-zero (int< n (int 0)) (int 1) (int- (int 0) (int 1))))))
+
+; Entry point: `if-zero` folds a computed-zero scrutinee (`5 - 5 = 0`) to the `then` branch, so
+; `main` evaluates to `111`. Also forces the predicates above to be checked by the kernel + spore.
+(define main Int (if-zero (int- (int 5) (int 5)) (int 111) (int 222)))

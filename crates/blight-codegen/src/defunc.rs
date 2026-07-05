@@ -82,6 +82,11 @@ impl Rewriter {
                     })
                     .collect(),
             ),
+            Tail::IfZero(scrut, then_, else_) => Tail::IfZero(
+                scrut.clone(),
+                Box::new(self.tail(then_)),
+                Box::new(self.tail(else_)),
+            ),
             Tail::Region(body) => Tail::Region(Box::new(self.tail(body))),
             // Terminal / no embedded rewritable apply.
             Tail::Ret(_)

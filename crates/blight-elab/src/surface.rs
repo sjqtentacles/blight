@@ -119,6 +119,10 @@ pub enum Surface {
     /// A primitive `Int` operation: `(int+ a b)`, `(int- a b)`, `(int* a b)`, `(int/ a b)`,
     /// `(int= a b)`, `(int< a b)`. Comparisons conclude `Int` (1/0) like the kernel primitive.
     IntPrim(blight_kernel::IntPrimOp, Box<Surface>, Box<Surface>),
+    /// `(if-zero s t e)` — the primitive `Int` eliminator (T1a): reduces to `t` when `s : Int` is
+    /// `0`, to `e` otherwise. Both branches must have the same type. This is what the friendly
+    /// `Bool`-returning `int-eq?`/`int-lt?` in the stdlib are built on.
+    IfZero(Box<Surface>, Box<Surface>, Box<Surface>),
 
     // ---- cubical Kan / Glue layer (spec §2.6; plan A2b) — surface syntax for the univalence
     // primitives, so `ua`/`Glue` are writable in the tower. `Partial`/`System`/`Glue`/`glue`/

@@ -10,11 +10,14 @@
 ; no new kernel surface — `Int` and its primitives already live in the trusted base; these are just
 ; readable names usable as first-class functions (e.g. as the `f` argument to `foldr`).
 ;
-; NOTE on comparisons: `Int` has **no eliminator** (it is not inductive), so there is no `Int -> Bool`
-; bridge and no `if`-on-`Int` in tower code. The kernel primitives `int=`/`int<` therefore conclude
-; `Int` themselves (`1` for true, `0` for false), and these wrappers preserve that — `int-eq`/`int-lt`
-; return an `Int` flag, not a `Bool`. Branching on an integer result is out of scope until/unless an
-; `Int` eliminator is added to the kernel (a deliberate TCB decision, not an oversight).
+; NOTE on comparisons: the kernel primitives `int=`/`int<` conclude `Int` themselves (`1` for true,
+; `0` for false), and these wrappers preserve that — `int-eq`/`int-lt` return an `Int` flag, not a
+; `Bool`. Returning an `Int` flag is deliberate: it keeps the kernel's Int fragment self-contained
+; (the typing rule needs no `Bool` in scope). Branching on an integer *is* now possible — the kernel
+; provides the primitive eliminator `if-zero` (T1a), so tower code can bridge an `Int` flag to a real
+; `Bool` (see `examples/int_branch.bl` for `int-zero?`/`int-eq?`/`int-lt?` built on `if-zero`). This
+; file stays a pure *naming* layer over the primitives and deliberately does not depend on `std/bool`,
+; so it remains loadable in isolation.
 ;
 ; UNTRUSTED tower code; loadable in isolation.
 

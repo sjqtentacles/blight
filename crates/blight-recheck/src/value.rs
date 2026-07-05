@@ -105,6 +105,14 @@ pub enum Neutral {
         lhs: Rc<RValue>,
         rhs: Rc<RValue>,
     },
+    /// A *stuck* `if-zero` (T1a): the scrutinee is neutral, so no branch is selected. Carries the
+    /// scrutinee plus both branch values so `quote` reconstructs the `RTerm::IfZero`. Mirrors the
+    /// kernel's `Neutral::IfZero`.
+    IfZero {
+        scrut: Rc<RValue>,
+        then_: Rc<RValue>,
+        else_: Rc<RValue>,
+    },
 }
 
 /// A term closure capturing an environment and a body with one free term binder.

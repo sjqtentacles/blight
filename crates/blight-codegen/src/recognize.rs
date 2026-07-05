@@ -288,6 +288,16 @@ fn map_children_env(c: &Cir, env: &mut Vec<bool>) -> Cir {
             lhs: Box::new(recog(lhs, env)),
             rhs: Box::new(recog(rhs, env)),
         },
+        // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => Cir::IfZero {
+            scrut: Box::new(recog(scrut, env)),
+            then_: Box::new(recog(then_, env)),
+            else_: Box::new(recog(else_, env)),
+        },
         Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
             op: *op,
             lhs: Box::new(recog(lhs, env)),
@@ -868,6 +878,16 @@ fn for_each_child(c: &Cir, f: &mut dyn FnMut(&Cir)) {
             f(lhs);
             f(rhs);
         }
+        // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => {
+            f(scrut);
+            f(then_);
+            f(else_);
+        }
         Cir::NatPrim { lhs, rhs, .. } | Cir::FloatPrim { lhs, rhs, .. } => {
             f(lhs);
             if let Some(r) = rhs {
@@ -1070,6 +1090,16 @@ fn map_children(c: &Cir, f: fn(&Cir) -> Cir) -> Cir {
             lhs: Box::new(f(lhs)),
             rhs: Box::new(f(rhs)),
         },
+        // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => Cir::IfZero {
+            scrut: Box::new(f(scrut)),
+            then_: Box::new(f(then_)),
+            else_: Box::new(f(else_)),
+        },
         Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
             op: *op,
             lhs: Box::new(f(lhs)),
@@ -1115,6 +1145,12 @@ fn any_child(c: &Cir, pred: fn(&Cir) -> bool) -> bool {
             op_clauses,
         } => found |= pred(body) || pred(return_clause) || op_clauses.iter().any(|(_, e)| pred(e)),
         Cir::IntPrim { lhs, rhs, .. } => found |= pred(lhs) || pred(rhs),
+        // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => found |= pred(scrut) || pred(then_) || pred(else_),
         Cir::NatPrim { lhs, rhs, .. } => {
             found |= pred(lhs) || rhs.as_ref().map(|r| pred(r)).unwrap_or(false)
         }

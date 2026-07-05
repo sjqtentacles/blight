@@ -188,6 +188,13 @@ fn lower_term(term: &Term, sig: &Signature) -> Cir {
             lhs: Box::new(lower_term(lhs, sig)),
             rhs: Box::new(lower_term(rhs, sig)),
         },
+        // `if-zero s t e` (T1a): a native `i64` branch on the scrutinee. All three subterms are at
+        // the same binder depth (no binder introduced), so they lower directly.
+        Term::IfZero { scrut, then_, else_ } => Cir::IfZero {
+            scrut: Box::new(lower_term(scrut, sig)),
+            then_: Box::new(lower_term(then_, sig)),
+            else_: Box::new(lower_term(else_, sig)),
+        },
         // `Delay A` is a *type*; it has no runtime content of its own.
         Term::Delay(_) => Cir::Erased,
 
@@ -444,6 +451,12 @@ fn shift_cir(c: &Cir, by: usize) -> Cir {
                 lhs: Box::new(go(lhs, by, depth)),
                 rhs: Box::new(go(rhs, by, depth)),
             },
+            // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
+            Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+                scrut: Box::new(go(scrut, by, depth)),
+                then_: Box::new(go(then_, by, depth)),
+                else_: Box::new(go(else_, by, depth)),
+            },
             Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
                 op: *op,
                 lhs: Box::new(go(lhs, by, depth)),
@@ -577,6 +590,12 @@ pub fn dead_bindings(c: &Cir) -> Cir {
             lhs: Box::new(dead_bindings(lhs)),
             rhs: Box::new(dead_bindings(rhs)),
         },
+        // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
+        Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+            scrut: Box::new(dead_bindings(scrut)),
+            then_: Box::new(dead_bindings(then_)),
+            else_: Box::new(dead_bindings(else_)),
+        },
         Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
             op: *op,
             lhs: Box::new(dead_bindings(lhs)),
@@ -641,6 +660,10 @@ pub(crate) fn cir_uses(c: &Cir, i: usize) -> bool {
         Cir::CallClosure(f, a) => cir_uses(f, i) || cir_uses(a, i),
         Cir::IntLit(_) | Cir::NatLit(_) | Cir::StrLit(_) => false,
         Cir::IntPrim { lhs, rhs, .. } => cir_uses(lhs, i) || cir_uses(rhs, i),
+        // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
+        Cir::IfZero { scrut, then_, else_ } => {
+            cir_uses(scrut, i) || cir_uses(then_, i) || cir_uses(else_, i)
+        }
         Cir::NatPrim { lhs, rhs, .. } => {
             cir_uses(lhs, i) || rhs.as_ref().map(|r| cir_uses(r, i)).unwrap_or(false)
         }
@@ -741,6 +764,12 @@ pub(crate) fn shift_cir_down(c: &Cir, depth: usize) -> Cir {
             op: *op,
             lhs: Box::new(shift_cir_down(lhs, depth)),
             rhs: Box::new(shift_cir_down(rhs, depth)),
+        },
+        // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
+        Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+            scrut: Box::new(shift_cir_down(scrut, depth)),
+            then_: Box::new(shift_cir_down(then_, depth)),
+            else_: Box::new(shift_cir_down(else_, depth)),
         },
         Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
             op: *op,
@@ -864,6 +893,12 @@ fn shift_cir_up(c: &Cir, depth: usize) -> Cir {
             op: *op,
             lhs: Box::new(shift_cir_up(lhs, depth)),
             rhs: Box::new(shift_cir_up(rhs, depth)),
+        },
+        // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
+        Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+            scrut: Box::new(shift_cir_up(scrut, depth)),
+            then_: Box::new(shift_cir_up(then_, depth)),
+            else_: Box::new(shift_cir_up(else_, depth)),
         },
         Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
             op: *op,
@@ -1030,6 +1065,12 @@ fn map_vars(c: &Cir, depth: usize, f: &dyn Fn(usize, usize) -> Cir) -> Cir {
             lhs: Box::new(map_vars(lhs, depth, f)),
             rhs: Box::new(map_vars(rhs, depth, f)),
         },
+        // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
+        Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+            scrut: Box::new(map_vars(scrut, depth, f)),
+            then_: Box::new(map_vars(then_, depth, f)),
+            else_: Box::new(map_vars(else_, depth, f)),
+        },
         Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
             op: *op,
             lhs: Box::new(map_vars(lhs, depth, f)),
@@ -1175,6 +1216,12 @@ pub(crate) fn visit_children(c: &Cir, f: &mut impl FnMut(&Cir)) {
         Cir::IntPrim { lhs, rhs, .. } => {
             f(lhs);
             f(rhs);
+        }
+        // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
+        Cir::IfZero { scrut, then_, else_ } => {
+            f(scrut);
+            f(then_);
+            f(else_);
         }
         Cir::NatPrim { lhs, rhs, .. } | Cir::FloatPrim { lhs, rhs, .. } => {
             f(lhs);
@@ -1800,6 +1847,9 @@ mod tests {
             Cir::EnvRef(_) => false,
             Cir::CallClosure(f, a) => contains_erased(f) || contains_erased(a),
             Cir::IntPrim { lhs, rhs, .. } => contains_erased(lhs) || contains_erased(rhs),
+            Cir::IfZero { scrut, then_, else_ } => {
+                contains_erased(scrut) || contains_erased(then_) || contains_erased(else_)
+            }
             Cir::NatPrim { lhs, rhs, .. } => {
                 contains_erased(lhs) || rhs.as_ref().map(|r| contains_erased(r)).unwrap_or(false)
             }

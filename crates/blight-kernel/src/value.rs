@@ -221,6 +221,16 @@ pub enum Neutral {
         lhs: Rc<Value>,
         rhs: Rc<Value>,
     },
+    /// A *stuck* `if-zero` eliminator (T1a): the scrutinee is neutral (not an `IntLit`), so the
+    /// branch cannot be selected. Carries the (stuck) scrutinee value plus both branch values so
+    /// `quote` can reconstruct the `Term::IfZero`. (When the scrutinee is an `IntLit`, `eval`
+    /// selects a branch instead — and evaluates *only* that branch, so a non-taken diverging branch
+    /// never runs under a literal scrutinee.) Mirrors [`Neutral::IntPrim`]'s stuck-operand shape.
+    IfZero {
+        scrut: Rc<Value>,
+        then_: Rc<Value>,
+        else_: Rc<Value>,
+    },
 }
 
 /// A persistent, structurally-shared stack of bound values (head = most-recently-bound, matching

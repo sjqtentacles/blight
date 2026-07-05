@@ -157,6 +157,12 @@ fn all_uses_destructure(c: &Cir, k: usize) -> bool {
         Cir::IntPrim { lhs, rhs, .. } => {
             all_uses_destructure(lhs, k) && all_uses_destructure(rhs, k)
         }
+        // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
+        Cir::IfZero { scrut, then_, else_ } => {
+            all_uses_destructure(scrut, k)
+                && all_uses_destructure(then_, k)
+                && all_uses_destructure(else_, k)
+        }
         Cir::NatPrim { lhs, rhs, .. } | Cir::FloatPrim { lhs, rhs, .. } => {
             all_uses_destructure(lhs, k)
                 && rhs
@@ -334,6 +340,12 @@ fn subst(c: &Cir, sigma: &[Cir], depth: usize) -> Cir {
             lhs: Box::new(subst(lhs, sigma, depth)),
             rhs: Box::new(subst(rhs, sigma, depth)),
         },
+        // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
+        Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+            scrut: Box::new(subst(scrut, sigma, depth)),
+            then_: Box::new(subst(then_, sigma, depth)),
+            else_: Box::new(subst(else_, sigma, depth)),
+        },
         Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
             op: *op,
             lhs: Box::new(subst(lhs, sigma, depth)),
@@ -453,6 +465,12 @@ fn shift_cir(c: &Cir, by: usize) -> Cir {
                 lhs: Box::new(go(lhs, by, cutoff)),
                 rhs: Box::new(go(rhs, by, cutoff)),
             },
+            // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
+            Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+                scrut: Box::new(go(scrut, by, cutoff)),
+                then_: Box::new(go(then_, by, cutoff)),
+                else_: Box::new(go(else_, by, cutoff)),
+            },
             Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
                 op: *op,
                 lhs: Box::new(go(lhs, by, cutoff)),
@@ -552,6 +570,12 @@ fn map_children(c: &Cir, f: fn(&Cir) -> Cir) -> Cir {
             op: *op,
             lhs: Box::new(f(lhs)),
             rhs: Box::new(f(rhs)),
+        },
+        // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
+        Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+            scrut: Box::new(f(scrut)),
+            then_: Box::new(f(then_)),
+            else_: Box::new(f(else_)),
         },
         Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
             op: *op,

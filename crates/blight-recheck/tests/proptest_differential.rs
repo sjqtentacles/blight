@@ -197,11 +197,27 @@ fn arb_typed(fuel: u32) -> BoxedStrategy<Typed> {
             let ty = t.ty;
             Typed { term: app_id(ty.term(), t.term), ty }
         }),
-        1 => (sub.clone(), sub2.clone(), sub3).prop_map(|(s, a, b)| {
+        1 => (sub.clone(), sub2.clone(), sub3.clone()).prop_map(|(s, a, b)| {
             let scrut = coerce(s, Ty::Bool);
             let res = a.ty;
             let bt = coerce(b, res);
             Typed { term: elim_bool(res.term(), scrut, a.term, bt), ty: res }
+        }),
+        // `if-zero` (T1a): an Int scrutinee, two branches of a common type. Emitting it here is what
+        // makes the differential harness actually exercise the new fragment (coverage untested =
+        // coverage absent) — the kernel and re-checker must never disagree on it.
+        1 => (sub.clone(), sub2.clone(), sub3).prop_map(|(s, a, b)| {
+            let scrut = coerce(s, Ty::Int);
+            let res = a.ty;
+            let bt = coerce(b, res);
+            Typed {
+                term: Term::IfZero {
+                    scrut: Rc::new(scrut),
+                    then_: Rc::new(a.term),
+                    else_: Rc::new(bt),
+                },
+                ty: res,
+            }
         }),
         1 => (sub, sub2, 0u32..6).prop_map(|(l, r, opi)| {
             let op = match opi {

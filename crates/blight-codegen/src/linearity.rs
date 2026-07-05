@@ -204,6 +204,13 @@ fn classify(target: usize, t: &Tail) -> Verdict {
                 .fold(Verdict::Dead, branch_combine);
             seq_combine(scrut_use, arms_use)
         }
+        // `if-zero`: the scrutinee is used (sequenced), then the two branches are alternatives
+        // (`branch_combine`, like `Case` arms). Branches bind nothing, so `target` is unchanged.
+        Tail::IfZero(scrut, then_, else_) => {
+            let scrut_use = atom_consuming(target, scrut);
+            let branch_use = branch_combine(classify(target, then_), classify(target, else_));
+            seq_combine(scrut_use, branch_use)
+        }
         // The extent of a trampolined delay is not tracked; conservatively retaining.
         Tail::Trampoline(a) => atom_retaining(target, a),
         Tail::Region(body) => classify(target, body),
@@ -265,6 +272,10 @@ fn count_tail(t: &Tail, stats: &mut LinearityStats) {
             for arm in arms {
                 count_tail(&arm.body, stats);
             }
+        }
+        Tail::IfZero(_, then_, else_) => {
+            count_tail(then_, stats);
+            count_tail(else_, stats);
         }
         Tail::Region(body) => count_tail(body, stats),
         Tail::Ret(_)

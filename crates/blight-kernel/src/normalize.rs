@@ -506,6 +506,21 @@ pub fn eval(env: &Env, term: &Term) -> Value {
         // definitional-equality reduction, e.g. `2 + 3 ≡ 5`). Otherwise stay stuck as a
         // `Neutral::IntPrim` so `quote` reconstructs the operation.
         Term::IntPrim { op, lhs, rhs } => int_prim(*op, eval(env, lhs), eval(env, rhs)),
+        // `if-zero s t e` (T1a): evaluate the scrutinee, then select a branch. On a literal we
+        // evaluate *only* the taken branch (lazy branch selection — a non-taken diverging branch is
+        // never run). On any non-literal scrutinee (a neutral — necessarily under a binder, since a
+        // closed term has no free variable to get stuck on) we stay stuck as a `Neutral::IfZero`,
+        // evaluating both branches so `quote` can read the normal form back. This mirrors
+        // [`int_prim`]'s "non-literal operand ⇒ stuck neutral" discipline exactly.
+        Term::IfZero { scrut, then_, else_ } => match eval(env, scrut) {
+            Value::IntLit(0) => eval(env, then_),
+            Value::IntLit(_) => eval(env, else_),
+            other => Value::Neutral(Neutral::IfZero {
+                scrut: Rc::new(other),
+                then_: Rc::new(eval(env, then_)),
+                else_: Rc::new(eval(env, else_)),
+            }),
+        },
 
         // `Interval`/`Partial`/`System`/`GlueTerm` only appear in dimension/partial position and
         // are handled by their enclosing former; a bare occurrence is a malformed term.
@@ -879,6 +894,10 @@ pub(crate) fn uses_binder(t: &Term, depth: usize) -> bool {
         | Term::Force(a)
         | Term::Foreign { ty: a, .. } => uses_binder(a, depth),
         Term::IntPrim { lhs, rhs, .. } => uses_binder(lhs, depth) || uses_binder(rhs, depth),
+        // `if-zero` binds no term variable in any subterm — all three are at the same depth.
+        Term::IfZero { scrut, then_, else_ } => {
+            uses_binder(scrut, depth) || uses_binder(then_, depth) || uses_binder(else_, depth)
+        }
     }
 }
 
@@ -1239,6 +1258,11 @@ fn quote_neutral(lvl: usize, dlvl: usize, n: &Neutral) -> Term {
             op: *op,
             lhs: Rc::new(quote_at(lvl, dlvl, lhs)),
             rhs: Rc::new(quote_at(lvl, dlvl, rhs)),
+        },
+        Neutral::IfZero { scrut, then_, else_ } => Term::IfZero {
+            scrut: Rc::new(quote_at(lvl, dlvl, scrut)),
+            then_: Rc::new(quote_at(lvl, dlvl, then_)),
+            else_: Rc::new(quote_at(lvl, dlvl, else_)),
         },
     }
 }
@@ -2296,6 +2320,18 @@ mod tests {
             (
                 "IntPrim rhs",
                 Term::IntPrim { op: IntPrimOp::Add, lhs: z(), rhs: v(1) },
+            ),
+            (
+                "IfZero scrut",
+                Term::IfZero { scrut: v(1), then_: z(), else_: z() },
+            ),
+            (
+                "IfZero then_",
+                Term::IfZero { scrut: z(), then_: v(1), else_: z() },
+            ),
+            (
+                "IfZero else_",
+                Term::IfZero { scrut: z(), then_: z(), else_: v(1) },
             ),
         ];
         for (label, t) in &probes {

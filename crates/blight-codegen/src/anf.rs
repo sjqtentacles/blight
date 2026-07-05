@@ -144,6 +144,10 @@ pub enum Tail {
     TailCallKnown(String, Atom, Atom),
     /// `case scrut of [arm…]` in tail position.
     Case(Atom, Vec<TailArm>),
+    /// `if-zero scrut then else` in tail position (T1a): a native `i64` compare-and-branch. The
+    /// scrutinee is an unboxed-`Int` atom; codegen emits `icmp eq i64 %scrut, 0` and branches to the
+    /// `then`/`else` continuations. Unlike [`Tail::Case`], the branches bind no variables.
+    IfZero(Atom, Box<Tail>, Box<Tail>),
     /// Force a delay value to its result, driving the trampoline loop (bounded stack).
     Trampoline(Atom),
     /// A region scope `region { body }` in tail position (spec §3.5): the codegen brackets `body`
@@ -318,6 +322,11 @@ fn peephole(t: Tail, self_name: Option<&str>, is_rec: bool, raise: bool) -> Tail
                     body: peephole(a.body, self_name, is_rec, raise),
                 })
                 .collect(),
+        ),
+        Tail::IfZero(scrut, then_, else_) => Tail::IfZero(
+            scrut,
+            Box::new(peephole(*then_, self_name, is_rec, raise)),
+            Box::new(peephole(*else_, self_name, is_rec, raise)),
         ),
         Tail::Region(body) => Tail::Region(Box::new(peephole(*body, self_name, is_rec, raise))),
         // Other tails contain no nested `Tail` to rewrite.
@@ -583,6 +592,26 @@ impl<'a> Anfer<'a> {
                     .collect();
                 wrap(binds, Tail::Case(satom, arms2))
             }
+            Cir::IfZero { scrut, then_, else_ } => {
+                // Evaluate the scrutinee (emitting `binds` as `pushed` slots), then branch. The
+                // branches bind NO variables (unlike a `Case` arm), so — exactly like `Case` with
+                // `arm.binders == 0` — their bodies must skip the `pushed` scrutinee slots that sit
+                // between them and the outer scope. Each branch is a fresh control-flow path, so it
+                // gets its own `Anfer` (fresh-var counter), mirroring the per-arm `Case` handling.
+                let mut binds = Vec::new();
+                let satom = self.atomize(scrut, s, &mut binds);
+                let pushed = binds.len();
+                let branch_shift = s.pushed(0, pushed);
+                let then_t = {
+                    let mut inner = Anfer::new(self.self_name, self.is_rec, self.fuse);
+                    inner.tail(then_, &branch_shift)
+                };
+                let else_t = {
+                    let mut inner = Anfer::new(self.self_name, self.is_rec, self.fuse);
+                    inner.tail(else_, &branch_shift)
+                };
+                wrap(binds, Tail::IfZero(satom, Box::new(then_t), Box::new(else_t)))
+            }
             Cir::Handle {
                 body,
                 return_clause,
@@ -831,9 +860,16 @@ impl<'a> Anfer<'a> {
                 let body_shift = s.under_binder().pushed(1, nv);
                 self.atomize(b, &body_shift, out)
             }
-            Cir::Lam(_) | Cir::Fix(_) | Cir::Case(_, _) | Cir::Handle { .. } => {
-                // These don't appear as sub-atoms post-CC for the programs we compile; emit a
-                // poison atom rather than panicking so the pure-Rust pipeline is total.
+            Cir::Lam(_)
+            | Cir::Fix(_)
+            | Cir::Case(_, _)
+            | Cir::IfZero { .. }
+            | Cir::Handle { .. } => {
+                // Control-flow forms (and lambdas/fix) don't appear as sub-atoms post-CC for the
+                // programs we compile — a branch reaches ANF in tail position (a function body or a
+                // match/if-zero arm). Emit a poison atom rather than panicking so the pure-Rust
+                // pipeline is total. (Same contract as `Cir::Case`; non-tail `if-zero` is unsupported,
+                // exactly as non-tail `match` is.)
                 Atom::Erased
             }
             // A flattened product (A1): a *single* allocation whose runtime slots are the
@@ -979,6 +1015,7 @@ pub fn is_anf(t: &Tail) -> bool {
         Tail::TailCallGlobal(_, _) | Tail::TailCallKnown(_, _, _) => true,
         Tail::Let(_comp, rest) => is_anf(rest),
         Tail::Case(_, arms) => arms.iter().all(|a| is_anf(&a.body)),
+        Tail::IfZero(_, t, e) => is_anf(t) && is_anf(e),
         Tail::Region(body) => is_anf(body),
         Tail::Handle {
             body: _,
@@ -996,6 +1033,7 @@ pub fn has_jump(t: &Tail) -> bool {
         Tail::TailCallGlobal(_, _) | Tail::TailCallKnown(_, _, _) => false,
         Tail::Let(_, rest) => has_jump(rest),
         Tail::Case(_, arms) => arms.iter().any(|a| has_jump(&a.body)),
+        Tail::IfZero(_, t, e) => has_jump(t) || has_jump(e),
         Tail::Region(body) => has_jump(body),
         Tail::Handle {
             body: _,
@@ -1013,6 +1051,7 @@ pub fn has_trampoline(t: &Tail) -> bool {
         Tail::TailCallGlobal(_, _) | Tail::TailCallKnown(_, _, _) => false,
         Tail::Let(_, rest) => has_trampoline(rest),
         Tail::Case(_, arms) => arms.iter().any(|a| has_trampoline(&a.body)),
+        Tail::IfZero(_, t, e) => has_trampoline(t) || has_trampoline(e),
         Tail::Region(body) => has_trampoline(body),
         Tail::Handle {
             body: _,
@@ -1364,6 +1403,7 @@ mod tests {
                 Tail::Let(_, rest) => 1 + count_lets(rest),
                 Tail::Region(b) => count_lets(b),
                 Tail::Case(_, arms) => arms.iter().map(|a| count_lets(&a.body)).sum(),
+                Tail::IfZero(_, t, e) => count_lets(t) + count_lets(e),
                 _ => 0,
             }
         }
@@ -1401,6 +1441,7 @@ mod tests {
         match t {
             Tail::Let(c, rest) => pred(c) || any_comp(rest, pred),
             Tail::Case(_, arms) => arms.iter().any(|a| any_comp(&a.body, pred)),
+            Tail::IfZero(_, t, e) => any_comp(t, pred) || any_comp(e, pred),
             Tail::Region(b) => any_comp(b, pred),
             _ => false,
         }

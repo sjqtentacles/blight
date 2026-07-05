@@ -286,6 +286,14 @@ pub enum RTerm {
         lhs: Box<RTerm>,
         rhs: Box<RTerm>,
     },
+    /// `if-zero s t e` (T1a): the primitive `Int` eliminator. Modeled (not declined) — `t`/`e` share
+    /// a type and the result is independent of the scrutinee, so the re-checker verifies it exactly
+    /// like the kernel.
+    IfZero {
+        scrut: Box<RTerm>,
+        then_: Box<RTerm>,
+        else_: Box<RTerm>,
+    },
 }
 
 /// Translate a kernel [`Term`] into this crate's [`RTerm`], **declining** on any variant outside
@@ -383,6 +391,11 @@ pub fn from_kernel(t: &Term) -> Result<RTerm, RecheckError> {
             op: *op,
             lhs: Box::new(from_kernel(lhs)?),
             rhs: Box::new(from_kernel(rhs)?),
+        },
+        Term::IfZero { scrut, then_, else_ } => RTerm::IfZero {
+            scrut: Box::new(from_kernel(scrut)?),
+            then_: Box::new(from_kernel(then_)?),
+            else_: Box::new(from_kernel(else_)?),
         },
 
         // ---- effects and handlers: now MODELED at the type level (Checked), not declined ----

@@ -280,6 +280,13 @@ fn go(term: &Term, ty: &Term, env: &mut Vec<bool>) -> Term {
             lhs: Rc::new(go(lhs, &Term::Erased, env)),
             rhs: Rc::new(go(rhs, &Term::Erased, env)),
         },
+        // `if-zero`: scrutinee and both branches are runtime-relevant (the scrutinee selects, the
+        // branches are the results), so all three are renumbered like an `IntPrim`'s operands.
+        Term::IfZero { scrut, then_, else_ } => Term::IfZero {
+            scrut: Rc::new(go(scrut, &Term::Erased, env)),
+            then_: Rc::new(go(then_, &Term::Erased, env)),
+            else_: Rc::new(go(else_, &Term::Erased, env)),
+        },
         Term::System(_) | Term::Interval(_) | Term::Erased => term.clone(),
     }
 }
@@ -315,6 +322,9 @@ pub fn occurs(i: usize, term: &Term) -> bool {
             Term::Univ(_) | Term::Data(_, _, _) | Term::Interval(_) | Term::Erased => false,
             Term::IntTy | Term::IntLit(_) => false,
             Term::IntPrim { lhs, rhs, .. } => go(i, lhs) || go(i, rhs),
+            Term::IfZero {
+                scrut, then_, else_, ..
+            } => go(i, scrut) || go(i, then_) || go(i, else_),
             Term::Pi(_, a, b) | Term::Sigma(a, b) => go(i, a) || go(i + 1, b),
             Term::Lam(b) => go(i + 1, b),
             Term::App(f, a) | Term::Pair(f, a) => go(i, f) || go(i, a),

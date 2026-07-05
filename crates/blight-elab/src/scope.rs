@@ -37,7 +37,7 @@ use crate::sexpr::{Span, Spanned, SpannedSexpr};
 const NON_BINDING_KEYWORDS: &[&str] = &[
     "the", "Path", "Type", "Delay", "now", "later", "force", "Partial", "system", "Glue", "glue",
     "unglue", "transp", "hcomp", "comp", "int", "int+", "int-", "int*", "int/", "int=", "int<",
-    "perform", "!", "pair", "fst", "snd", "ieq0", "ieq1", "cand", "cor",
+    "if-zero", "perform", "!", "pair", "fst", "snd", "ieq0", "ieq1", "cand", "cor",
 ];
 
 /// Bare atoms that are never a variable reference even outside a recognized list form (cofibration

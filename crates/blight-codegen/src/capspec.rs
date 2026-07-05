@@ -93,6 +93,11 @@ impl Rewriter {
                     })
                     .collect(),
             ),
+            Tail::IfZero(scrut, then_, else_) => Tail::IfZero(
+                scrut.clone(),
+                Box::new(self.tail(then_)),
+                Box::new(self.tail(else_)),
+            ),
             Tail::Region(body) => Tail::Region(Box::new(self.tail(body))),
             // Terminal / no embedded rewritable apply. `CallKnown`/`TailCallKnown` never appear in
             // capspec's pre-defunc input, but are matched here defensively (identity) in case of a
@@ -189,6 +194,12 @@ fn shift_tail(t: &Tail, depth: usize, m: usize) -> Tail {
                     body: shift_tail(&arm.body, depth + arm.binders, m),
                 })
                 .collect(),
+        ),
+        // `if-zero` binds no variables — branches shift at the same depth.
+        Tail::IfZero(scrut, then_, else_) => Tail::IfZero(
+            sa(scrut),
+            Box::new(shift_tail(then_, depth, m)),
+            Box::new(shift_tail(else_, depth, m)),
         ),
         Tail::Trampoline(a) => Tail::Trampoline(sa(a)),
         Tail::Region(body) => Tail::Region(Box::new(shift_tail(body, depth, m))),
@@ -434,6 +445,9 @@ mod tests {
             Tail::TailCallKnown(_, e, a) => atom_has_envref(e) || atom_has_envref(a),
             Tail::Case(scrut, arms) => {
                 atom_has_envref(scrut) || arms.iter().any(|arm| contains_envref(&arm.body))
+            }
+            Tail::IfZero(scrut, then_, else_) => {
+                atom_has_envref(scrut) || contains_envref(then_) || contains_envref(else_)
             }
             Tail::Region(b) => contains_envref(b),
             Tail::Handle {

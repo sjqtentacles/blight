@@ -283,6 +283,12 @@ fn for_each_child(c: &Cir, f: &mut dyn FnMut(&Cir)) {
             f(lhs);
             f(rhs);
         }
+        // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
+        Cir::IfZero { scrut, then_, else_ } => {
+            f(scrut);
+            f(then_);
+            f(else_);
+        }
         Cir::NatPrim { lhs, rhs, .. } | Cir::FloatPrim { lhs, rhs, .. } => {
             f(lhs);
             if let Some(r) = rhs {
@@ -348,6 +354,12 @@ fn map_children(c: &Cir, f: fn(&Cir) -> Cir) -> Cir {
             op: *op,
             lhs: Box::new(f(lhs)),
             rhs: Box::new(f(rhs)),
+        },
+        // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
+        Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+            scrut: Box::new(f(scrut)),
+            then_: Box::new(f(then_)),
+            else_: Box::new(f(else_)),
         },
         Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
             op: *op,

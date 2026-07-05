@@ -248,6 +248,16 @@ pub enum Cir {
         lhs: Box<Cir>,
         rhs: Box<Cir>,
     },
+    /// `if-zero s t e` (T1a): the primitive `Int` branch. Evaluates the (unboxed `i64`) scrutinee
+    /// `s` and continues with `t` when it is `0`, `e` otherwise — a native compare-and-branch, no
+    /// boxing. Like [`Cir::Case`], it is a control-flow form: it compiles in *tail position* (ANF
+    /// lowers it to a `Tail::IfZero`); the prelude's `int-eq?`/`int-lt?` (`λ a b. if-zero (int= a b)
+    /// … …`) put it exactly there.
+    IfZero {
+        scrut: Box<Cir>,
+        then_: Box<Cir>,
+        else_: Box<Cir>,
+    },
 
     // ---- recognized fast `Nat` arithmetic (M20, recognize.rs) ----
     /// A machine-word `Nat` literal, produced ONLY by the recognizer when it folds a fully-canonical

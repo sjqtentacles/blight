@@ -834,6 +834,16 @@ fn parse_list(items: &[Sexpr]) -> Result<Surface, ElabError> {
                 let b = parse_surface(&items[2])?;
                 return Ok(Surface::IntPrim(op, Box::new(a), Box::new(b)));
             }
+            "if-zero" => {
+                // `(if-zero s t e)` — the primitive `Int` eliminator (T1a).
+                if items.len() != 4 {
+                    return Err(ElabError::BadForm("(if-zero s t e)".into()));
+                }
+                let s = parse_surface(&items[1])?;
+                let t = parse_surface(&items[2])?;
+                let e = parse_surface(&items[3])?;
+                return Ok(Surface::IfZero(Box::new(s), Box::new(t), Box::new(e)));
+            }
             "perform" => {
                 // `(perform op arg)`, or `(perform op (T ...) arg)` for a parameterized effect's
                 // operation (Wave 7/E2): the explicit type-argument instantiation is a *list* in
@@ -2310,6 +2320,21 @@ fn elab(
                 rhs: Rc::new(rhs),
             })
         }
+        Surface::IfZero(s, t, e) => {
+            // `(if-zero s t e)` (T1a): the scrutinee is `Int`; both branches are elaborated against
+            // the *expected* type (threaded through), so a branch that needs it — an empty
+            // container, an ambiguous literal — elaborates without an ascription. The kernel's
+            // checking rule then verifies the branches agree.
+            let int_ty = Term::IntTy;
+            let scrut = elab(env, scope, s, Some(&int_ty))?;
+            let then_ = elab(env, scope, t, expected)?;
+            let else_ = elab(env, scope, e, expected)?;
+            Ok(Term::IfZero {
+                scrut: Rc::new(scrut),
+                then_: Rc::new(then_),
+                else_: Rc::new(else_),
+            })
+        }
 
         // ---- effects (spec §4.2, §4.3) ----
         Surface::Perform(op, type_args, arg) => {
@@ -3291,6 +3316,12 @@ fn collect_escaping_vars(
             for c in clauses {
                 go(&c.body, out);
             }
+        }
+        // `if-zero`: the scrutinee selects, and both branches are results — all three reach it.
+        IfZero(s, t, e) => {
+            go(s, out);
+            go(t, out);
+            go(e, out);
         }
         Handle {
             body,
@@ -4649,6 +4680,12 @@ fn abstract_vars(term: &Term, targets: &[usize]) -> Term {
                 lhs: Rc::new(r(lhs)),
                 rhs: Rc::new(r(rhs)),
             },
+            // `if-zero` binds no term variable — all three subterms stay at the same depth.
+            T::IfZero { scrut, then_, else_ } => T::IfZero {
+                scrut: Rc::new(r(scrut)),
+                then_: Rc::new(r(then_)),
+                else_: Rc::new(r(else_)),
+            },
         }
     }
     let mut body = go(term, 0, p, &binder_of);
@@ -4710,6 +4747,13 @@ fn subst0_closed(t: &Term, c: &Term) -> Term {
             T::Delay(a) => T::Delay(Rc::new(go(a, j, c))),
             T::Now(a) => T::Now(Rc::new(go(a, j, c))),
             T::Later(a) => T::Later(Rc::new(go(a, j, c))),
+            // `if-zero` binds no term variable; substitute into all three subterms (an Int-typed
+            // codomain computed by `if-zero` is an ordinary codomain that M3 may instantiate).
+            T::IfZero { scrut, then_, else_ } => T::IfZero {
+                scrut: Rc::new(go(scrut, j, c)),
+                then_: Rc::new(go(then_, j, c)),
+                else_: Rc::new(go(else_, j, c)),
+            },
             // M3 implicit insertion only instantiates ordinary (non-cubical, non-effect) codomains.
             other => other.clone(),
         }
@@ -4838,6 +4882,12 @@ fn abstract_var_at(term: &Term, k: usize, depth: usize) -> Term {
             motive: Rc::new(r1(motive)),
             methods: methods.iter().map(r).collect(),
             scrutinee: Rc::new(r(scrutinee)),
+        },
+        // `if-zero` binds no term variable — all three subterms stay at the same depth.
+        T::IfZero { scrut, then_, else_ } => T::IfZero {
+            scrut: Rc::new(r(scrut)),
+            then_: Rc::new(r(then_)),
+            else_: Rc::new(r(else_)),
         },
         T::Interval(iv) => T::Interval(iv.clone()),
         T::PathP { family, lhs, rhs } => T::PathP {

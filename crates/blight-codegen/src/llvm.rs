@@ -1105,6 +1105,30 @@ impl<'ctx> Codegen<'ctx> {
             Tail::Case(scrut, arms) => {
                 self.emit_case(scrut, arms, cur_fn, fr, funcs, musttail, arena_scopes)?;
             }
+            // `if-zero scrut then else` (T1a): a native `i64` compare-and-branch. Decode the
+            // scrutinee's payload (`int_val`, tolerating a tagged-immediate or boxed `BL_INT`),
+            // compare to `0`, and branch to one of two blocks. Each branch is itself a tail — it
+            // emits its own terminator (return / tail-call / nested switch) — so there is no join
+            // block or phi, exactly like the per-arm blocks of a `Case`. The branches bind no
+            // variables, so (unlike `emit_case`) there is nothing to push/pop on the root frame.
+            Tail::IfZero(scrut, then_, else_) => {
+                let sval = self.atom_val(scrut, fr, funcs);
+                let svi = self.int_val(sval);
+                let zero = self.context.i64_type().const_zero();
+                let is_zero = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, svi, zero, "ifz")
+                    .unwrap();
+                let then_bb = self.context.append_basic_block(cur_fn, "ifz_then");
+                let else_bb = self.context.append_basic_block(cur_fn, "ifz_else");
+                self.builder
+                    .build_conditional_branch(is_zero, then_bb, else_bb)
+                    .unwrap();
+                self.builder.position_at_end(then_bb);
+                self.emit_tail(then_, cur_fn, fr, funcs, musttail, arena_scopes)?;
+                self.builder.position_at_end(else_bb);
+                self.emit_tail(else_, cur_fn, fr, funcs, musttail, arena_scopes)?;
+            }
             // A region scope: open an arena, emit the body with one more pending leave (each return
             // site inside closes it), then continue. The body itself drives the return; there is no
             // code after it in this block.

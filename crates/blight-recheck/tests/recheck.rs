@@ -173,6 +173,43 @@ fn recheck_declines_glue() {
     }
 }
 
+/// T1a: the re-checker independently re-derives `if-zero` — it is MODELED, never declined. A closed
+/// folded branch (`if-zero 0 7 9 : Int`) and a stuck-scrutinee form under a binder
+/// (`λ^ω (x:Int). if-zero x 1 2 : Int → Int`, exercising the neutral quote/round-trip) both agree.
+#[test]
+fn recheck_ifzero_roundtrips() {
+    let sig = Signature::new();
+    let if_zero = |s: Term, t: Term, e: Term| Term::IfZero {
+        scrut: Rc::new(s),
+        then_: Rc::new(t),
+        else_: Rc::new(e),
+    };
+    // Closed: `if-zero 0 7 9 : Int`.
+    let closed = Judgement::HasType {
+        term: if_zero(Term::IntLit(0), Term::IntLit(7), Term::IntLit(9)),
+        ty: Term::IntTy,
+    };
+    recheck_judgement(&sig, &closed).expect("if-zero 0 7 9 : Int should re-check");
+    // Stuck scrutinee under a binder: `λ^ω (x:Int). if-zero x 1 2 : Int → Int`.
+    let lam = Term::Ann(
+        Rc::new(Term::Lam(Rc::new(if_zero(
+            Term::Var(0),
+            Term::IntLit(1),
+            Term::IntLit(2),
+        )))),
+        Rc::new(Term::Pi(
+            Grade::Omega,
+            Rc::new(Term::IntTy),
+            Rc::new(Term::IntTy),
+        )),
+    );
+    let stuck = Judgement::HasType {
+        term: lam,
+        ty: Term::Pi(Grade::Omega, Rc::new(Term::IntTy), Rc::new(Term::IntTy)),
+    };
+    recheck_judgement(&sig, &stuck).expect("λ x. if-zero x 1 2 : Int → Int should re-check");
+}
+
 /// RED: β/η parity with the kernel. `(λx. x) Zero` and `Zero` are definitionally equal, so a proof
 /// that the identity-applied value has type `Nat` re-checks; and an η-expanded identity function
 /// `λx. (id x)` re-checks at `Nat -> Nat` just like the bare `id`.

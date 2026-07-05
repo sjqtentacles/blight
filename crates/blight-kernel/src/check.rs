@@ -964,6 +964,22 @@ impl Checker {
                 let (row_r, usage_r) = self.check_g(ctx, rhs, &Value::IntTy, sigma)?;
                 Ok((Value::IntTy, row_l.union(&row_r), usage_l.add(&usage_r)))
             }
+            // `if-zero s t e` (T1a): the primitive `Int` eliminator. Scrutinee at `Int`; both
+            // branches at a **common** type `A`, inferred from the then-branch and checked against
+            // for the else-branch. The result type is independent of the scrutinee's value, so
+            // subject reduction is trivial. Usage is the *sum* of scrutinee + both branches and row
+            // their union — verbatim `infer_elim`'s multi-branch `.add`/`.union` accounting, so a
+            // linear resource spent across both branches is `1+1 = ω ⊄ 1` and correctly rejected.
+            Term::IfZero { scrut, then_, else_ } => {
+                let (row_s, usage_s) = self.check_g(ctx, scrut, &Value::IntTy, sigma)?;
+                let (then_ty, row_t, usage_t) = self.infer_g(ctx, then_, sigma)?;
+                let (row_e, usage_e) = self.check_g(ctx, else_, &then_ty, sigma)?;
+                Ok((
+                    then_ty,
+                    row_s.union(&row_t).union(&row_e),
+                    usage_s.add(&usage_t).add(&usage_e),
+                ))
+            }
 
             _ => Err(TypeError::CannotInfer(format!(
                 "no inference rule for term former: {term:?}"
@@ -2329,6 +2345,21 @@ impl Checker {
                 Ok((result_row, total_usage))
             }
 
+            // `if-zero` in checking mode (T1a): check **both** branches against the *expected* type
+            // directly (rather than inferring from the then-branch), so a branch that needs the
+            // expected type to elaborate — an empty container, an ambiguous numeric literal — type
+            // checks. Scrutinee at `Int`; usage = sum of scrutinee + branches, row = union (same
+            // multi-branch accounting as the inference rule, so grade-laundering stays rejected).
+            (Term::IfZero { scrut, then_, else_ }, _) => {
+                let (row_s, usage_s) = self.check_g(ctx, scrut, &Value::IntTy, sigma)?;
+                let (row_t, usage_t) = self.check_g(ctx, then_, expected, sigma)?;
+                let (row_e, usage_e) = self.check_g(ctx, else_, expected, sigma)?;
+                Ok((
+                    row_s.union(&row_t).union(&row_e),
+                    usage_s.add(&usage_t).add(&usage_e),
+                ))
+            }
+
             // Conversion fallback (spec §2.5 Conv): infer at `sigma`, then compare definitionally.
             _ => {
                 let (actual, row, usage) = self.infer_g(ctx, term, sigma)?;
@@ -2646,6 +2677,12 @@ fn shift(term: &Term, n: usize) -> Term {
                 lhs: Rc::new(go(lhs, n, cutoff)),
                 rhs: Rc::new(go(rhs, n, cutoff)),
             },
+            // `if-zero` binds no term variable — all three subterms shift at the same cutoff.
+            Term::IfZero { scrut, then_, else_ } => Term::IfZero {
+                scrut: Rc::new(go(scrut, n, cutoff)),
+                then_: Rc::new(go(then_, n, cutoff)),
+                else_: Rc::new(go(else_, n, cutoff)),
+            },
         }
     }
     go(term, n, 0)
@@ -2673,6 +2710,12 @@ fn subst_var(term: &Term, j: usize, replacement: &Term) -> Term {
                 op: *op,
                 lhs: Rc::new(go(lhs, j, repl)),
                 rhs: Rc::new(go(rhs, j, repl)),
+            },
+            // `if-zero` binds no term variable — all three subterms substitute at the same index.
+            Term::IfZero { scrut, then_, else_ } => Term::IfZero {
+                scrut: Rc::new(go(scrut, j, repl)),
+                then_: Rc::new(go(then_, j, repl)),
+                else_: Rc::new(go(else_, j, repl)),
             },
             Term::Pi(g, a, b) => Term::Pi(
                 *g,
@@ -3067,6 +3110,124 @@ mod tests {
             quote(0, &v),
             t,
             "division by zero must remain a stuck IntPrim"
+        );
+    }
+
+    // ---- T1a: `if-zero` — the primitive Int eliminator ----
+
+    fn if_zero(scrut: Term, then_: Term, else_: Term) -> Term {
+        Term::IfZero {
+            scrut: Rc::new(scrut),
+            then_: Rc::new(then_),
+            else_: Rc::new(else_),
+        }
+    }
+
+    /// Reduction selects the branch on a literal scrutinee: `if-zero 0 7 9 ≡ 7`; `if-zero 5 7 9 ≡ 9`.
+    #[test]
+    fn ifzero_folds_on_literal_zero() {
+        let z = if_zero(Term::IntLit(0), Term::IntLit(7), Term::IntLit(9));
+        assert_eq!(quote(0, &eval(&Env::empty(), &z)), Term::IntLit(7));
+        let nz = if_zero(Term::IntLit(5), Term::IntLit(7), Term::IntLit(9));
+        assert_eq!(quote(0, &eval(&Env::empty(), &nz)), Term::IntLit(9));
+    }
+
+    /// A *computed* zero scrutinee folds too: `if-zero (2-2) 10 20 ≡ 10`, and the term is
+    /// definitionally `10` (conversion via NbE), just like `int_add_reduces`.
+    #[test]
+    fn ifzero_reduces_and_converts() {
+        let scrut = Term::IntPrim {
+            op: IntPrimOp::Sub,
+            lhs: Rc::new(Term::IntLit(2)),
+            rhs: Rc::new(Term::IntLit(2)),
+        };
+        let t = if_zero(scrut, Term::IntLit(10), Term::IntLit(20));
+        assert_eq!(quote(0, &eval(&Env::empty(), &t)), Term::IntLit(10));
+        assert!(conv(0, &eval(&Env::empty(), &t), &Value::IntLit(10)));
+        assert!(check_top(t, Term::IntTy).is_ok(), "if-zero (2-2) 10 20 : Int");
+    }
+
+    /// A neutral scrutinee keeps the whole `if-zero` stuck and it quotes back unchanged.
+    #[test]
+    fn ifzero_neutral_scrutinee_stuck_roundtrips() {
+        // `if-zero x 1 2` with `x` a free variable at level 0.
+        let env = Env::empty().extend(Value::Neutral(Neutral::Var(0)));
+        let t = if_zero(Term::Var(0), Term::IntLit(1), Term::IntLit(2));
+        let v = eval(&env, &t);
+        assert_eq!(quote(1, &v), t, "if-zero x 1 2 stays stuck and quotes back");
+    }
+
+    /// Both branches at the same type: `if-zero 0 1 2 : Int` checks (result type is the branch type,
+    /// independent of the scrutinee's value).
+    #[test]
+    fn ifzero_both_branches_same_type_accepted() {
+        let t = if_zero(Term::IntLit(0), Term::IntLit(1), Term::IntLit(2));
+        assert!(check_top(t, Term::IntTy).is_ok(), "if-zero 0 1 2 : Int");
+    }
+
+    /// `if-zero` in **inference** position (not just checking): the type is synthesized from the
+    /// then-branch. Exercised directly through `infer_g` because the ordinary `check_top` path goes
+    /// through the checking rule — an `if-zero`-headed term used where a type must be *inferred*
+    /// (an application head, an eliminator scrutinee) relies on this arm.
+    #[test]
+    fn ifzero_infers_branch_type() {
+        let checker = Checker::new(std::rc::Rc::new(Signature::empty()));
+        let ctx = Context::empty();
+        let t = if_zero(Term::IntLit(0), Term::IntLit(1), Term::IntLit(2));
+        let (ty, row, _u) = checker.infer_g(&ctx, &t, Grade::One).expect("if-zero infers");
+        assert!(conv(0, &ty, &Value::IntTy), "if-zero over Int branches infers Int");
+        assert!(row.is_empty(), "pure if-zero has the empty effect row");
+    }
+
+    /// The scrutinee must be an `Int`: `if-zero (Univ 0) 1 2` is rejected.
+    #[test]
+    fn ifzero_scrutinee_must_be_int_rejected() {
+        let t = if_zero(u(0), Term::IntLit(1), Term::IntLit(2));
+        assert!(
+            check_top(t, Term::IntTy).is_err(),
+            "a non-Int scrutinee must be rejected"
+        );
+    }
+
+    /// The branches must agree: a `then` at `Int` with an `else` at `Univ 0` is rejected (the
+    /// else-branch is checked against the then-branch's inferred type).
+    #[test]
+    fn ifzero_branches_must_agree_rejected() {
+        let t = if_zero(Term::IntLit(0), Term::IntLit(1), u(0));
+        assert!(
+            check_top(t, Term::IntTy).is_err(),
+            "mismatched branch types must be rejected"
+        );
+    }
+
+    /// Grade-laundering pin (the M7 class): a **linear** binder used in *both* branches is spent
+    /// `1+1 = ω ⊄ 1` and must be rejected — branch usage is *summed*, not lub'd. The positive twin
+    /// (used once, as the scrutinee) is accepted.
+    #[test]
+    fn ifzero_linear_scrutinee_used_in_both_branches_rejected() {
+        let pi1 = Term::Pi(Grade::One, Rc::new(Term::IntTy), Rc::new(Term::IntTy));
+        // `λ^1 (x:Int). if-zero 0 x x` — x demanded in both branches (0 + 1 + 1 = ω), ⊄ 1.
+        let laundering = Term::Lam(Rc::new(if_zero(
+            Term::IntLit(0),
+            Term::Var(0),
+            Term::Var(0),
+        )));
+        assert!(
+            matches!(
+                check_top(laundering, pi1.clone()),
+                Err(TypeError::GradeViolation(_))
+            ),
+            "a linear var used in both if-zero branches (1+1=ω) must be a GradeViolation"
+        );
+        // `λ^1 (x:Int). if-zero x 1 0` — x demanded exactly once (as the scrutinee), ≤ 1.
+        let linear_ok = Term::Lam(Rc::new(if_zero(
+            Term::Var(0),
+            Term::IntLit(1),
+            Term::IntLit(0),
+        )));
+        assert!(
+            check_top(linear_ok, pi1).is_ok(),
+            "a linear var used once (as the scrutinee) must be accepted"
         );
     }
 

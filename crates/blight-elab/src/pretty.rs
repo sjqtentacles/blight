@@ -281,6 +281,12 @@ impl Printer {
                 };
                 format!("({head} {} {})", self.term(lhs), self.term(rhs))
             }
+            Term::IfZero { scrut, then_, else_ } => format!(
+                "(if-zero {} {} {})",
+                self.term(scrut),
+                self.term(then_),
+                self.term(else_)
+            ),
             Term::Erased => "<erased>".to_string(),
         }
     }

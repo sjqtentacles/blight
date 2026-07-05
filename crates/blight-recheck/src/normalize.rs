@@ -98,6 +98,9 @@ fn uses_binder(t: &RTerm, depth: usize) -> bool {
                 || op_clauses.iter().any(|(_, e)| uses_binder(e, depth + 2))
         }
         RTerm::IntPrim { lhs, rhs, .. } => uses_binder(lhs, depth) || uses_binder(rhs, depth),
+        RTerm::IfZero {
+            scrut, then_, else_, ..
+        } => uses_binder(scrut, depth) || uses_binder(then_, depth) || uses_binder(else_, depth),
     }
 }
 
@@ -258,6 +261,17 @@ pub fn eval(sig: &Signature, env: &Env, t: &RTerm) -> RValue {
         RTerm::IntTy => RValue::IntTy,
         RTerm::IntLit(n) => RValue::IntLit(*n),
         RTerm::IntPrim { op, lhs, rhs } => int_prim(*op, eval(sig, env, lhs), eval(sig, env, rhs)),
+        // `if-zero` (T1a): fold on a literal scrutinee (evaluating only the taken branch), else stay
+        // stuck as a `Neutral::IfZero` — independently mirroring the kernel's `eval`.
+        RTerm::IfZero { scrut, then_, else_ } => match eval(sig, env, scrut) {
+            RValue::IntLit(0) => eval(sig, env, then_),
+            RValue::IntLit(_) => eval(sig, env, else_),
+            other => RValue::Neutral(Neutral::IfZero {
+                scrut: Rc::new(other),
+                then_: Rc::new(eval(sig, env, then_)),
+                else_: Rc::new(eval(sig, env, else_)),
+            }),
+        },
     }
 }
 
@@ -639,6 +653,11 @@ fn quote_neutral(sig: &Signature, lvl: usize, dlvl: usize, n: &Neutral) -> RTerm
             lhs: Box::new(quote(sig, lvl, dlvl, lhs)),
             rhs: Box::new(quote(sig, lvl, dlvl, rhs)),
         },
+        Neutral::IfZero { scrut, then_, else_ } => RTerm::IfZero {
+            scrut: Box::new(quote(sig, lvl, dlvl, scrut)),
+            then_: Box::new(quote(sig, lvl, dlvl, then_)),
+            else_: Box::new(quote(sig, lvl, dlvl, else_)),
+        },
     }
 }
 
@@ -886,6 +905,18 @@ mod n5_tests {
             (
                 "IntPrim rhs",
                 RTerm::IntPrim { op: blight_kernel::IntPrimOp::Add, lhs: z(), rhs: v(1) },
+            ),
+            (
+                "IfZero scrut",
+                RTerm::IfZero { scrut: v(1), then_: z(), else_: z() },
+            ),
+            (
+                "IfZero then_",
+                RTerm::IfZero { scrut: z(), then_: v(1), else_: z() },
+            ),
+            (
+                "IfZero else_",
+                RTerm::IfZero { scrut: z(), then_: z(), else_: v(1) },
             ),
         ];
         for (label, t) in &probes {

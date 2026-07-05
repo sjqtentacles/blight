@@ -2567,6 +2567,16 @@ GLOBAL examples/hofold.bl ten Ok
 GLOBAL examples/hofold.bl thousand Ok
 FILE examples/int_arith.bl forms=1 declared=1 checked=0
 GLOBAL examples/int_arith.bl main Ok
+FILE examples/int_branch.bl forms=10 declared=10 checked=0
+GLOBAL examples/int_branch.bl and Ok
+GLOBAL examples/int_branch.bl int-eq? Ok
+GLOBAL examples/int_branch.bl int-lt? Ok
+GLOBAL examples/int_branch.bl int-zero? Ok
+GLOBAL examples/int_branch.bl main Ok
+GLOBAL examples/int_branch.bl not Ok
+GLOBAL examples/int_branch.bl not0 Ok
+GLOBAL examples/int_branch.bl or Ok
+GLOBAL examples/int_branch.bl sign Ok
 FILE examples/int_sum.bl forms=42 declared=39 checked=3
 GLOBAL examples/int_sum.bl and Ok
 GLOBAL examples/int_sum.bl append Ok

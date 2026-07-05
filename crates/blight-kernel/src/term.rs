@@ -248,6 +248,20 @@ pub enum Term {
         lhs: Rc<Term>,
         rhs: Rc<Term>,
     },
+    /// `if-zero s t e` — the primitive `Int` eliminator (T1a). Branches on whether the scrutinee
+    /// `s : Int` is `0`: reduces to `t` when `s ≡ 0`, to `e` when `s ≡ n≠0`, and stays stuck as a
+    /// `Neutral::IfZero` when `s` is neutral (exactly mirroring how [`Term::IntPrim`] stays stuck on
+    /// a neutral operand). This is the one eliminator the otherwise-`Int`-flag-only fragment needs to
+    /// turn a comparison result into a branch — a *kernel* former is unavoidable, and this one keeps
+    /// the Int fragment self-contained (no `Bool` signature in the typing rule; cf. the `IntPrim`
+    /// doc-comment on why comparisons deliberately return `Int`). Both branches have the **same** type
+    /// `A`, independent of the scrutinee's value, so subject reduction is trivial. The friendly
+    /// `Bool`-returning `int-eq?`/`int-lt?` are built on top of this in untrusted stdlib.
+    IfZero {
+        scrut: Rc<Term>,
+        then_: Rc<Term>,
+        else_: Rc<Term>,
+    },
 
     // ---- erasure (spec §7.2) ----
     /// A sentinel marking a sub-term that has been removed by the grade-`0` erasure pass. It has

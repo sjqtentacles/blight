@@ -155,6 +155,9 @@ fn is_closed(t: &Term) -> bool {
             Term::EffTy(_, a) => go(a, depth),
             Term::Delay(a) | Term::Now(a) | Term::Later(a) | Term::Force(a) => go(a, depth),
             Term::IntPrim { lhs, rhs, .. } => go(lhs, depth) && go(rhs, depth),
+            Term::IfZero {
+                scrut, then_, else_, ..
+            } => go(scrut, depth) && go(then_, depth) && go(else_, depth),
         }
     }
     go(t, 0)
@@ -206,6 +209,9 @@ fn is_pure(t: &Term) -> bool {
             ..
         } => is_pure(motive) && methods.iter().all(is_pure) && is_pure(scrutinee),
         Term::IntPrim { lhs, rhs, .. } => is_pure(lhs) && is_pure(rhs),
+        Term::IfZero {
+            scrut, then_, else_, ..
+        } => is_pure(scrut) && is_pure(then_) && is_pure(else_),
     }
 }
 
@@ -242,6 +248,10 @@ fn contains_elim(t: &Term) -> bool {
         | Term::Pair(a, b)
         | Term::Ann(a, b) => contains_elim(a) || contains_elim(b),
         Term::IntPrim { lhs, rhs, .. } => contains_elim(lhs) || contains_elim(rhs),
+        // `if-zero` is not itself an eliminator, but a branch containing one blocks folding.
+        Term::IfZero {
+            scrut, then_, else_, ..
+        } => contains_elim(scrut) || contains_elim(then_) || contains_elim(else_),
         Term::Data(_, ps, is) => ps.iter().any(contains_elim) || is.iter().any(contains_elim),
         Term::Con(_, args) => args.iter().any(contains_elim),
         Term::PCon { args, .. } => args.iter().any(contains_elim),
@@ -301,6 +311,9 @@ fn size(t: &Term) -> usize {
         | Term::Pair(a, b)
         | Term::Ann(a, b) => size(a) + size(b),
         Term::IntPrim { lhs, rhs, .. } => size(lhs) + size(rhs),
+        Term::IfZero {
+            scrut, then_, else_, ..
+        } => size(scrut) + size(then_) + size(else_),
         Term::Data(_, ps, is) => {
             ps.iter().map(size).sum::<usize>() + is.iter().map(size).sum::<usize>()
         }
@@ -474,6 +487,11 @@ fn map_children(t: &Term, f: impl Fn(&Term) -> Term) -> Term {
             op: *op,
             lhs: b(lhs),
             rhs: b(rhs),
+        },
+        Term::IfZero { scrut, then_, else_ } => Term::IfZero {
+            scrut: b(scrut),
+            then_: b(then_),
+            else_: b(else_),
         },
     }
 }

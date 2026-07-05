@@ -210,6 +210,12 @@ fn map_children(c: &Cir, f: &mut impl FnMut(&Cir) -> Cir) -> Cir {
             lhs: Box::new(f(lhs)),
             rhs: Box::new(f(rhs)),
         },
+        // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
+        Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+            scrut: Box::new(f(scrut)),
+            then_: Box::new(f(then_)),
+            else_: Box::new(f(else_)),
+        },
         Cir::NatPrim { op, lhs, rhs } => Cir::NatPrim {
             op: *op,
             lhs: Box::new(f(lhs)),

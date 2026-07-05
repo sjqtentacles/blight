@@ -50,7 +50,9 @@ fn is_stuck_on_effect(v: &RValue) -> bool {
             | Neutral::PApp(h, _)
             | Neutral::Force(h) => spine(h),
             Neutral::Elim { scrutinee, .. } => spine(scrutinee),
-            Neutral::Var(_) | Neutral::IntPrim { .. } => false,
+            // An `if-zero` stuck on a neutral scrutinee is not itself effect-stuck (the Int fragment
+            // does not bubble effects — same stance as `IntPrim`).
+            Neutral::Var(_) | Neutral::IntPrim { .. } | Neutral::IfZero { .. } => false,
         }
     }
     matches!(v, RValue::Neutral(n) if spine(n))
@@ -535,6 +537,19 @@ impl<'a> Recheck<'a> {
                 let (rr, ur) = self.check(ctx, rhs, &RValue::IntTy, sigma)?;
                 Ok((RValue::IntTy, rl.union(&rr), ul.add(&ur)))
             }
+            // `if-zero` (T1a): scrutinee at `Int`; result type inferred from the then-branch and the
+            // else-branch checked against it. Usage = sum of scrutinee + branches (so a linear var
+            // spent in both branches is `1+1 = ω`, rejected), row = union — mirroring the kernel.
+            RTerm::IfZero { scrut, then_, else_ } => {
+                let (rs, us) = self.check(ctx, scrut, &RValue::IntTy, sigma)?;
+                let (then_ty, rt, ut) = self.infer(ctx, then_, sigma)?;
+                let (re, ue) = self.check(ctx, else_, &then_ty, sigma)?;
+                Ok((
+                    then_ty,
+                    rs.union(&rt).union(&re),
+                    us.add(&ut).add(&ue),
+                ))
+            }
         }
     }
 
@@ -779,6 +794,16 @@ impl<'a> Recheck<'a> {
                     sigma,
                 )?;
                 Ok((row, usage))
+            }
+            // `if-zero` in checking mode (T1a): check both branches against the *expected* type
+            // directly, so a branch that needs it — e.g. the prelude's `int-eq?` branching to the
+            // bare `Bool` constructors `true`/`false` — checks without an ascription. Mirrors the
+            // kernel's `check_g` `IfZero` arm (usage = scrutinee + branch-sum, row = union).
+            (RTerm::IfZero { scrut, then_, else_ }, _) => {
+                let (rs, us) = self.check(ctx, scrut, &RValue::IntTy, sigma)?;
+                let (rt, ut) = self.check(ctx, then_, expected, sigma)?;
+                let (re, ue) = self.check(ctx, else_, expected, sigma)?;
+                Ok((rs.union(&rt).union(&re), us.add(&ut).add(&ue)))
             }
             _ => {
                 let (actual, row, usage) = self.infer(ctx, term, sigma)?;
@@ -1916,6 +1941,12 @@ fn translate_go(t: &RTerm, depth_in: usize, m: usize, repls: &[RTerm]) -> RTerm 
             lhs: Box::new(translate_go(lhs, depth_in, m, repls)),
             rhs: Box::new(translate_go(rhs, depth_in, m, repls)),
         },
+        // `if-zero` binds no term variable — all three subterms at the same depth.
+        RTerm::IfZero { scrut, then_, else_ } => RTerm::IfZero {
+            scrut: Box::new(translate_go(scrut, depth_in, m, repls)),
+            then_: Box::new(translate_go(then_, depth_in, m, repls)),
+            else_: Box::new(translate_go(else_, depth_in, m, repls)),
+        },
     }
 }
 
@@ -2053,6 +2084,11 @@ fn shift_free_cut(t: &RTerm, d: usize, cut: usize) -> RTerm {
             op: *op,
             lhs: Box::new(shift_free_cut(lhs, d, cut)),
             rhs: Box::new(shift_free_cut(rhs, d, cut)),
+        },
+        RTerm::IfZero { scrut, then_, else_ } => RTerm::IfZero {
+            scrut: Box::new(shift_free_cut(scrut, d, cut)),
+            then_: Box::new(shift_free_cut(then_, d, cut)),
+            else_: Box::new(shift_free_cut(else_, d, cut)),
         },
     }
 }
