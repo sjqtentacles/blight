@@ -697,6 +697,33 @@ mod tests {
         );
     }
 
+    /// T2.2: a level-polymorphic global is *instantiated* at a concrete level with `(inst id ℓ)`,
+    /// which substitutes the prenex level variables and inlines the monomorphic result. The same
+    /// `id` is used at `Univ 0` (`id Nat Zero : Nat`, so `u := 0`) and at `Univ 1` (`id (Type 0) Nat
+    /// : Type 0`, so `u := 1`) — two distinct instantiations of one definition.
+    #[test]
+    fn level_poly_id_instantiated_at_univ0_and_univ1() {
+        let mut env = ElabEnv::new();
+        let outcomes = {
+            let mut prog = Program::new(&mut env);
+            prog.run(
+                "(defdata Nat () (Zero) (Succ (n Nat)))\n\
+                 (define-level id (u) (Pi ((A (Type u) omega)) (Pi ((x A omega)) A)) (lam (A x) x))\n\
+                 (the Nat ((inst id 0) Nat Zero))\n\
+                 (the (Type 0) ((inst id 1) (Type 0) Nat))",
+            )
+            .expect("id instantiates at Univ 0 and Univ 1")
+        };
+        assert!(
+            matches!(outcomes[2], Outcome::Checked(_)),
+            "id at level 0 applied to Nat/Zero checks : Nat"
+        );
+        assert!(
+            matches!(outcomes[3], Outcome::Checked(_)),
+            "id at level 1 applied to (Type 0)/Nat checks : Type 0"
+        );
+    }
+
     /// T2.1 twin negative: a universe level variable with no `(define-level … (u) …)` binder in
     /// scope is *rejected*, never silently treated as a fresh universe — `(Type u)` outside a level
     /// binder is unbound.

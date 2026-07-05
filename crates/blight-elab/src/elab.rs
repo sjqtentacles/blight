@@ -76,6 +76,10 @@ pub struct ElabEnv {
     /// may be soundly dropped (only when the corresponding parameter is irrelevant — e.g. an erased
     /// index threaded through index-ignoring helpers like `bvar-index`, vs a real accumulator).
     relevant_params: std::collections::HashMap<String, Vec<bool>>,
+    /// Per-global **level arity** (T2): the number of prenex `∀u.` binders a `(define-level …)`
+    /// global declares. A global present here must be *instantiated* (`(inst g ℓ …)`) before use —
+    /// its stored type carries `Level::Var`, which is ill-formed at a use site with no level context.
+    level_arity: std::collections::HashMap<String, usize>,
 }
 
 /// How the elaborator fills one leading implicit binder at a use site (spec §6.4).
@@ -262,7 +266,13 @@ impl ElabEnv {
             }
         }
         self.define_global(name.to_string(), body_core, Some(ty_core));
+        self.level_arity.insert(name.to_string(), level_names.len());
         Ok(())
+    }
+
+    /// The number of prenex level binders of `name`, if it is a `(define-level …)` global (T2).
+    pub fn level_arity(&self, name: &str) -> Option<usize> {
+        self.level_arity.get(name).copied()
     }
 
     /// Record the implicit-binder specs of global `name` (computed from its surface type), so use
@@ -739,6 +749,28 @@ fn parse_list(items: &[Sexpr]) -> Result<Surface, ElabError> {
                     Ok(lvl) => Surface::Univ(lvl),
                     Err(_) => Surface::UnivVar(l.to_string()),
                 });
+            }
+            "inst" => {
+                // `(inst g ℓ …)` — instantiate a level-polymorphic global at concrete levels (T2.2).
+                if items.len() < 3 {
+                    return Err(ElabError::BadForm(
+                        "(inst g ℓ …): a level-polymorphic instantiation needs a global and at \
+                         least one concrete level"
+                            .into(),
+                    ));
+                }
+                let name = sym(&items[1])?.to_string();
+                let levels = items[2..]
+                    .iter()
+                    .map(|it| {
+                        sym(it).and_then(|s| {
+                            s.parse::<usize>().map_err(|_| {
+                                ElabError::BadForm("(inst g ℓ …): each ℓ must be a nat".into())
+                            })
+                        })
+                    })
+                    .collect::<Result<Vec<usize>, _>>()?;
+                return Ok(Surface::InstLevel(name, levels));
             }
             "Delay" => {
                 if items.len() != 2 {
@@ -2106,6 +2138,37 @@ fn elab(
             ))),
         },
 
+        // `(inst g ℓ …)` — instantiate a level-polymorphic global (T2.2). Substitute its prenex
+        // level variables with the concrete levels in both the stored body and type, then inline the
+        // monomorphic result as an ascription (so the kernel infers through applications, exactly
+        // like an ordinary global reference).
+        Surface::InstLevel(name, levels) => {
+            let arity = env.level_arity(name).ok_or_else(|| {
+                ElabError::BadForm(format!(
+                    "`(inst {name} …)`: `{name}` is not a level-polymorphic definition \
+                     (declared with `define-level`)"
+                ))
+            })?;
+            if levels.len() != arity {
+                return Err(ElabError::BadForm(format!(
+                    "`(inst {name} …)`: `{name}` has {arity} level parameter(s), but {} were supplied",
+                    levels.len()
+                )));
+            }
+            let subst: Vec<blight_kernel::Level> = levels.iter().map(|n| nat_level(*n)).collect();
+            let (body, ty) = env.globals.get(name).ok_or_else(|| {
+                ElabError::Unbound(format!("level-polymorphic global `{name}`"))
+            })?;
+            let body_i = subst_term_levels(body, &subst);
+            match ty {
+                Some(ty) => Ok(Term::Ann(
+                    Rc::new(body_i),
+                    Rc::new(subst_term_levels(ty, &subst)),
+                )),
+                None => Ok(body_i),
+            }
+        }
+
         Surface::Lam(names, body) => {
             // Peel the expected Pi-telescope binder-by-binder, recording each binder's domain type
             // so that a `match` on an outer binder can generalize over later binders.
@@ -2578,6 +2641,180 @@ fn nat_level(n: usize) -> blight_kernel::Level {
         l = blight_kernel::Level::Suc(Box::new(l));
     }
     l
+}
+
+/// Substitute the prenex level variables of a level-polymorphic definition with concrete levels
+/// (T2.2): `Level::Var(i)` ↦ `subst[i]`, recursing through `Suc`/`Max`. An out-of-range index is
+/// left untouched (defensive; the caller checks the arity).
+fn subst_level(l: &blight_kernel::Level, subst: &[blight_kernel::Level]) -> blight_kernel::Level {
+    use blight_kernel::Level;
+    match l {
+        Level::Zero => Level::Zero,
+        Level::Suc(a) => Level::Suc(Box::new(subst_level(a, subst))),
+        Level::Max(a, b) => Level::Max(
+            Box::new(subst_level(a, subst)),
+            Box::new(subst_level(b, subst)),
+        ),
+        Level::Var(u) => subst.get(*u).cloned().unwrap_or(Level::Var(*u)),
+    }
+}
+
+/// Instantiate a level-polymorphic core term at concrete levels (T2.2): a structural pass that
+/// rewrites every `Univ ℓ`'s level via [`subst_level`] and copies everything else verbatim. Level
+/// variables occur *only* in `Term::Univ` (grades/intervals/cofibrations/rows carry none) and are a
+/// context orthogonal to the de-Bruijn term/dim binders, so no depth tracking is needed. Since the
+/// instantiated term is re-checked by the kernel, a missed variant could only cause a spurious
+/// rejection, never unsoundness.
+fn subst_term_levels(t: &Term, subst: &[blight_kernel::Level]) -> Term {
+    let rc = |x: &Rc<Term>| Rc::new(subst_term_levels(x, subst));
+    let vec = |xs: &[Term]| xs.iter().map(|x| subst_term_levels(x, subst)).collect();
+    match t {
+        Term::Univ(l) => Term::Univ(subst_level(l, subst)),
+        Term::Var(_) | Term::IntTy | Term::IntLit(_) | Term::Erased | Term::Interval(_) => t.clone(),
+        Term::Pi(g, a, b) => Term::Pi(*g, rc(a), rc(b)),
+        Term::Lam(b) => Term::Lam(rc(b)),
+        Term::App(f, a) => Term::App(rc(f), rc(a)),
+        Term::Sigma(a, b) => Term::Sigma(rc(a), rc(b)),
+        Term::Pair(a, b) => Term::Pair(rc(a), rc(b)),
+        Term::Fst(a) => Term::Fst(rc(a)),
+        Term::Snd(a) => Term::Snd(rc(a)),
+        Term::Ann(a, b) => Term::Ann(rc(a), rc(b)),
+        Term::Data(d, ps, is) => Term::Data(d.clone(), vec(ps), vec(is)),
+        Term::Con(c, args) => Term::Con(c.clone(), vec(args)),
+        Term::Elim {
+            data,
+            motive,
+            methods,
+            scrutinee,
+        } => Term::Elim {
+            data: data.clone(),
+            motive: rc(motive),
+            methods: vec(methods),
+            scrutinee: rc(scrutinee),
+        },
+        Term::PCon {
+            data,
+            name,
+            args,
+            dim,
+        } => Term::PCon {
+            data: data.clone(),
+            name: name.clone(),
+            args: vec(args),
+            dim: dim.clone(),
+        },
+        Term::PathP { family, lhs, rhs } => Term::PathP {
+            family: rc(family),
+            lhs: rc(lhs),
+            rhs: rc(rhs),
+        },
+        Term::PLam(b) => Term::PLam(rc(b)),
+        Term::PApp(p, r) => Term::PApp(rc(p), r.clone()),
+        Term::Partial(c, a) => Term::Partial(c.clone(), rc(a)),
+        Term::System(branches) => Term::System(
+            branches
+                .iter()
+                .map(|br| blight_kernel::SystemBranch {
+                    face: br.face.clone(),
+                    term: subst_term_levels(&br.term, subst),
+                })
+                .collect(),
+        ),
+        Term::Transp {
+            family,
+            cofib,
+            base,
+        } => Term::Transp {
+            family: rc(family),
+            cofib: cofib.clone(),
+            base: rc(base),
+        },
+        Term::HComp {
+            ty,
+            cofib,
+            tube,
+            base,
+        } => Term::HComp {
+            ty: rc(ty),
+            cofib: cofib.clone(),
+            tube: rc(tube),
+            base: rc(base),
+        },
+        Term::Comp {
+            family,
+            cofib,
+            tube,
+            base,
+        } => Term::Comp {
+            family: rc(family),
+            cofib: cofib.clone(),
+            tube: rc(tube),
+            base: rc(base),
+        },
+        Term::Glue {
+            base,
+            cofib,
+            ty,
+            equiv,
+        } => Term::Glue {
+            base: rc(base),
+            cofib: cofib.clone(),
+            ty: rc(ty),
+            equiv: rc(equiv),
+        },
+        Term::GlueTerm {
+            cofib,
+            partial,
+            base,
+        } => Term::GlueTerm {
+            cofib: cofib.clone(),
+            partial: rc(partial),
+            base: rc(base),
+        },
+        Term::Unglue(a) => Term::Unglue(rc(a)),
+        Term::Op {
+            effect,
+            op,
+            type_args,
+            arg,
+        } => Term::Op {
+            effect: effect.clone(),
+            op: op.clone(),
+            type_args: vec(type_args),
+            arg: rc(arg),
+        },
+        Term::Handle {
+            body,
+            return_clause,
+            op_clauses,
+        } => Term::Handle {
+            body: rc(body),
+            return_clause: rc(return_clause),
+            op_clauses: op_clauses
+                .iter()
+                .map(|(op, e)| (op.clone(), rc(e)))
+                .collect(),
+        },
+        Term::EffTy(row, a) => Term::EffTy(row.clone(), rc(a)),
+        Term::Delay(a) => Term::Delay(rc(a)),
+        Term::Now(a) => Term::Now(rc(a)),
+        Term::Later(a) => Term::Later(rc(a)),
+        Term::Force(a) => Term::Force(rc(a)),
+        Term::Foreign { symbol, ty } => Term::Foreign {
+            symbol: symbol.clone(),
+            ty: rc(ty),
+        },
+        Term::IntPrim { op, lhs, rhs } => Term::IntPrim {
+            op: *op,
+            lhs: rc(lhs),
+            rhs: rc(rhs),
+        },
+        Term::IfZero { scrut, then_, else_ } => Term::IfZero {
+            scrut: rc(scrut),
+            then_: rc(then_),
+            else_: rc(else_),
+        },
+    }
 }
 
 /// The opaque region-handle type name, declared in the untrusted prelude (`regions.bl`).
@@ -3326,6 +3563,10 @@ fn collect_escaping_vars(
     };
     match s {
         Var(name) => {
+            out.insert(name.clone());
+        }
+        // `(inst g ℓ …)` references the global `g` (like a `Var`); count it as reachable.
+        InstLevel(name, _) => {
             out.insert(name.clone());
         }
         App(f, args) => {
@@ -5179,6 +5420,33 @@ mod tests {
         let surface = parse_surface(&sx)?;
         let env = ElabEnv::new();
         elaborate(&env, &surface)
+    }
+
+    /// T2.2: `subst_term_levels` rewrites the level of every `Univ` node and is the identity on
+    /// everything else — level variables live only in `Univ`, so a term with none is untouched,
+    /// while a `Univ (Var 0)` under any structure is substituted.
+    #[test]
+    fn subst_term_levels_is_identity_on_non_univ_nodes() {
+        use blight_kernel::Level;
+        let subst = [Level::Suc(Box::new(Level::Zero))]; // Var(0) := 1
+        // No `Univ` node ⟹ identity.
+        let no_univ = Term::Lam(Rc::new(Term::App(
+            Rc::new(Term::Var(0)),
+            Rc::new(Term::IntLit(7)),
+        )));
+        assert_eq!(subst_term_levels(&no_univ, &subst), no_univ);
+        // A nested `Univ (Var 0)` is rewritten to `Univ 1`; the surrounding structure is preserved.
+        let with_univ = Term::Pi(
+            Grade::Omega,
+            Rc::new(Term::Univ(Level::Var(0))),
+            Rc::new(Term::Var(0)),
+        );
+        let expected = Term::Pi(
+            Grade::Omega,
+            Rc::new(Term::Univ(Level::Suc(Box::new(Level::Zero)))),
+            Rc::new(Term::Var(0)),
+        );
+        assert_eq!(subst_term_levels(&with_univ, &subst), expected);
     }
 
     /// `(force e)` parses and elaborates to `Term::Force`, with its payload elaborated in turn.

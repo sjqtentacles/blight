@@ -69,6 +69,9 @@ pub enum Surface {
     /// binders of an enclosing `(define-level …)` during elaboration. Kept as a name here because
     /// `parse_surface` is context-free; the level → de Bruijn index is assigned in `elab`.
     UnivVar(String),
+    /// `(inst g ℓ …)` — instantiate the level-polymorphic global `g` at concrete levels `ℓ …` (T2.2),
+    /// substituting its prenex level variables and inlining the monomorphic result.
+    InstLevel(String, Vec<usize>),
     /// `(Delay A)` — the partiality (Capretta delay) type former (spec §4.5).
     Delay(Box<Surface>),
     /// `(now a)` — an immediately-available delayed value.
