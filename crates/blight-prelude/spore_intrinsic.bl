@@ -20,11 +20,14 @@
 ; S4a naturals, whose terms are `TZero`/`TSuc`) plus a function type. Closed (no indices), the
 ; natural "types" layer beneath the intrinsic terms. `NatT` (not `Nat`) so the object-type
 ; constructor never collides with spore.bl's host `Nat` datatype, which shares the name namespace.
-(defdata BTy () (Base) (NatT) (Arr (dom BTy) (cod BTy)))
+; S4b adds `BoolT` (constructors `TTrue`/`TFalse`, eliminator `TIf`) — the first user-style,
+; non-indexed inductive with more than one constructor. `BoolT` (not `Bool`) so the object-type
+; constructor never collides with spore.bl's host `Bool` datatype (shared name namespace).
+(defdata BTy () (Base) (NatT) (BoolT) (Arr (dom BTy) (cod BTy)))
 
 (deftotal bty-size (Pi ((a BTy)) Nat)
   (lam (a)
-    (match a [(Base) (Succ Zero)] [(NatT) (Succ Zero)]
+    (match a [(Base) (Succ Zero)] [(NatT) (Succ Zero)] [(BoolT) (Succ Zero)]
       [(Arr dom cod) (Succ (plus (bty-size dom) (bty-size cod)))])))
 
 ; ---- typing contexts as snoc-lists of object types -------------------------------------------
@@ -51,7 +54,12 @@
   (TLam (g BTyCtx) (a BTy) (b BTy) (body (BTm (CSnoc g a) b)) (=> g (Arr a b)))
   (TApp (g BTyCtx) (a BTy) (b BTy) (f (BTm g (Arr a b))) (x (BTm g a)) (=> g b))
   (TZero (g BTyCtx) (=> g NatT))
-  (TSuc (g BTyCtx) (n (BTm g NatT)) (=> g NatT)))
+  (TSuc (g BTyCtx) (n (BTm g NatT)) (=> g NatT))
+  ; `TTrue`/`TFalse` introduce `BoolT`; `TIf` eliminates it, its two branches sharing the result
+  ; type `c` (a non-dependent, two-way case — the eliminator for a two-constructor inductive).
+  (TTrue (g BTyCtx) (=> g BoolT))
+  (TFalse (g BTyCtx) (=> g BoolT))
+  (TIf (g BTyCtx) (c BTy) (s (BTm g BoolT)) (thn (BTm g c)) (els (BTm g c)) (=> g c)))
 
 ; A structural size measure over the intrinsic terms — proves the family is genuinely recursive and
 ; usable as a termination metric, exactly as `bsize` does for the extrinsic `BTerm`.
@@ -59,4 +67,7 @@
   (lam (g a t)
     (match t [(TVar g a x) (Succ Zero)] [(TLam g a b body) (Succ (btm-size (CSnoc g a) b body))]
       [(TApp g a b f x) (Succ (plus (btm-size g (Arr a b) f) (btm-size g a x)))]
-      [(TZero g) (Succ Zero)] [(TSuc g n) (Succ (btm-size g NatT n))])))
+      [(TZero g) (Succ Zero)] [(TSuc g n) (Succ (btm-size g NatT n))]
+      [(TTrue g) (Succ Zero)] [(TFalse g) (Succ Zero)]
+      [(TIf g c s thn els)
+        (Succ (plus (btm-size g BoolT s) (plus (btm-size g c thn) (btm-size g c els))))])))

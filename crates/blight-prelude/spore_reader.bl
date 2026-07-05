@@ -65,6 +65,10 @@
 (define kw-nat (List Nat) (cons ?N (cons ?a (cons ?t nil))))
 (define kw-zero (List Nat) (cons ?z (cons ?e (cons ?r (cons ?o nil)))))
 (define kw-succ (List Nat) (cons ?s (cons ?u (cons ?c (cons ?c nil)))))
+(define kw-bool (List Nat) (cons ?B (cons ?o (cons ?o (cons ?l nil)))))
+(define kw-true (List Nat) (cons ?t (cons ?r (cons ?u (cons ?e nil)))))
+(define kw-false (List Nat) (cons ?f (cons ?a (cons ?l (cons ?s (cons ?e nil))))))
+(define kw-if (List Nat) (cons ?i (cons ?f nil)))
 
 ; ── Name resolution: `NAME` -> de Bruijn index against the enclosing binder stack ───────────────────
 ; `names` is innermost-binder-first, exactly the order `su-var`'s index counts in (`Zero` = the most
@@ -103,7 +107,9 @@
         (match e
           [(s-atom bs)
             (match (bytes-eq bs kw-base) [(true) (just Base)]
-              [(false) (match (bytes-eq bs kw-nat) [(true) (just NatT)] [(false) nothing])])]
+              [(false)
+                (match (bytes-eq bs kw-nat) [(true) (just NatT)]
+                  [(false) (match (bytes-eq bs kw-bool) [(true) (just BoolT)] [(false) nothing])])])]
           [(s-nil) nothing]
           [(s-cons head rest)
             (match head [(s-nil) nothing] [(s-cons z1 z2) nothing]
@@ -133,6 +139,10 @@
 ; Is this `BSexp` the bare keyword atom `succ`? (The head of a `(succ e)` successor form.)
 (deftotal is-succ-kw (Pi ((e BSexp)) Bool)
   (lam (e) (match e [(s-atom bs) (bytes-eq bs kw-succ)] [(s-nil) false] [(s-cons h r) false])))
+
+; Is this `BSexp` the bare keyword atom `if`? (The head of an `(if cond then else)` form.)
+(deftotal is-if-kw (Pi ((e BSexp)) Bool)
+  (lam (e) (match e [(s-atom bs) (bytes-eq bs kw-if)] [(s-nil) false] [(s-cons h r) false])))
 
 ; ── Numeric literals: a digit-atom desugars to a nested `su-succ` chain (the "su-lit sugar") ──────────
 ; `digit-val b` is `just v` when the byte `b` is the ASCII digit for `v` (`?0↦0 … ?9↦9`), else
@@ -185,14 +195,18 @@
       [(Succ k)
         (match e
           [(s-atom bs)
-            ; `zero` keyword and numeric literals take precedence over a name lookup; every other
-            ; atom is a bound variable resolved to its de Bruijn index.
+            ; the `zero`/`true`/`false` keyword atoms and numeric literals take precedence over a
+            ; name lookup; every other atom is a bound variable resolved to its de Bruijn index.
             (match (bytes-eq bs kw-zero) [(true) (just su-zero)]
               [(false)
-                (match (digits->nat bs) [(just n) (just (nat->succs n))]
-                  [(nothing)
-                    (match (lookup-name names bs) [(nothing) nothing]
-                      [(just i) (just (su-var i))])])])]
+                (match (bytes-eq bs kw-true) [(true) (just su-true)]
+                  [(false)
+                    (match (bytes-eq bs kw-false) [(true) (just su-false)]
+                      [(false)
+                        (match (digits->nat bs) [(just n) (just (nat->succs n))]
+                          [(nothing)
+                            (match (lookup-name names bs) [(nothing) nothing]
+                              [(just i) (just (su-var i))])])])])])]
           [(s-nil) nothing]
           [(s-cons head rest)
             (match (is-lam-kw head)
@@ -229,15 +243,34 @@
                             (match (resolve-term-fuel k names operandE) [(nothing) nothing]
                               [(just oe) (just (su-succ oe))])])])]
                   [(false)
-                    ; (FN ARG): rest = (argE . ())
-                    (match rest [(s-atom ra) nothing] [(s-nil) nothing]
-                      [(s-cons argE rest2)
-                        (match rest2 [(s-atom r2) nothing] [(s-cons z1 z2) nothing]
-                          [(s-nil)
-                            (match (resolve-term-fuel k names head) [(nothing) nothing]
-                              [(just fnT)
-                                (match (resolve-term-fuel k names argE) [(nothing) nothing]
-                                  [(just argT) (just (su-app fnT argT))])])])])])])])])))
+                    (match (is-if-kw head)
+                      [(true)
+                        ; (if COND THEN ELSE): rest = (cond . then . else . ())
+                        (match rest [(s-atom ir0) nothing] [(s-nil) nothing]
+                          [(s-cons condE irest2)
+                            (match irest2 [(s-atom ir2) nothing] [(s-nil) nothing]
+                              [(s-cons thenE irest3)
+                                (match irest3 [(s-atom ir3) nothing] [(s-nil) nothing]
+                                  [(s-cons elseE irest4)
+                                    (match irest4 [(s-atom ir4) nothing] [(s-cons iz1 iz2) nothing]
+                                      [(s-nil)
+                                        (match (resolve-term-fuel k names condE) [(nothing) nothing]
+                                          [(just cT)
+                                            (match (resolve-term-fuel k names thenE) [(nothing) nothing]
+                                              [(just tT)
+                                                (match (resolve-term-fuel k names elseE)
+                                                  [(nothing) nothing]
+                                                  [(just eT) (just (su-if cT tT eT))])])])])])])])]
+                      [(false)
+                        ; (FN ARG): rest = (argE . ())
+                        (match rest [(s-atom ra) nothing] [(s-nil) nothing]
+                          [(s-cons argE rest2)
+                            (match rest2 [(s-atom r2) nothing] [(s-cons z1 z2) nothing]
+                              [(s-nil)
+                                (match (resolve-term-fuel k names head) [(nothing) nothing]
+                                  [(just fnT)
+                                    (match (resolve-term-fuel k names argE) [(nothing) nothing]
+                                      [(just argT) (just (su-app fnT argT))])])])])])])])])])))
 
 ; Top-level entry point: seed the fuel with `e`'s own size, exactly like `resolve-ty`.
 (deftotal resolve-term (Pi ((names (List (List Nat))) (e BSexp)) (Maybe BSurf))
@@ -298,4 +331,24 @@
 (define reader-lit12-sexp BSexp (s-atom (cons ?1 (cons ?2 nil))))
 (define-by reader-lit12-refl
   (Path (Maybe BSurf) (bsexp->bsurf reader-lit12-sexp) (just (nat->succs 12)))
+  refl)
+
+; ── S4b reader demos: the kernel certifies the new Bool paths read correctly ─────────────────────────
+; The bare keyword atom `true` reads as `su-true`.
+(define reader-true-sexp BSexp (s-atom kw-true))
+(define-by reader-true-refl (Path (Maybe BSurf) (bsexp->bsurf reader-true-sexp) (just su-true)) refl)
+
+; `(lam (x Bool) (if x false true))` — the `Bool` type keyword and the `(if cond then else)` form
+; (boolean negation): reads as `(su-lam BoolT (su-if (su-var Zero) su-false su-true))`.
+(define reader-if-sexp BSexp
+  (s-cons (s-atom kw-lam)
+    (s-cons (s-cons (s-atom (cons ?x nil)) (s-cons (s-atom kw-bool) s-nil))
+      (s-cons
+        (s-cons (s-atom kw-if)
+          (s-cons (s-atom (cons ?x nil))
+            (s-cons (s-atom kw-false) (s-cons (s-atom kw-true) s-nil))))
+        s-nil))))
+(define-by reader-if-refl
+  (Path (Maybe BSurf) (bsexp->bsurf reader-if-sexp)
+    (just (su-lam BoolT (su-if (su-var Zero) su-false su-true))))
   refl)

@@ -54,6 +54,9 @@
 ; keyword + the `(succ …)` form). Both are well-typed, so the front end accepts and lowers each.
 (define nat-lit String "2")
 (define nat-succ String "(lam (x Nat) (succ x))")
+; S4b source: the `Bool` type keyword and the `(if cond then else)` form (boolean negation), read
+; from disk and driven through the same native front end.
+(define bool-not String "(lam (x Bool) (if x false true))")
 
 (define nl String "\n")
 
@@ -65,4 +68,6 @@
           (let ((v-lit (check-source nat-lit)))
             (let ((u3 (put-str (string-append v-lit nl))))
               (let ((v-succ (check-source nat-succ)))
-                (put-str (string-append v-succ nl))))))))))
+                (let ((u4 (put-str (string-append v-succ nl))))
+                  (let ((v-bool (check-source bool-not)))
+                    (put-str (string-append v-bool nl))))))))))))

@@ -36,7 +36,9 @@
 ; S4a adds the `NatT` introducers: `su-zero` (the literal `0`) and `su-succ` (successor); numeric
 ; literals in concrete syntax desugar to nested `su-succ` in the reader (spore_reader.bl).
 (defdata BSurf () (su-var (i Nat)) (su-lam (dom BTy) (body BSurf)) (su-app (fn BSurf) (arg BSurf))
-  (su-zero) (su-succ (n BSurf)))
+  (su-zero) (su-succ (n BSurf))
+  ; S4b: the `BoolT` introducers `su-true`/`su-false` and the eliminator `su-if` (cond/then/else).
+  (su-true) (su-false) (su-if (cnd BSurf) (thn BSurf) (els BSurf)))
 
 ; ── Existential outputs: a type packed with a well-typed term/variable at that type, in context g ────
 (defdata BSig
@@ -76,22 +78,26 @@
 
 ; The `Base` row of the decision table (every non-`Base` type is unequal to `Base`).
 (deftotal deceq-base (Pi ((b BTy)) (Maybe (BtyEq Base b)))
-  (lam (b) (match b [(Base) (just (bty-refl Base))] [(NatT) nothing] [(Arr d c) nothing])))
+  (lam (b) (match b [(Base) (just (bty-refl Base))] [(NatT) nothing] [(BoolT) nothing] [(Arr d c) nothing])))
 
 ; The `NatT` row of the decision table (every non-`NatT` type is unequal to `NatT`).
 (deftotal deceq-nat (Pi ((b BTy)) (Maybe (BtyEq NatT b)))
-  (lam (b) (match b [(Base) nothing] [(NatT) (just (bty-refl NatT))] [(Arr d c) nothing])))
+  (lam (b) (match b [(Base) nothing] [(NatT) (just (bty-refl NatT))] [(BoolT) nothing] [(Arr d c) nothing])))
+
+; The `BoolT` row of the decision table (every non-`BoolT` type is unequal to `BoolT`).
+(deftotal deceq-bool (Pi ((b BTy)) (Maybe (BtyEq BoolT b)))
+  (lam (b) (match b [(Base) nothing] [(NatT) nothing] [(BoolT) (just (bty-refl BoolT))] [(Arr d c) nothing])))
 
 ; Decide `BtyEq a b` structurally. Curried on `a`: the `a`-match returns a function of `b`, so `b` is
 ; out of scope during it (discipline 1). The `Arr` row is an ascribed `λb` whose inner `b`-match is in
 ; checking mode, with the domain/codomain sub-decisions resolved by recursion (`d1`/`c1` ⊏ `a`).
 (define-rec bty-deceq (Pi ((a BTy) (b BTy)) (Maybe (BtyEq a b)))
   (lam (a)
-    (match a [(Base) deceq-base] [(NatT) deceq-nat]
+    (match a [(Base) deceq-base] [(NatT) deceq-nat] [(BoolT) deceq-bool]
       [(Arr d1 c1)
         (the (Pi ((b BTy)) (Maybe (BtyEq (Arr d1 c1) b)))
           (lam (b)
-            (match b [(Base) nothing] [(NatT) nothing]
+            (match b [(Base) nothing] [(NatT) nothing] [(BoolT) nothing]
               [(Arr d2 c2) (mk-arr-eq d1 c1 d2 c2 (bty-deceq d1 d2) (bty-deceq c1 c2))])))])))
 
 ; ── Arrow view: read a type as an arrow, carrying the equality witness ───────────────────────────────
@@ -102,7 +108,7 @@
 ; so the reflexivity witness `bty-refl (Arr dom cod)` is exactly what `barreq dom cod _` needs.
 (deftotal split-arrow (Pi ((a BTy)) (Maybe (BArrEq a)))
   (lam (a)
-    (match a [(Base) nothing] [(NatT) nothing]
+    (match a [(Base) nothing] [(NatT) nothing] [(BoolT) nothing]
       [(Arr dom cod) (just (barreq dom cod (bty-refl (Arr dom cod))))])))
 
 ; ── Coerce an inferred term to a *known* arrow type (the function side of application) ────────────────
@@ -176,6 +182,30 @@
 (deftotal succ-sig (Pi ((g BTyCtx) (s (BSig g))) (Maybe (BSig g)))
   (lam (g s) (match s [(bsig aa tm) (succ-of g aa tm (bty-deceq aa NatT))])))
 
+; `su-if` finishers. The condition must be a `BoolT`: check its inferred type, coerce, and expose the
+; term as a `BTm g BoolT` (the same domain-check+coerce shape, fixed to `BoolT`).
+(deftotal cond-of
+  (Pi ((g BTyCtx) (ca BTy) (tm (BTm g ca)) (me (Maybe (BtyEq ca BoolT)))) (Maybe (BTm g BoolT)))
+  (lam (g ca tm me)
+    (match me [(nothing) nothing] [(just e) (just (bty-coerce g ca BoolT e tm))])))
+(deftotal cond-as-bool (Pi ((g BTyCtx) (s (BSig g))) (Maybe (BTm g BoolT)))
+  (lam (g s) (match s [(bsig ca tm) (cond-of g ca tm (bty-deceq ca BoolT))])))
+
+; The two branches must share a type: decide `c2 = c1`, coerce the else-branch to the then-branch's
+; type `c1`, and assemble `TIf` at that common result type. (Both branch types are runtime-discovered,
+; so the shared type flows through `BtyEq` and `bty-coerce`, never a raw cast — discipline of the file.)
+(deftotal if-of
+  (Pi
+    ((g BTyCtx) (tms (BTm g BoolT)) (c1 BTy) (tmt (BTm g c1)) (c2 BTy) (tme (BTm g c2))
+      (me (Maybe (BtyEq c2 c1))))
+    (Maybe (BSig g)))
+  (lam (g tms c1 tmt c2 tme me)
+    (match me [(nothing) nothing]
+      [(just e) (just (bsig c1 (TIf g c1 tms tmt (bty-coerce g c2 c1 e tme))))])))
+(deftotal if-branches (Pi ((g BTyCtx) (tms (BTm g BoolT)) (st (BSig g)) (se (BSig g))) (Maybe (BSig g)))
+  (lam (g tms st se)
+    (match st [(bsig c1 tmt) (match se [(bsig c2 tme) (if-of g tms c1 tmt c2 tme (bty-deceq c2 c1))])])))
+
 ; The headline loop. Curried on the surface term `s` (structural recursion on the leading scrutinee),
 ; returning a function of the context `g`; currying keeps `g` out of scope during `match s` so every
 ; arm stays in checking mode (discipline 1). Each arm threads recursive results through
@@ -205,7 +235,24 @@
         (the (Pi ((g BTyCtx)) (Maybe (BSig g)))
           (lam (g)
             (maybe-bind (BSig g) (BSig g) (belab-go n g)
-              (the (Pi ((sx (BSig g))) (Maybe (BSig g))) (lam (sx) (succ-sig g sx))))))])))
+              (the (Pi ((sx (BSig g))) (Maybe (BSig g))) (lam (sx) (succ-sig g sx))))))]
+      [(su-true) (the (Pi ((g BTyCtx)) (Maybe (BSig g))) (lam (g) (just (bsig BoolT (TTrue g)))))]
+      [(su-false) (the (Pi ((g BTyCtx)) (Maybe (BSig g))) (lam (g) (just (bsig BoolT (TFalse g)))))]
+      [(su-if cnd thn els)
+        (the (Pi ((g BTyCtx)) (Maybe (BSig g)))
+          (lam (g)
+            (maybe-bind (BSig g) (BSig g) (belab-go cnd g)
+              (the (Pi ((sc (BSig g))) (Maybe (BSig g)))
+                (lam (sc)
+                  (maybe-bind (BTm g BoolT) (BSig g) (cond-as-bool g sc)
+                    (the (Pi ((tms (BTm g BoolT))) (Maybe (BSig g)))
+                      (lam (tms)
+                        (maybe-bind (BSig g) (BSig g) (belab-go thn g)
+                          (the (Pi ((st (BSig g))) (Maybe (BSig g)))
+                            (lam (st)
+                              (maybe-bind (BSig g) (BSig g) (belab-go els g)
+                                (the (Pi ((se (BSig g))) (Maybe (BSig g)))
+                                  (lam (se) (if-branches g tms st se)))))))))))))))])))
 
 ; The headline, with the plan's argument order `(g : BTyCtx) (s : BSurf)`.
 (deftotal belaborate (Pi ((g BTyCtx) (s BSurf)) (Maybe (BSig g))) (lam (g s) (belab-go s g)))

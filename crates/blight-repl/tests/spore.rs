@@ -449,6 +449,43 @@ fn self_host_differential_agrees_with_rust() {
                 rust: "(the (Pi ((x Base)) Nat) (lam (x) (Succ x)))",
                 bsurf: "(su-lam Base (su-succ (su-var Zero)))",
             },
+            // ── S4b: the Bool base type + true/false/if (≥5 new cases, both outcomes) ──
+            Case {
+                label: "bool-true",
+                rust: "(the Bool true)",
+                bsurf: "su-true",
+            },
+            Case {
+                label: "bool-false",
+                rust: "(the Bool false)",
+                bsurf: "su-false",
+            },
+            // λx:Bool. if x false true — boolean negation (`if` embeds to a host `match`).
+            Case {
+                label: "bool-not",
+                rust: "(the (Pi ((x Bool)) Bool) (lam (x) (match x [(false) true] [(true) false])))",
+                bsurf: "(su-lam BoolT (su-if (su-var Zero) su-false su-true))",
+            },
+            // λx:Bool. if x 0 (succ 0) : Bool → Nat — an `if` whose branches are both Nat (the
+            // condition is a bound variable: the host `match` scrutinee must have an inferable type).
+            Case {
+                label: "if-returns-nat",
+                rust: "(the (Pi ((x Bool)) Nat) (lam (x) (match x [(false) (Succ Zero)] [(true) Zero])))",
+                bsurf: "(su-lam BoolT (su-if (su-var Zero) su-zero (su-succ su-zero)))",
+            },
+            // ── ill-typed in both ──
+            // if true 0 false — the two branches disagree (Nat vs Bool).
+            Case {
+                label: "if-branch-mismatch",
+                rust: "(the Nat (match true [(false) false] [(true) Zero]))",
+                bsurf: "(su-if su-true su-zero su-false)",
+            },
+            // if 0 true false — the condition is a Nat, not a Bool.
+            Case {
+                label: "if-cond-not-bool",
+                rust: "(the Bool (match Zero [(false) true] [(true) false]))",
+                bsurf: "(su-if su-zero su-true su-false)",
+            },
         ];
 
         // (1) The Rust verdict per program (the base type is declared in a fresh env each time so the
@@ -456,10 +493,11 @@ fn self_host_differential_agrees_with_rust() {
         fn rust_accepts(body: &str) -> bool {
             let mut env = ElabEnv::new();
             let mut prog = Program::with_resolver(&mut env, prelude_resolver);
-            // `Base` is an opaque base type; `Nat` is the S4a second base type (Zero/Succ), so the
-            // Rust side of the differential can express the same object programs as the `.bl` side.
+            // `Base` is an opaque base type; `Nat` (S4a) and `Bool` (S4b) are the extra base types,
+            // so the Rust side of the differential can express the same object programs as the `.bl`.
             prog.run(&format!(
-                "(defdata Base () (b0))\n(defdata Nat () (Zero) (Succ (n Nat)))\n{body}"
+                "(defdata Base () (b0))\n(defdata Nat () (Zero) (Succ (n Nat)))\n\
+                 (defdata Bool () (false) (true))\n{body}"
             ))
             .is_ok()
         }

@@ -36,10 +36,11 @@
 ; `Base` is a host datatype the bridge program declares; `Arr d c` is a non-dependent `Pi`. The Pi
 ; binder name is irrelevant (the object language is simply typed, so `c` never mentions it) — a fixed
 ; `v` is fine, even when nested arrows shadow it.
-; `NatT` embeds to the host's real `Nat` datatype (Zero/Succ) — the disposer program declares it.
+; `NatT` embeds to the host's real `Nat` (Zero/Succ) and `BoolT` to the host `Bool` (false/true) —
+; the disposer program declares both.
 (deftotal bty-print (Pi ((a BTy)) String)
   (lam (a)
-    (match a [(Base) "Base"] [(NatT) "Nat"]
+    (match a [(Base) "Base"] [(NatT) "Nat"] [(BoolT) "Bool"]
       [(Arr d c)
         (cat (cons "(Pi ((v " (cons (bty-print d) (cons ")) " (cons (bty-print c) (cons ")" nil))))))])))
 
@@ -68,7 +69,18 @@
           (cons "(" (cons (bsurf-print fn d) (cons " " (cons (bsurf-print arg d) (cons ")" nil))))))]
       ; `su-zero`/`su-succ` embed to the host `Nat` numerals (no binder, so depth `d` is unchanged).
       [(su-zero) "Zero"]
-      [(su-succ n) (cat (cons "(Succ " (cons (bsurf-print n d) (cons ")" nil))))])))
+      [(su-succ n) (cat (cons "(Succ " (cons (bsurf-print n d) (cons ")" nil))))]
+      ; `true`/`false` are host constructors; `if` embeds to a host `match` (no host `if` form). The
+      ; branch order mirrors the arms: `false ↦ else`, `true ↦ then`. No binder, so depth is unchanged.
+      [(su-true) "true"]
+      [(su-false) "false"]
+      [(su-if cnd thn els)
+        (cat
+          (cons "(match "
+            (cons (bsurf-print cnd d)
+              (cons " [(false) "
+                (cons (bsurf-print els d)
+                  (cons "] [(true) " (cons (bsurf-print thn d) (cons "])" nil))))))))])))
 
 ; ── The bridge payload for one source term ───────────────────────────────────────────────────────────
 ; The elaborator's verdict rendered as a checkable line: `ACCEPT (the ⟦a⟧ ⟦s⟧)` on success, `REJECT`

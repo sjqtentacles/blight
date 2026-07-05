@@ -52,6 +52,13 @@
 (define c9 BSurf (su-lam NatT (su-succ (su-var Zero))))
 ; 10. (succ (λx:Base. x))              : —  (successor of a function)       (ill-typed — REJECT)
 (define c10 BSurf (su-succ (su-lam Base (su-var Zero))))
+; ── S4b: the Bool base type (⟦BoolT⟧ = the host `Bool`), true/false, and `if` (embeds to `match`) ──────
+; 11. true                             : Bool                               (a boolean literal — ACCEPT)
+(define c11 BSurf su-true)
+; 12. λx:Bool. (if x false true)       : Bool → Bool                        (negation — ACCEPT)
+(define c12 BSurf (su-lam BoolT (su-if (su-var Zero) su-false su-true)))
+; 13. (if true 0 false)               : —  (branches disagree: Nat vs Bool) (ill-typed — REJECT)
+(define c13 BSurf (su-if su-true su-zero su-false))
 
 ; Print one `BRIDGE <idx> <verdict>` line, then a newline, sequencing under `Console`.
 (deftotal emit (Pi ((idx Nat) (s BSurf)) (! Console Unit))
@@ -67,4 +74,7 @@
               (let ((u6 (emit 6 c6)))
                 (let ((u7 (emit 7 c7)))
                   (let ((u8 (emit 8 c8)))
-                    (let ((u9 (emit 9 c9))) (emit 10 c10))))))))))))
+                    (let ((u9 (emit 9 c9)))
+                      (let ((u10 (emit 10 c10)))
+                        (let ((u11 (emit 11 c11)))
+                          (let ((u12 (emit 12 c12))) (emit 13 c13)))))))))))))))

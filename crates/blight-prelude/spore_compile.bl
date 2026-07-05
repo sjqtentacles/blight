@@ -34,8 +34,11 @@
   (a-var (i Nat))  ; source variable, by de Bruijn index
   (a-tmp (n Nat))  ; compiler temporary, by fresh name
   (a-zero)  ; the `NatT` literal 0 — a trivial atom (S4a)
+  (a-true)  ; the `BoolT` literal `true` — a trivial atom (S4b)
+  (a-false)  ; the `BoolT` literal `false` — a trivial atom (S4b)
   (c-app (fn BAnf) (arg BAnf))  ; application of two atoms
   (c-suc (arg BAnf))  ; successor of an atom (S4a) — a computation, let-bound like `c-app`
+  (c-if (cond BAnf) (thn BAnf) (els BAnf))  ; branch on an atom into two TAILS (S4b)
   (c-lam (body BAnf))  ; a lambda value whose body is a tail
   (t-ret (a BAnf))  ; return an atom
   (t-let (name Nat) (rhs BAnf) (rest BAnf)))  ; let tmp_name = rhs in rest
@@ -45,8 +48,10 @@
 (deftotal banf-size (Pi ((e BAnf)) Nat)
   (lam (e)
     (match e [(a-var i) (Succ Zero)] [(a-tmp n) (Succ Zero)] [(a-zero) (Succ Zero)]
+      [(a-true) (Succ Zero)] [(a-false) (Succ Zero)]
       [(c-app f x) (Succ (plus (banf-size f) (banf-size x)))]
       [(c-suc a) (Succ (banf-size a))]
+      [(c-if c t e) (Succ (plus (banf-size c) (plus (banf-size t) (banf-size e))))]
       [(c-lam body) (Succ (banf-size body))]
       [(t-ret a) (Succ (banf-size a))]
       [(t-let name rhs rest) (Succ (plus (banf-size rhs) (banf-size rest)))])))
@@ -61,14 +66,17 @@
 ; btm-size-shaped pass, so the ANF stage below threads its fresh-name counter over an ordinary
 ; inductive with no dependent-index interaction.
 (defdata UTm () (uvar (i Nat)) (ulam (body UTm)) (uapp (fn UTm) (arg UTm))
-  (uzero) (usucc (n UTm)))
+  (uzero) (usucc (n UTm))
+  (utrue) (ufalse) (uif (c UTm) (t UTm) (e UTm)))
 
 (deftotal berase (Pi ((g BTyCtx) (a BTy) (t (BTm g a))) UTm)
   (lam (g a t)
     (match t [(TVar g a x) (uvar (bvar-index g a x))]
       [(TLam g a b body) (ulam (berase (CSnoc g a) b body))]
       [(TApp g a b f x) (uapp (berase g (Arr a b) f) (berase g a x))]
-      [(TZero g) uzero] [(TSuc g n) (usucc (berase g NatT n))])))
+      [(TZero g) uzero] [(TSuc g n) (usucc (berase g NatT n))]
+      [(TTrue g) utrue] [(TFalse g) ufalse]
+      [(TIf g c s thn els) (uif (berase g BoolT s) (berase g c thn) (berase g c els))])))
 
 ; ── The compiler state: a fresh-name counter, a (source-order) list of pending lets, an atom ──────
 (defdata BcOut () (bc-out (counter Nat) (lets (CList (CPair Nat BAnf))) (atom BAnf)))
@@ -116,6 +124,24 @@
       [(bc-out c ls at)
         (bc-out (Succ c) (cappend (CPair Nat BAnf) ls (ccons (cpair c (c-suc at)) cnil)) (a-tmp c))])))
 
+; Assemble an `if` from its three lowered pieces. The condition is evaluated first, so its lets HOIST
+; out (prepended). Each branch is its own control path, so its lets stay INSIDE it — wrapped into a
+; self-contained tail `(bc-lets <branch lets> (t-ret <branch atom>))`, exactly as `uanf-lam` seals a
+; lambda body. The `c-if` computation (cond atom + two tails) is bound to a fresh temp `ce`.
+(deftotal uanf-if (Pi ((rc BcOut) (rt BcOut) (re BcOut)) BcOut)
+  (lam (rc rt re)
+    (match rc
+      [(bc-out cc lsc atc)
+        (match rt
+          [(bc-out ct lst att)
+            (match re
+              [(bc-out ce lse ate)
+                (bc-out (Succ ce)
+                  (cappend (CPair Nat BAnf) lsc
+                    (ccons
+                      (cpair ce (c-if atc (bc-lets lst (t-ret att)) (bc-lets lse (t-ret ate)))) cnil))
+                  (a-tmp ce))])])])))
+
 ; The counter `c` is CURRIED (matched `t` first, each arm returns a `Nat -> BcOut`) so deftotal sees
 ; the motive `λt. (Nat -> BcOut)` directly; `UTm` is non-indexed, so this currying is index-safe.
 ; Recursive results are consumed by passing them to the `uanf-lam`/`uanf-app` combinators (the
@@ -134,7 +160,15 @@
       [(uapp f x) (lam (c) (uanf-app (uanf f c) (uanf x (bcout-counter (uanf f c)))))]
       ; zero: a trivial atom, no lets. successor: lower the operand, then wrap in `c-suc`.
       [(uzero) (lam (c) (bc-out c cnil a-zero))]
-      [(usucc n) (lam (c) (uanf-suc (uanf n c)))])))
+      [(usucc n) (lam (c) (uanf-suc (uanf n c)))]
+      ; true/false: trivial atoms. if: lower cond/then/else, threading the counter left-to-right (the
+      ; recompute-to-read-the-counter shape `uapp` uses), then assemble with `uanf-if`.
+      [(utrue) (lam (c) (bc-out c cnil a-true))]
+      [(ufalse) (lam (c) (bc-out c cnil a-false))]
+      [(uif cc tt ee)
+        (lam (cnt)
+          (uanf-if (uanf cc cnt) (uanf tt (bcout-counter (uanf cc cnt)))
+            (uanf ee (bcout-counter (uanf tt (bcout-counter (uanf cc cnt)))))))])))
 
 ; `bcompile t` : the whole lowering — erase indices, ANF from a fresh counter, then wrap the lets
 ; around a tail that returns the program's atom.
