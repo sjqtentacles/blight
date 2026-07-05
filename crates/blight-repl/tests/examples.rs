@@ -624,26 +624,22 @@ fn f64_scratch_example_loads() {
     }
 }
 
-/// R1 (flat_esc) — REPRODUCTION + DIAGNOSIS (currently `#[ignore]`d; un-ignore when the elaborator
-/// fix lands). A **nested** `Pair`-of-`Pair` match: the outer match binds `(inner z)` and the inner
-/// match binds `(a b)`, so the body's reference to the outer binder `z` sits under the inner match's
-/// scrutinee-lambda wrapper. `Pair` is a parameterized, non-indexed family — the exact shape of
-/// `examples/flat_esc.bl`'s `main`, the sole corpus global the re-checker `Reject`s.
+/// R1 (flat_esc): a **nested** `Pair`-of-`Pair` match kernel-checks and re-checks. The outer match
+/// binds `(inner z)` and the inner match binds `(a b)`; `Pair` is a *parameterized*, non-indexed
+/// family — the exact shape of `examples/flat_esc.bl`'s `main`, formerly the sole corpus global the
+/// re-checker `Reject`ed.
 ///
-/// **Root cause (diagnosed 2026-07-05, correcting the plan's guess):** this is NOT a re-checker bug.
-/// The *elaborator* stores a mis-scoped core term for `main`: the Surface→Term lowering of the nested
-/// `match`→`Elim` desugaring (`App(Ann(λ s. Elim{…}), scrut)`) under-counts the de-Bruijn index of the
-/// outer binder `z` by one — it indexes `z` as if the inner match's scrutinee-lambda `s` weren't there.
-/// `check_top_with` on the *stored* `global_term("main")` makes the **kernel itself reject it** with the
-/// same `inferred Pair(Nat,Nat) but expected Nat`. It escapes elaboration only because a ground-value
-/// `main : Nat` is *skipped* by the kernel door (`kernel_check_def`/`gate_routes_through_kernel` —
-/// "kernel-checking a ground value degenerates into running the program"), so the skew is never
-/// caught. `--recheck`/`verdict_diff` re-checks the stored term and correctly flags it. The fix
-/// belongs in the elaborator's match/`Elim` de-Bruijn accounting (`lower_match` is name-based and
-/// fine; the bug is in the Surface→Term binder resolution), red-first — a focused, TCB-adjacent change.
+/// **Root cause (fixed 2026-07-05):** an ELABORATOR bug, not a re-checker one. When lowering a match
+/// on a constructor of a parameterized family, the field-type computation (`elab_flat_match`'s
+/// `field_ty`) instantiated the family's parameters by substituting at `Var(0)` — correct only for
+/// the *first* field. A later field's declared type sits above its *preceding-argument* binders, so
+/// the substitution consumed a preceding-arg slot and mistyped `mk-pair`'s second field `y:B` as the
+/// first parameter `A` (`Pair Nat Nat`). That gave the pattern binder `z` type `Pair Nat Nat` instead
+/// of `Nat`; the kernel *itself* rejected the resulting `main` (`inferred Pair(Nat,Nat) but expected
+/// Nat`), but a ground-value `main : Nat` is skipped by the kernel door so only `--recheck` caught it.
+/// Fix: substitute each parameter at index `i` (the field's own argument position), via
+/// `subst_index_closed`. Regression pin.
 #[test]
-#[ignore = "R1: elaborator emits a mis-scoped term for a nested parameterized match (kernel itself \
-            rejects the stored global_term); fix belongs in match→Elim de-Bruijn elaboration"]
 fn recheck_nested_pair_match() {
     let src = "(load \"std/nat.bl\")\n\
                (load \"std/pair.bl\")\n\
@@ -670,6 +666,104 @@ fn recheck_nested_pair_match() {
         &blight_kernel::Judgement::HasType { term, ty },
     )
     .expect("re-checker ACCEPTS a nested parameterized-family (Pair-of-Pair) match");
+}
+
+/// R1 (stronger): the same nested `Pair`-of-`Pair` shape but **polymorphic** — the parameters are
+/// type *variables* (`A`/`B`) still in scope, not closed types. The outer second field `z : B` is
+/// used *across* the inner match, so its (parameter-instantiated) type must be exactly `B`. This is
+/// the case that distinguishes a correct *parallel* parameter substitution from substituting one
+/// parameter at a time: the latter corrupts an already-substituted open value and would mistype `z`.
+/// A `deftotal` with a function type routes through the kernel door, so an ill-scoped body fails at
+/// elaboration — a red pin for `subst_field_params`.
+#[test]
+fn nested_polymorphic_pair_match_kernel_checks() {
+    let src = "(load \"std/pair.bl\")\n\
+               (deftotal outer-second\n\
+                 (Pi ((A (Type 0)) (B (Type 0)) (p (Pair (Pair A B) B))) B)\n\
+                 (lam (A B p)\n\
+                   (match p [(mk-pair inner z) (match inner [(mk-pair a b) z])])))\n";
+    let mut env = ElabEnv::new();
+    {
+        let mut prog = Program::with_resolver(&mut env, prelude_resolver);
+        prog.run(src)
+            .expect("kernel accepts the polymorphic nested pair match (routes through the door)");
+    }
+    let ty = env.global_type("outer-second").expect("type").clone();
+    let term = env.global_term("outer-second").expect("term").clone();
+    assert!(
+        blight_kernel::check_top_with(env.signature().clone(), term.clone(), ty.clone()).is_ok(),
+        "the kernel accepts the polymorphic nested match's stored term"
+    );
+    blight_recheck::recheck_judgement(
+        env.signature(),
+        &blight_kernel::Judgement::HasType { term, ty },
+    )
+    .expect("re-checker ACCEPTS the polymorphic nested pair match");
+}
+
+/// R1 (arithmetic pin): a parameterized family with a **higher-order** (`Pi`-typed) constructor
+/// field. `Fn A B`'s field `f : A -> B` has a parameter (`B`) that appears *under the arrow's own
+/// binder*, so instantiating it exercises `subst_field_params`' under-binder recursion (`depth + 1`)
+/// and its param-position arithmetic. `apply-fn` then *applies* `f`, so the field's instantiated type
+/// must be exactly `A -> B` (not `A -> A`): a `deftotal` routed through the kernel door, it fails to
+/// elaborate if the de-Bruijn math is off. Kills the `depth+1` / index mutants in `subst_field_params`.
+#[test]
+fn higher_order_parametric_field_kernel_checks() {
+    let src = "(defdata Fn ((A (Type 0)) (B (Type 0))) (mkfn (f (Pi ((x A)) B))))\n\
+               (deftotal apply-fn (Pi ((A (Type 0)) (B (Type 0)) (g (Fn A B)) (x A)) B)\n\
+                 (lam (A B g x) (match g [(mkfn f) (f x)])))\n";
+    let mut env = ElabEnv::new();
+    {
+        let mut prog = Program::with_resolver(&mut env, prelude_resolver);
+        prog.run(src)
+            .expect("kernel accepts a match binding a Pi-typed (higher-order) field and applying it");
+    }
+    let ty = env.global_type("apply-fn").expect("type").clone();
+    let term = env.global_term("apply-fn").expect("term").clone();
+    assert!(
+        blight_kernel::check_top_with(env.signature().clone(), term.clone(), ty.clone()).is_ok(),
+        "the kernel accepts apply-fn's stored term (field `f : A -> B` correctly instantiated)"
+    );
+    blight_recheck::recheck_judgement(
+        env.signature(),
+        &blight_kernel::Judgement::HasType { term, ty },
+    )
+    .expect("re-checker ACCEPTS the higher-order parametric field match");
+}
+
+/// R1 (arithmetic pin, term-affecting): a higher-order (`Pi`-typed) parametric field used as a
+/// **trailing binder of a nested match**, so its instantiated type flows into the *generated motive*
+/// (`λ s. Π(f : A -> B). B`) and hence into the elaborated core term — not merely an elaboration
+/// hint. This makes `subst_field_params`' under-binder recursion (`depth + 1`, which positions `B`
+/// *under* the arrow's own binder) load-bearing: if it is dropped, `f` is generalized at `A -> A`,
+/// the method re-binds it so, and `(f a1) : A` fails against the declared result `B`. `deftotal`, so
+/// it fails to elaborate — killing the `depth`-increment mutant that merely applying the field could
+/// not reach.
+#[test]
+fn higher_order_field_as_nested_trailing_binder() {
+    let src = "(load \"std/pair.bl\")\n\
+               (defdata Fn ((A (Type 0)) (B (Type 0))) (mkfn (f (Pi ((x A)) B))))\n\
+               (deftotal apply-under\n\
+                 (Pi ((A (Type 0)) (B (Type 0)) (g (Fn A B)) (p (Pair A A))) B)\n\
+                 (lam (A B g p)\n\
+                   (match g [(mkfn f) (match p [(mk-pair a1 a2) (f a1)])])))\n";
+    let mut env = ElabEnv::new();
+    {
+        let mut prog = Program::with_resolver(&mut env, prelude_resolver);
+        prog.run(src)
+            .expect("kernel accepts a Pi-typed field generalized as a nested-match trailing binder");
+    }
+    let ty = env.global_type("apply-under").expect("type").clone();
+    let term = env.global_term("apply-under").expect("term").clone();
+    assert!(
+        blight_kernel::check_top_with(env.signature().clone(), term.clone(), ty.clone()).is_ok(),
+        "the kernel accepts apply-under's stored term (field `f : A -> B` correctly in the motive)"
+    );
+    blight_recheck::recheck_judgement(
+        env.signature(),
+        &blight_kernel::Judgement::HasType { term, ty },
+    )
+    .expect("re-checker ACCEPTS the higher-order trailing-binder nested match");
 }
 
 /// `int_arith.bl`: native machine `Int` (M11). `(int* (int 100000) (int 100000))` type-checks at

@@ -2260,7 +2260,7 @@ FILE examples/flat_esc.bl forms=22 declared=19 checked=3
 GLOBAL examples/flat_esc.bl and Ok
 GLOBAL examples/flat_esc.bl even Ok
 GLOBAL examples/flat_esc.bl four-is-even Ok
-GLOBAL examples/flat_esc.bl main Rejected
+GLOBAL examples/flat_esc.bl main Ok
 GLOBAL examples/flat_esc.bl max Ok
 GLOBAL examples/flat_esc.bl min Ok
 GLOBAL examples/flat_esc.bl mk Ok

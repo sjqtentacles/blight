@@ -4273,15 +4273,20 @@ fn elab_flat_match(
                     };
                     match con.args.get(i) {
                         Some(blight_kernel::Arg::NonRec(t)) => {
-                            // The declared field type lives in a scope of exactly `nparams` param
-                            // binders (param 0 outermost, so at index `nparams-1`; the last-declared
-                            // param innermost, at index 0). Substitute innermost-first so each
-                            // `subst0_closed` call always targets the current `Var(0)`.
-                            let mut ft = t.clone();
-                            for p in ps.iter().rev() {
-                                ft = subst0_closed(&ft, p);
-                            }
-                            Some(ft)
+                            // The declared field type for argument `i` lives in a scope of the
+                            // `nparams` param binders (param 0 outermost) **plus the `i` preceding
+                            // argument binders** (innermost): a param `p` sits at de Bruijn
+                            // `i + (nparams-1-p)`, and the preceding-argument references sit at
+                            // `0..i`. Instantiate the params with the scrutinee's concrete parameter
+                            // values, leaving the preceding-argument references intact. Substitute the
+                            // innermost param first, always at index `i` (each `subst_index_closed`
+                            // removes that binder, shifting the next param down onto index `i`).
+                            //
+                            // Instantiate the family parameters in a single parallel pass, at their
+                            // real positions above the `i` preceding-argument binders. See
+                            // `subst_field_params` for why one-at-a-time / index-0 substitution is
+                            // wrong (the `flat_esc` nested-`Pair`-of-`Pair` mis-typing).
+                            Some(subst_field_params(t, i, &ps))
                         }
                         Some(blight_kernel::Arg::Rec(_)) => Some(Term::Data(
                             blight_kernel::DataName(data_name.clone()),
@@ -4759,6 +4764,81 @@ fn subst0_closed(t: &Term, c: &Term) -> Term {
         }
     }
     go(t, 0, c)
+}
+
+/// Instantiate the *family parameters* in a constructor's declared **field type**.
+///
+/// The declared type of a constructor's argument `i` lives in a scope of the family's `np` parameter
+/// binders (parameter `0` outermost) plus the `i` **preceding-argument** binders (innermost): a
+/// parameter `p` therefore sits at de Bruijn `i + (np-1-p)`, and preceding-argument references sit at
+/// `0..i`. This returns the field type with all `np` parameters **simultaneously** replaced by the
+/// scrutinee's concrete parameter values `params` (each valid in the match's caller scope, so lifted
+/// past the `i` preceding-argument binders and any local binders the field type introduces), the
+/// preceding-argument references kept, and the parameter binders removed (higher indices decremented
+/// by `np`).
+///
+/// A single *parallel* pass is required: substituting one parameter at a time with a decrementing
+/// substitution corrupts an already-substituted value that itself mentions a variable ≥ the target
+/// (i.e. an *open* parameter — a family instantiated at a type variable still in scope, as in
+/// `pair-fst A B (p : Pair A B)`). The old code additionally substituted at index `0`, which is only
+/// correct for the *first* field; a later field's parameter reference then resolved to a
+/// preceding-argument slot (the `flat_esc` nested-`Pair`-of-`Pair` mis-typing).
+fn subst_field_params(t: &Term, i: usize, params: &[Term]) -> Term {
+    fn go(t: &Term, depth: usize, i: usize, params: &[Term]) -> Term {
+        use blight_kernel::Term as T;
+        let np = params.len();
+        let r = |x: &T| go(x, depth, i, params);
+        let r1 = |x: &T| go(x, depth + 1, i, params);
+        match t {
+            T::Var(v) => {
+                if crate::meta::is_meta(*v) {
+                    return T::Var(*v);
+                }
+                let base = depth + i; // local binders + preceding-argument binders below the params
+                if *v < base {
+                    T::Var(*v) // a local binder or a preceding-argument reference: keep
+                } else if *v < base + np {
+                    let p = np - 1 - (*v - base); // param index (0 = outermost)
+                    weaken(&params[p], base) // instantiate, lifted into this position
+                } else {
+                    // Above the (now-removed) parameter block: shift down. Defensive — a
+                    // well-formed constructor field type only references the family's parameters
+                    // (at `base..base+np`) and its preceding arguments (at `..base`), never anything
+                    // outside that block, so this arm is unreachable in practice (mutation-equivalent).
+                    T::Var(*v - np)
+                }
+            }
+            T::Pi(g, a, b) => T::Pi(*g, Rc::new(r(a)), Rc::new(r1(b))),
+            T::Sigma(a, b) => T::Sigma(Rc::new(r(a)), Rc::new(r1(b))),
+            T::Lam(b) => T::Lam(Rc::new(r1(b))),
+            T::PLam(b) => T::PLam(Rc::new(r1(b))),
+            T::App(f, x) => T::App(Rc::new(r(f)), Rc::new(r(x))),
+            T::Pair(a, b) => T::Pair(Rc::new(r(a)), Rc::new(r(b))),
+            T::Fst(p) => T::Fst(Rc::new(r(p))),
+            T::Snd(p) => T::Snd(Rc::new(r(p))),
+            T::Ann(a, b) => T::Ann(Rc::new(r(a)), Rc::new(r(b))),
+            T::PApp(p, iv) => T::PApp(Rc::new(r(p)), iv.clone()),
+            T::Data(n, ps, is) => T::Data(
+                n.clone(),
+                ps.iter().map(&r).collect(),
+                is.iter().map(&r).collect(),
+            ),
+            T::Con(n, args) => T::Con(n.clone(), args.iter().map(&r).collect()),
+            T::Delay(a) => T::Delay(Rc::new(r(a))),
+            T::Now(a) => T::Now(Rc::new(r(a))),
+            T::Later(a) => T::Later(Rc::new(r(a))),
+            T::Force(a) => T::Force(Rc::new(r(a))),
+            T::IfZero { scrut, then_, else_ } => T::IfZero {
+                scrut: Rc::new(r(scrut)),
+                then_: Rc::new(r(then_)),
+                else_: Rc::new(r(else_)),
+            },
+            // Constructor field types do not contain eliminators / cubical / effect formers; leave
+            // any such node untouched (matching `subst0_closed`'s conservative catch-all).
+            other => other.clone(),
+        }
+    }
+    go(t, 0, i, params)
 }
 
 /// Substitute the free de Bruijn variable `target` with `repl` everywhere in `t`, **without**
