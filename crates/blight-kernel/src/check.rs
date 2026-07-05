@@ -2376,15 +2376,44 @@ impl Checker {
     }
 }
 
-/// Subtyping = definitional equality plus universe cumulativity (spec §2.4 U-Cumul): a value of
-/// `Univ ℓ` may be used where `Univ ℓ'` is expected when `ℓ ≤ ℓ'`.
+/// Subtyping = definitional equality plus universe cumulativity (spec §2.4 U-Cumul), lifted
+/// **structurally** through `Π`/`Σ` codomains (T3.1). A value of `Univ ℓ` may be used where `Univ ℓ'`
+/// is expected when `ℓ ≤ ℓ'`; and that lift propagates covariantly into the *result* position of a
+/// function or pair type. The rules (each sound, and each strictly ⊇ `conv`, so nothing previously
+/// accepted regresses):
+///
+/// - **`Π(g, A, B) ≤ Π(g', A', B')`** iff `g == g'`, `A ≡ A'`, and `B[x] ≤ B'[x]`. The **grade is
+///   exact** — never lifted — because a `Π`'s grade is a promise about the *already-checked* body's
+///   usage of its argument (the M7 laundering class; cf. [`kan_line_grade_skeleton_eq`]); relaxing it
+///   would relabel an ω-using closure as linear for free (pin
+///   `cumulativity_does_not_launder_pi_grade`). The **domain is invariant** (`conv`), not covariant:
+///   a covariant domain is *unsound* — `f : Π(_:Univ 0). A` handles only `Univ 0` inputs, so it may
+///   not stand in for `Π(_:Univ 1). A` (pin `cumulativity_pi_domain_not_covariant`). Only the
+///   **codomain is covariant** (recurse under a fresh binder).
+/// - **`Σ(A, B) ≤ Σ(A', B')`** iff `A ≡ A'` and `B[x] ≤ B'[x]` — the second component lifts
+///   covariantly; the first is kept invariant (conservative — sound and sufficient).
+///
+/// Anything else falls back to plain definitional equality.
 fn subtype(lvl: usize, actual: &Value, expected: &Value) -> bool {
-    if let (Value::Univ(a), Value::Univ(e)) = (actual, expected) {
-        if let (Ok(na), Ok(ne)) = (level_to_nat(a), level_to_nat(e)) {
-            return na <= ne;
+    match (actual, expected) {
+        (Value::Univ(a), Value::Univ(e)) => match (level_to_nat(a), level_to_nat(e)) {
+            (Ok(na), Ok(ne)) => na <= ne,
+            _ => conv(lvl, actual, expected),
+        },
+        (Value::Pi(g0, d0, c0), Value::Pi(g1, d1, c1)) => {
+            g0 == g1 && conv(lvl, d0, d1) && {
+                let fresh = Value::Neutral(Neutral::Var(lvl));
+                subtype(lvl + 1, &c0.apply(fresh.clone()), &c1.apply(fresh))
+            }
         }
+        (Value::Sigma(d0, c0), Value::Sigma(d1, c1)) => {
+            conv(lvl, d0, d1) && {
+                let fresh = Value::Neutral(Neutral::Var(lvl));
+                subtype(lvl + 1, &c0.apply(fresh.clone()), &c1.apply(fresh))
+            }
+        }
+        _ => conv(lvl, actual, expected),
     }
-    conv(lvl, actual, expected)
 }
 
 /// Obligation 1.3.2 (`docs/metatheory.md` §1.3, the "fully heterogeneous" graded-comp corner):
@@ -3228,6 +3257,84 @@ mod tests {
         assert!(
             check_top(linear_ok, pi1).is_ok(),
             "a linear var used once (as the scrutinee) must be accepted"
+        );
+    }
+
+    // ---- T3.1: structural cumulativity through Π/Σ ----
+
+    fn ev(t: Term) -> Value {
+        eval(&Env::empty(), &t)
+    }
+    fn pi(g: Grade, dom: Term, cod: Term) -> Term {
+        Term::Pi(g, Rc::new(dom), Rc::new(cod))
+    }
+
+    /// The universe lift propagates covariantly into a `Π` *codomain*: `Π(ω, Int, Univ 0) ≤
+    /// Π(ω, Int, Univ 1)` — but not the reverse.
+    #[test]
+    fn cumulativity_under_pi_codomain() {
+        let lo = ev(pi(Grade::Omega, Term::IntTy, u(0)));
+        let hi = ev(pi(Grade::Omega, Term::IntTy, u(1)));
+        assert!(subtype(0, &lo, &hi), "Π codomain Univ 0 ≤ Univ 1");
+        assert!(!subtype(0, &hi, &lo), "Π codomain Univ 1 ⊄ Univ 0");
+    }
+
+    /// The lift propagates into a `Σ` *second component*: `Σ(Int, Univ 0) ≤ Σ(Int, Univ 1)`.
+    #[test]
+    fn cumulativity_under_sigma() {
+        let lo = ev(Term::Sigma(Rc::new(Term::IntTy), Rc::new(u(0))));
+        let hi = ev(Term::Sigma(Rc::new(Term::IntTy), Rc::new(u(1))));
+        assert!(subtype(0, &lo, &hi), "Σ second component Univ 0 ≤ Univ 1");
+        assert!(!subtype(0, &hi, &lo), "Σ second component Univ 1 ⊄ Univ 0");
+    }
+
+    /// Twin negative: the `Π` **domain is invariant, not covariant** — lifting it would be *unsound*
+    /// (a `Π(_:Univ 0). Int` cannot stand in for `Π(_:Univ 1). Int`), so both directions are rejected.
+    #[test]
+    fn cumulativity_pi_domain_not_covariant() {
+        let a = ev(pi(Grade::Omega, u(0), Term::IntTy));
+        let b = ev(pi(Grade::Omega, u(1), Term::IntTy));
+        assert!(!subtype(0, &a, &b), "Π domain must not lift covariantly (unsound)");
+        assert!(!subtype(0, &b, &a), "nor contravariantly (kept invariant, conservative)");
+    }
+
+    /// Twin negative (the M7 laundering class): the codomain *would* lift, but the declared grades
+    /// differ (`ω` vs `1`) — a `Π`'s grade is a promise about the already-checked body, never
+    /// something cumulativity may relax — so it must be rejected. The positive control (same grade +
+    /// cumulative codomain) is accepted.
+    #[test]
+    fn cumulativity_does_not_launder_pi_grade() {
+        let omega = ev(pi(Grade::Omega, Term::IntTy, u(0)));
+        let one_hi = ev(pi(Grade::One, Term::IntTy, u(1)));
+        assert!(
+            !subtype(0, &omega, &one_hi),
+            "a differing Π grade must be rejected despite codomain cumulativity"
+        );
+        let one_lo = ev(pi(Grade::One, Term::IntTy, u(0)));
+        assert!(
+            subtype(0, &one_lo, &one_hi),
+            "same grade + codomain Univ 0 ≤ Univ 1 is accepted"
+        );
+    }
+
+    /// End-to-end through the checker's coercion path: `λ^ω (f : Int→Univ 0). f` checks at type
+    /// `(Int→Univ 0) →^ω (Int→Univ 1)` — the body `f` is *inferred* at `Int→Univ 0` and accepted
+    /// against the expected `Int→Univ 1` codomain via the new structural `subtype`. The version that
+    /// tries to *lower* `Univ 1 → Univ 0` is rejected.
+    #[test]
+    fn cumulativity_applies_through_check() {
+        let dom_lo = || pi(Grade::Omega, Term::IntTy, u(0)); // Int → Univ 0
+        let dom_hi = || pi(Grade::Omega, Term::IntTy, u(1)); // Int → Univ 1
+        let idf = || Term::Lam(Rc::new(Term::Var(0))); // λ f. f
+        // (Int→Univ 0) →^ω (Int→Univ 1): OK by codomain cumulativity.
+        assert!(
+            check_top(idf(), pi(Grade::Omega, dom_lo(), dom_hi())).is_ok(),
+            "λ f. f : (Int→Univ0) → (Int→Univ1) via cumulativity"
+        );
+        // (Int→Univ 1) →^ω (Int→Univ 0): must fail — no lowering.
+        assert!(
+            check_top(idf(), pi(Grade::Omega, dom_hi(), dom_lo())).is_err(),
+            "cumulativity does not run backwards"
         );
     }
 

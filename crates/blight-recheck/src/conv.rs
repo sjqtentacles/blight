@@ -122,6 +122,12 @@ fn is_path(v: &RValue) -> bool {
 }
 
 /// Subtyping: definitional equality plus universe cumulativity.
+/// Subtyping: definitional equality plus universe cumulativity, lifted structurally through `Π`/`Σ`
+/// codomains (T3.1). Mirrors `blight_kernel::check`'s `subtype` **exactly** so the re-checker accepts
+/// the same coercions the kernel does (never fewer — a false-Reject would be a spurious `Rejected`;
+/// never more — that would be a false-Ok). `Π`: grade **exact** (no laundering), domain **invariant**
+/// (a covariant domain is unsound), codomain **covariant**. `Σ`: first component invariant, second
+/// covariant. Everything else is plain `conv`. Strictly ⊇ `conv`, so nothing regresses.
 pub fn subtype(
     sig: &Signature,
     lvl: usize,
@@ -129,10 +135,34 @@ pub fn subtype(
     actual: &RValue,
     expected: &RValue,
 ) -> bool {
-    if let (RValue::Univ(na), RValue::Univ(ne)) = (actual, expected) {
-        return na <= ne;
+    match (actual, expected) {
+        (RValue::Univ(na), RValue::Univ(ne)) => na <= ne,
+        (RValue::Pi(g0, d0, c0), RValue::Pi(g1, d1, c1)) => {
+            g0 == g1 && conv(sig, lvl, dlvl, d0, d1) && {
+                let fresh = RValue::Neutral(Neutral::Var(lvl));
+                subtype(
+                    sig,
+                    lvl + 1,
+                    dlvl,
+                    &c0.apply(sig, fresh.clone()),
+                    &c1.apply(sig, fresh),
+                )
+            }
+        }
+        (RValue::Sigma(d0, c0), RValue::Sigma(d1, c1)) => {
+            conv(sig, lvl, dlvl, d0, d1) && {
+                let fresh = RValue::Neutral(Neutral::Var(lvl));
+                subtype(
+                    sig,
+                    lvl + 1,
+                    dlvl,
+                    &c0.apply(sig, fresh.clone()),
+                    &c1.apply(sig, fresh),
+                )
+            }
+        }
+        _ => conv(sig, lvl, dlvl, actual, expected),
     }
-    conv(sig, lvl, dlvl, actual, expected)
 }
 
 /// Reflect a fresh free variable of the given type at level `lvl` (used when going under a binder
@@ -441,5 +471,31 @@ mod tests {
                                                                          // Otherwise it falls back to conv.
         assert!(subtype(&s, 0, 0, &RValue::IntTy, &RValue::IntTy));
         assert!(!subtype(&s, 0, 0, &RValue::IntTy, &RValue::Univ(0)));
+    }
+
+    /// T3.1 parity: the re-checker's `subtype` lifts cumulativity through `Π`/`Σ` codomains exactly
+    /// like the kernel — codomain covariant, `Π` grade exact (no laundering), domain invariant.
+    #[test]
+    fn subtype_cumulativity_through_pi_and_sigma() {
+        let s = sig();
+        let pi = |g, a: RTerm, b: RTerm| ev(&s, RTerm::Pi(g, Box::new(a), Box::new(b)));
+        // Π codomain covariant: Π(ω, Int, Univ 0) ≤ Π(ω, Int, Univ 1), not the reverse.
+        let lo = pi(RGrade::Omega, RTerm::IntTy, RTerm::Univ(0));
+        let hi = pi(RGrade::Omega, RTerm::IntTy, RTerm::Univ(1));
+        assert!(subtype(&s, 0, 0, &lo, &hi));
+        assert!(!subtype(&s, 0, 0, &hi, &lo));
+        // Grade laundering rejected: Π(ω,Int,Univ 0) ⊄ Π(1,Int,Univ 1) despite codomain lift.
+        let one_hi = pi(RGrade::One, RTerm::IntTy, RTerm::Univ(1));
+        assert!(!subtype(&s, 0, 0, &lo, &one_hi));
+        // Domain invariant: Π(ω,Univ 0,Int) vs Π(ω,Univ 1,Int) rejected both ways.
+        let da = pi(RGrade::Omega, RTerm::Univ(0), RTerm::IntTy);
+        let db = pi(RGrade::Omega, RTerm::Univ(1), RTerm::IntTy);
+        assert!(!subtype(&s, 0, 0, &da, &db));
+        assert!(!subtype(&s, 0, 0, &db, &da));
+        // Σ second component covariant.
+        let slo = ev(&s, RTerm::Sigma(Box::new(RTerm::IntTy), Box::new(RTerm::Univ(0))));
+        let shi = ev(&s, RTerm::Sigma(Box::new(RTerm::IntTy), Box::new(RTerm::Univ(1))));
+        assert!(subtype(&s, 0, 0, &slo, &shi));
+        assert!(!subtype(&s, 0, 0, &shi, &slo));
     }
 }
