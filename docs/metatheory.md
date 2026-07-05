@@ -514,7 +514,11 @@ is a *data-driven* decision, because the proof track produced two concrete machi
 - **Dependent subject reduction is false without a conversion rule** (P2, `Dependent.lean`'s
   `preservation_false`, `#print axioms` = `[propext, Quot.sound]`). For a genuinely dependent `Π`,
   CBV argument reduction changes the codomain-instantiated type (`subst0 a B ≠ subst0 a' B`), and a
-  syntax-directed calculus with no conversion rule cannot recover it.
+  syntax-directed calculus with no conversion rule cannot recover it. *(Now ANSWERED by B2: the
+  conversion-augmented typing `Wt` satisfies `Wt.preservation` — full subject reduction, `sorryAx`-
+  free — recovering exactly what the conversion-free system provably cannot. The Church-Rosser
+  development it needed (`PSteps.confluent`, `Conv.pi_inj`) is in `Dependent.lean`. The stratification
+  decision stands: this recovers dependent SR at the type level; the unified fusion is untouched.)*
 - **Deep-handler effect subject reduction is false against a value-typed continuation** (P1,
   `Effects.lean`'s `handle_perform_not_preserving`, `[propext]`). The static `handle` rule types the
   continuation as a value (`opCod`), not a function (`opCod → B`), so the faithful reduction is not

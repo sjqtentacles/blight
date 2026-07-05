@@ -65,9 +65,14 @@ fusion breaks — each is a Lean theorem proving that a desirable property is *f
 `Dependent.lean:1509` — `preservation_false` proves `¬ (∀ … HasType → Step → …)`. For a genuinely
 dependent Π, call-by-value argument reduction changes the codomain-instantiated type
 (`subst0 a B ≠ subst0 a' B`), and a syntax-directed calculus with **no conversion rule** cannot
-recover it. The fix is well-understood (add a definitional-equality/conversion relation), but it is a
-real chunk of new metatheory, not a one-liner — and until it is added, dependent preservation
-provably fails.
+recover it.
+
+**Now answered (B2).** Adding the conversion rule recovers it, machine-checked: `Wt` (the
+conversion-augmented typing) satisfies `Wt.preservation` — full subject reduction over the entire
+`Step` relation, `sorryAx`-free. The chunk of new metatheory this needed — Church-Rosser
+(`PSteps.confluent`) for Π-injectivity, plus a substitution lemma — is all in the file. So this
+negative is a *resolved* negative: it precisely delimits what a conversion-free calculus cannot do,
+and its conversion-augmented sibling now provably can.
 
 ### 2. Deep-handler effect subject reduction fails against a *value-typed* continuation — and the fix only goes so far
 
@@ -150,15 +155,16 @@ ever *did* claim it, the claim could be falsified.
       the two facts general preservation needs — **`Conv.pi_inj`** (Π-injectivity, the beta case's
       Church-Rosser obligation — *no axioms at all*) and **`Conv.subst0_congr`** (substitution-
       congruence, the argument-step case).
-    - **The conversion-augmented typing** `Wt` (grade-erased dependent typing *with* a `conv` rule)
-      and its `Wt.lam_inv` (inversion up to conversion).
-  - *Remaining — a clean transcription step, no new mathematics:* general preservation
-    `Wt Γ e A → Step e e' → Wt Γ e' A` follows by induction (conv/ite/app₁/app₂ discharged by the
-    Conv facts above + `Wt.conv`; beta by `lam_inv` + a substitution lemma). The only missing pieces
-    are the two STANDARD structural lemmas the beta case needs — weakening and substitution for `Wt`
-    — which this file already proves in graded form (`weaken`, `subst_lemma_tele`); the `Wt` versions
-    are the same de Bruijn arguments with the grade/usage bookkeeping erased. Left as a deliberate
-    transcription step to keep the `sorryAx`-free invariant intact rather than rushed.
+    - **The conversion-augmented typing** `Wt` (grade-erased dependent typing *with* a `conv` rule),
+      its `Wt.lam_inv`, weakening (`Wt.weaken`/`Wt.weaken_prefix`) and substitution
+      (`Wt.subst_tele`/`Wt.subst`).
+    - **`Wt.preservation` — the summit, machine-checked:** `Wt Γ e A → Step e e' → Wt Γ e' A`,
+      subject reduction over the *entire* `Step` relation. The exact positive `preservation_false`
+      proved impossible *without* a conversion rule now holds *with* one. The two cases
+      `preservation_false` exploited close by the Conv facts above: `app2` (argument step) via
+      `Conv.subst0_congr`; `beta` via `Wt.lam_inv` + `Conv.pi_inj` + `Wt.subst`.
+  - **Result: `preservation_false` is answered with a positive.** (Grades are orthogonal to the
+    conversion issue, so `Wt` is grade-erased; the fusion decision below is unchanged.)
 - **A re-grading substitution lemma** for `Effects.lean`, to push `handle_perform_preserving` past
   base-type operation arguments (the wall characterized by `handle_perform_regrade_obstruction`).
 - **The kernel↔tower effect equivalence** — proving the CPS elaboration preserves the pure kernel's
