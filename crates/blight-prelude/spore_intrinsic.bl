@@ -16,13 +16,16 @@
 ; `Nat`/`plus` from spore.bl (loaded first).
 
 ; ---- object-language types: a minimal closed simply-typed slice -------------------------------
-; `BTy` is the universe of object types: a single base type plus a function type. Closed (no
-; indices), the natural "types" layer beneath the intrinsic terms.
-(defdata BTy () (Base) (Arr (dom BTy) (cod BTy)))
+; `BTy` is the universe of object types: two base types (`Base`, the opaque one, and `NatT`, the
+; S4a naturals, whose terms are `TZero`/`TSuc`) plus a function type. Closed (no indices), the
+; natural "types" layer beneath the intrinsic terms. `NatT` (not `Nat`) so the object-type
+; constructor never collides with spore.bl's host `Nat` datatype, which shares the name namespace.
+(defdata BTy () (Base) (NatT) (Arr (dom BTy) (cod BTy)))
 
 (deftotal bty-size (Pi ((a BTy)) Nat)
   (lam (a)
-    (match a [(Base) (Succ Zero)] [(Arr dom cod) (Succ (plus (bty-size dom) (bty-size cod)))])))
+    (match a [(Base) (Succ Zero)] [(NatT) (Succ Zero)]
+      [(Arr dom cod) (Succ (plus (bty-size dom) (bty-size cod)))])))
 
 ; ---- typing contexts as snoc-lists of object types -------------------------------------------
 (defdata BTyCtx () (CNil) (CSnoc (rest BTyCtx) (ty BTy)))
@@ -42,13 +45,18 @@
 ; The headline two-INDEX family (indices `g : BTyCtx` and `a : BTy`). `TVar` embeds a membership
 ; proof; `TLam` introduces an arrow by extending the context; `TApp` eliminates one. No ill-typed
 ; term can be formed, and no term can escape its context — the indices enforce both.
+; `TZero`/`TSuc` introduce the `NatT` base type: `TZero : BTm g NatT` and, given a `BTm g NatT`,
+; `TSuc` builds its successor at the same type. By construction a successor can only wrap a Nat.
 (defdata BTm () ((g BTyCtx) (a BTy)) (TVar (g BTyCtx) (a BTy) (x (BVarIn g a)) (=> g a))
   (TLam (g BTyCtx) (a BTy) (b BTy) (body (BTm (CSnoc g a) b)) (=> g (Arr a b)))
-  (TApp (g BTyCtx) (a BTy) (b BTy) (f (BTm g (Arr a b))) (x (BTm g a)) (=> g b)))
+  (TApp (g BTyCtx) (a BTy) (b BTy) (f (BTm g (Arr a b))) (x (BTm g a)) (=> g b))
+  (TZero (g BTyCtx) (=> g NatT))
+  (TSuc (g BTyCtx) (n (BTm g NatT)) (=> g NatT)))
 
 ; A structural size measure over the intrinsic terms — proves the family is genuinely recursive and
 ; usable as a termination metric, exactly as `bsize` does for the extrinsic `BTerm`.
 (deftotal btm-size (Pi ((g BTyCtx) (a BTy) (t (BTm g a))) Nat)
   (lam (g a t)
     (match t [(TVar g a x) (Succ Zero)] [(TLam g a b body) (Succ (btm-size (CSnoc g a) b body))]
-      [(TApp g a b f x) (Succ (plus (btm-size g (Arr a b) f) (btm-size g a x)))])))
+      [(TApp g a b f x) (Succ (plus (btm-size g (Arr a b) f) (btm-size g a x)))]
+      [(TZero g) (Succ Zero)] [(TSuc g n) (Succ (btm-size g NatT n))])))

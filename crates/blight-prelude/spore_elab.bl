@@ -33,7 +33,10 @@
 ; ── Surface syntax (BSurf): the untyped input the elaborator consumes ───────────────────────────────
 ; A directly-recursive, type-annotated lambda calculus. `su-lam` carries its domain type because the
 ; object core is simply-typed (the domain is not otherwise recoverable). `su-var` is a de Bruijn index.
-(defdata BSurf () (su-var (i Nat)) (su-lam (dom BTy) (body BSurf)) (su-app (fn BSurf) (arg BSurf)))
+; S4a adds the `NatT` introducers: `su-zero` (the literal `0`) and `su-succ` (successor); numeric
+; literals in concrete syntax desugar to nested `su-succ` in the reader (spore_reader.bl).
+(defdata BSurf () (su-var (i Nat)) (su-lam (dom BTy) (body BSurf)) (su-app (fn BSurf) (arg BSurf))
+  (su-zero) (su-succ (n BSurf)))
 
 ; ── Existential outputs: a type packed with a well-typed term/variable at that type, in context g ────
 (defdata BSig
@@ -71,20 +74,24 @@
     (match md [(nothing) nothing]
       [(just ed) (match mc [(nothing) nothing] [(just ec) (just (arr-cong d1 d2 c1 c2 ed ec))])])))
 
-; The `Base` row of the decision table.
+; The `Base` row of the decision table (every non-`Base` type is unequal to `Base`).
 (deftotal deceq-base (Pi ((b BTy)) (Maybe (BtyEq Base b)))
-  (lam (b) (match b [(Base) (just (bty-refl Base))] [(Arr d c) nothing])))
+  (lam (b) (match b [(Base) (just (bty-refl Base))] [(NatT) nothing] [(Arr d c) nothing])))
+
+; The `NatT` row of the decision table (every non-`NatT` type is unequal to `NatT`).
+(deftotal deceq-nat (Pi ((b BTy)) (Maybe (BtyEq NatT b)))
+  (lam (b) (match b [(Base) nothing] [(NatT) (just (bty-refl NatT))] [(Arr d c) nothing])))
 
 ; Decide `BtyEq a b` structurally. Curried on `a`: the `a`-match returns a function of `b`, so `b` is
 ; out of scope during it (discipline 1). The `Arr` row is an ascribed `λb` whose inner `b`-match is in
 ; checking mode, with the domain/codomain sub-decisions resolved by recursion (`d1`/`c1` ⊏ `a`).
 (define-rec bty-deceq (Pi ((a BTy) (b BTy)) (Maybe (BtyEq a b)))
   (lam (a)
-    (match a [(Base) deceq-base]
+    (match a [(Base) deceq-base] [(NatT) deceq-nat]
       [(Arr d1 c1)
         (the (Pi ((b BTy)) (Maybe (BtyEq (Arr d1 c1) b)))
           (lam (b)
-            (match b [(Base) nothing]
+            (match b [(Base) nothing] [(NatT) nothing]
               [(Arr d2 c2) (mk-arr-eq d1 c1 d2 c2 (bty-deceq d1 d2) (bty-deceq c1 c2))])))])))
 
 ; ── Arrow view: read a type as an arrow, carrying the equality witness ───────────────────────────────
@@ -95,7 +102,8 @@
 ; so the reflexivity witness `bty-refl (Arr dom cod)` is exactly what `barreq dom cod _` needs.
 (deftotal split-arrow (Pi ((a BTy)) (Maybe (BArrEq a)))
   (lam (a)
-    (match a [(Base) nothing] [(Arr dom cod) (just (barreq dom cod (bty-refl (Arr dom cod))))])))
+    (match a [(Base) nothing] [(NatT) nothing]
+      [(Arr dom cod) (just (barreq dom cod (bty-refl (Arr dom cod))))])))
 
 ; ── Coerce an inferred term to a *known* arrow type (the function side of application) ────────────────
 ; Given the arrow witness, transport the function term to the arrow type. (One `match` of a variable.)
@@ -156,6 +164,18 @@
 (deftotal mk-tlam (Pi ((g BTyCtx) (dom BTy) (s (BSig (CSnoc g dom)))) (BSig g))
   (lam (g dom s) (match s [(bsig b tm) (bsig (Arr dom b) (TLam g dom b tm))])))
 
+; `su-succ` finisher: the operand must already be a `NatT`. Check its inferred type against `NatT`
+; (`bty-deceq`), coerce, and wrap in `TSuc` — the same "domain check + coerce + eliminate" shape the
+; application side (`apply-arr3`) uses, specialized to the fixed operand type `NatT`. A non-Nat
+; operand fails the decision and the whole successor is rejected (`nothing`).
+(deftotal succ-of
+  (Pi ((g BTyCtx) (aa BTy) (tm (BTm g aa)) (me (Maybe (BtyEq aa NatT)))) (Maybe (BSig g)))
+  (lam (g aa tm me)
+    (match me [(nothing) nothing]
+      [(just e) (just (bsig NatT (TSuc g (bty-coerce g aa NatT e tm))))])))
+(deftotal succ-sig (Pi ((g BTyCtx) (s (BSig g))) (Maybe (BSig g)))
+  (lam (g s) (match s [(bsig aa tm) (succ-of g aa tm (bty-deceq aa NatT))])))
+
 ; The headline loop. Curried on the surface term `s` (structural recursion on the leading scrutinee),
 ; returning a function of the context `g`; currying keeps `g` out of scope during `match s` so every
 ; arm stays in checking mode (discipline 1). Each arm threads recursive results through
@@ -179,7 +199,13 @@
               (the (Pi ((sf (BSig g))) (Maybe (BSig g)))
                 (lam (sf)
                   (maybe-bind (BSig g) (BSig g) (belab-go arg g)
-                    (the (Pi ((sx (BSig g))) (Maybe (BSig g))) (lam (sx) (apply-sig g sf sx)))))))))])))
+                    (the (Pi ((sx (BSig g))) (Maybe (BSig g))) (lam (sx) (apply-sig g sf sx)))))))))]
+      [(su-zero) (the (Pi ((g BTyCtx)) (Maybe (BSig g))) (lam (g) (just (bsig NatT (TZero g)))))]
+      [(su-succ n)
+        (the (Pi ((g BTyCtx)) (Maybe (BSig g)))
+          (lam (g)
+            (maybe-bind (BSig g) (BSig g) (belab-go n g)
+              (the (Pi ((sx (BSig g))) (Maybe (BSig g))) (lam (sx) (succ-sig g sx))))))])))
 
 ; The headline, with the plan's argument order `(g : BTyCtx) (s : BSurf)`.
 (deftotal belaborate (Pi ((g BTyCtx) (s BSurf)) (Maybe (BSig g))) (lam (g s) (belab-go s g)))

@@ -3097,9 +3097,10 @@ mod tests {
         assert!(run.status.success(), "selfhost_check runs successfully");
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
-            "OK size=6\nREJECT\n",
-            "the Blight-written front end accepts the well-typed toy source (size-6 ANF) and \
-             rejects the ill-typed one"
+            "OK size=6\nREJECT\nOK size=8\nOK size=9\n",
+            "the Blight-written front end accepts the well-typed toy source (size-6 ANF), rejects \
+             the ill-typed one, and (S4a) accepts the numeric literal `2` (size-8 ANF) and the \
+             Nat successor function (size-9 ANF), all read from disk"
         );
     }
 
@@ -3145,7 +3146,10 @@ mod tests {
         // Expected verdict per corpus index (the Case table): the Rust side's independent record of
         // which toy terms are well-typed. The Blight front end's verdicts must match these, AND each
         // accepted payload must survive the trusted kernel's re-check.
-        let expected_accept = [true, true, true, true, false, false, false];
+        let expected_accept = [
+            true, true, true, true, false, false, false, // c0–c6 (STLC over Base)
+            true, true, true, false, // c7–c10 (S4a: Nat identity / literal 2 / successor fn / succ-of-fn)
+        ];
         let mut seen_accept = false;
         let mut seen_reject = false;
         for line in stdout.lines() {
@@ -3163,7 +3167,10 @@ mod tests {
                 seen_accept = true;
                 let payload = verdict.strip_prefix("ACCEPT ").unwrap();
                 // Disposer: the trusted kernel independently re-checks the embedded judgement.
-                let src = format!("(defdata Base () (b0))\n{payload}");
+                // `Base` is the opaque base type; `Nat` (S4a) is the second base type the `NatT`
+                // embedding renders to, so `(the Nat (Succ …))` payloads re-check.
+                let src =
+                    format!("(defdata Base () (b0))\n(defdata Nat () (Zero) (Succ (n Nat)))\n{payload}");
                 let mut env = ElabEnv::new();
                 let mut prog = Program::new(&mut env);
                 let outcomes = prog.run(&src).unwrap_or_else(|e| {

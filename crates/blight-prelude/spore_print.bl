@@ -36,9 +36,10 @@
 ; `Base` is a host datatype the bridge program declares; `Arr d c` is a non-dependent `Pi`. The Pi
 ; binder name is irrelevant (the object language is simply typed, so `c` never mentions it) — a fixed
 ; `v` is fine, even when nested arrows shadow it.
+; `NatT` embeds to the host's real `Nat` datatype (Zero/Succ) — the disposer program declares it.
 (deftotal bty-print (Pi ((a BTy)) String)
   (lam (a)
-    (match a [(Base) "Base"]
+    (match a [(Base) "Base"] [(NatT) "Nat"]
       [(Arr d c)
         (cat (cons "(Pi ((v " (cons (bty-print d) (cons ")) " (cons (bty-print c) (cons ")" nil))))))])))
 
@@ -64,7 +65,10 @@
             (cons (binder-name d) (cons ") " (cons (bsurf-print body (Succ d)) (cons ")" nil))))))]
       [(su-app fn arg)
         (cat
-          (cons "(" (cons (bsurf-print fn d) (cons " " (cons (bsurf-print arg d) (cons ")" nil))))))])))
+          (cons "(" (cons (bsurf-print fn d) (cons " " (cons (bsurf-print arg d) (cons ")" nil))))))]
+      ; `su-zero`/`su-succ` embed to the host `Nat` numerals (no binder, so depth `d` is unchanged).
+      [(su-zero) "Zero"]
+      [(su-succ n) (cat (cons "(Succ " (cons (bsurf-print n d) (cons ")" nil))))])))
 
 ; ── The bridge payload for one source term ───────────────────────────────────────────────────────────
 ; The elaborator's verdict rendered as a checkable line: `ACCEPT (the ⟦a⟧ ⟦s⟧)` on success, `REJECT`

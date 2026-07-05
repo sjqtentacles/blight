@@ -56,11 +56,15 @@
       [(cons x xs)
         (lam (b) (match b [(nil) false] [(cons y ys) (and (nat-eq x y) (bytes-eq xs ys))]))])))
 
-; The two reserved keyword atoms and the one reserved type atom, as codepoint lists (`?x` is the
-; reader's single-character-literal sugar, desugaring straight to the `Nat` codepoint — spec §6).
+; The reserved keyword atoms and reserved type atoms, as codepoint lists (`?x` is the reader's
+; single-character-literal sugar, desugaring straight to the `Nat` codepoint — spec §6). S4a adds the
+; `Nat` type keyword and the `zero`/`succ` term keywords (numeric literals are handled separately).
 (define kw-lam (List Nat) (cons ?l (cons ?a (cons ?m nil))))
 (define kw-base (List Nat) (cons ?B (cons ?a (cons ?s (cons ?e nil)))))
 (define kw-arr (List Nat) (cons ?A (cons ?r (cons ?r nil))))
+(define kw-nat (List Nat) (cons ?N (cons ?a (cons ?t nil))))
+(define kw-zero (List Nat) (cons ?z (cons ?e (cons ?r (cons ?o nil)))))
+(define kw-succ (List Nat) (cons ?s (cons ?u (cons ?c (cons ?c nil)))))
 
 ; ── Name resolution: `NAME` -> de Bruijn index against the enclosing binder stack ───────────────────
 ; `names` is innermost-binder-first, exactly the order `su-var`'s index counts in (`Zero` = the most
@@ -96,7 +100,10 @@
   (lam (fuel e)
     (match fuel [(Zero) nothing]
       [(Succ k)
-        (match e [(s-atom bs) (match (bytes-eq bs kw-base) [(true) (just Base)] [(false) nothing])]
+        (match e
+          [(s-atom bs)
+            (match (bytes-eq bs kw-base) [(true) (just Base)]
+              [(false) (match (bytes-eq bs kw-nat) [(true) (just NatT)] [(false) nothing])])]
           [(s-nil) nothing]
           [(s-cons head rest)
             (match head [(s-nil) nothing] [(s-cons z1 z2) nothing]
@@ -123,6 +130,51 @@
 (deftotal is-lam-kw (Pi ((e BSexp)) Bool)
   (lam (e) (match e [(s-atom bs) (bytes-eq bs kw-lam)] [(s-nil) false] [(s-cons h r) false])))
 
+; Is this `BSexp` the bare keyword atom `succ`? (The head of a `(succ e)` successor form.)
+(deftotal is-succ-kw (Pi ((e BSexp)) Bool)
+  (lam (e) (match e [(s-atom bs) (bytes-eq bs kw-succ)] [(s-nil) false] [(s-cons h r) false])))
+
+; ── Numeric literals: a digit-atom desugars to a nested `su-succ` chain (the "su-lit sugar") ──────────
+; `digit-val b` is `just v` when the byte `b` is the ASCII digit for `v` (`?0↦0 … ?9↦9`), else
+; `nothing`. CRITICAL: it decides digit-hood with `nat-eq` ONLY — never `nat-lt` on a codepoint. The
+; existing reader is careful to compare codepoints only through `bytes-eq`/`nat-eq` (the discarded-IH
+; blowup N5 fixed lives in `do_elim`'s handling of `nat-eq`-shaped recursion; `nat-lt` on a ~120-valued
+; codepoint re-triggers the SAME exponential the file header warns about — measured: an 8→512 MiB stack
+; overflow inside `reader-demo-refl`). Every arithmetic step below runs on the SMALL accumulated value
+; (`0..n`) and the tiny digit value (`0..9`), so `mult`/`plus` (from std/nat.bl, the collapsed Nat
+; tower — see the file header) never touch a codepoint. So a source atom like `3` reads exactly as
+; `(su-succ (su-succ (su-succ su-zero)))`, and `0` as `su-zero`.
+(deftotal digit-val (Pi ((b Nat)) (Maybe Nat))
+  (lam (b)
+    (match (nat-eq b ?0) [(true) (just 0)]
+      [(false) (match (nat-eq b ?1) [(true) (just 1)]
+        [(false) (match (nat-eq b ?2) [(true) (just 2)]
+          [(false) (match (nat-eq b ?3) [(true) (just 3)]
+            [(false) (match (nat-eq b ?4) [(true) (just 4)]
+              [(false) (match (nat-eq b ?5) [(true) (just 5)]
+                [(false) (match (nat-eq b ?6) [(true) (just 6)]
+                  [(false) (match (nat-eq b ?7) [(true) (just 7)]
+                    [(false) (match (nat-eq b ?8) [(true) (just 8)]
+                      [(false) (match (nat-eq b ?9) [(true) (just 9)] [(false) nothing])])])])])])])])])])))
+
+; Fold a byte list to `just <decimal value>` iff EVERY byte is a digit, else `nothing`. Structural on
+; `bs` (FIRST parameter); the accumulator `acc` (SMALL — the value so far) rides TRAILING, so each step
+; is `acc*10 + digit`. A non-digit byte anywhere collapses the whole atom to `nothing` (→ not a
+; numeral, fall through to a name lookup).
+(define-rec digits->nat-go (Pi ((bs (List Nat)) (acc Nat)) (Maybe Nat))
+  (lam (bs acc)
+    (match bs [(nil) (just acc)]
+      [(cons x xs)
+        (match (digit-val x) [(nothing) nothing]
+          [(just d) (digits->nat-go xs (plus (mult acc 10) d))])])))
+
+; A NON-empty all-digit atom is a numeral (`just value`); anything else is `nothing`.
+(deftotal digits->nat (Pi ((bs (List Nat))) (Maybe Nat))
+  (lam (bs) (match bs [(nil) nothing] [(cons x xs) (digits->nat-go bs Zero)])))
+
+(deftotal nat->succs (Pi ((n Nat)) BSurf)
+  (lam (n) (match n [(Zero) su-zero] [(Succ k) (su-succ (nat->succs k))])))
+
 ; ── Term reader: `NAME` | `(lam (NAME TY) BODY)` | `(FN ARG)` ───────────────────────────────────────
 ; Fuel-recursive for the same reason as `resolve-ty-fuel` above: `head`/`bodyE`/`argE`/`fnT` are all
 ; reached several `s-cons` cells below `e`, so every self-call passes the current arm's `k` unchanged
@@ -133,7 +185,14 @@
       [(Succ k)
         (match e
           [(s-atom bs)
-            (match (lookup-name names bs) [(nothing) nothing] [(just i) (just (su-var i))])]
+            ; `zero` keyword and numeric literals take precedence over a name lookup; every other
+            ; atom is a bound variable resolved to its de Bruijn index.
+            (match (bytes-eq bs kw-zero) [(true) (just su-zero)]
+              [(false)
+                (match (digits->nat bs) [(just n) (just (nat->succs n))]
+                  [(nothing)
+                    (match (lookup-name names bs) [(nothing) nothing]
+                      [(just i) (just (su-var i))])])])]
           [(s-nil) nothing]
           [(s-cons head rest)
             (match (is-lam-kw head)
@@ -160,15 +219,25 @@
                                                   [(nothing) nothing]
                                                   [(just body) (just (su-lam ty body))])])])])])])])])])]
               [(false)
-                ; (FN ARG): rest = (argE . ())
-                (match rest [(s-atom ra) nothing] [(s-nil) nothing]
-                  [(s-cons argE rest2)
-                    (match rest2 [(s-atom r2) nothing] [(s-cons z1 z2) nothing]
-                      [(s-nil)
-                        (match (resolve-term-fuel k names head) [(nothing) nothing]
-                          [(just fnT)
-                            (match (resolve-term-fuel k names argE) [(nothing) nothing]
-                              [(just argT) (just (su-app fnT argT))])])])])])])])))
+                (match (is-succ-kw head)
+                  [(true)
+                    ; (succ OPERAND): rest = (operand . ())
+                    (match rest [(s-atom sra) nothing] [(s-nil) nothing]
+                      [(s-cons operandE srest2)
+                        (match srest2 [(s-atom sr2) nothing] [(s-cons sz1 sz2) nothing]
+                          [(s-nil)
+                            (match (resolve-term-fuel k names operandE) [(nothing) nothing]
+                              [(just oe) (just (su-succ oe))])])])]
+                  [(false)
+                    ; (FN ARG): rest = (argE . ())
+                    (match rest [(s-atom ra) nothing] [(s-nil) nothing]
+                      [(s-cons argE rest2)
+                        (match rest2 [(s-atom r2) nothing] [(s-cons z1 z2) nothing]
+                          [(s-nil)
+                            (match (resolve-term-fuel k names head) [(nothing) nothing]
+                              [(just fnT)
+                                (match (resolve-term-fuel k names argE) [(nothing) nothing]
+                                  [(just argT) (just (su-app fnT argT))])])])])])])])])))
 
 ; Top-level entry point: seed the fuel with `e`'s own size, exactly like `resolve-ty`.
 (deftotal resolve-term (Pi ((names (List (List Nat))) (e BSexp)) (Maybe BSurf))
@@ -206,3 +275,27 @@
 ; steps per `nat-eq`; this refl used to die inside `is-lam-kw`'s first character comparison,
 ; `nat-eq(108,108)`). N5's dead-IH skip removed it; fuel was innocent all along (fuel = 11 here).
 (define-by reader-demo-refl (Path (Maybe BSurf) (bsexp->bsurf reader-demo-sexp) (just demo-id)) refl)
+
+; ── S4a reader demos: the kernel certifies the new Nat paths read correctly ─────────────────────────
+; `(lam (x Nat) (succ x))` — the `Nat` type keyword, the `(succ …)` form, and a bound var, together.
+(define reader-succ-sexp BSexp
+  (s-cons (s-atom kw-lam)
+    (s-cons (s-cons (s-atom (cons ?x nil)) (s-cons (s-atom kw-nat) s-nil))
+      (s-cons (s-cons (s-atom kw-succ) (s-cons (s-atom (cons ?x nil)) s-nil)) s-nil))))
+(define-by reader-succ-refl
+  (Path (Maybe BSurf) (bsexp->bsurf reader-succ-sexp) (just (su-lam NatT (su-succ (su-var Zero)))))
+  refl)
+
+; The single-digit numeral `2` desugars to `(su-succ (su-succ su-zero))` (the "su-lit sugar").
+(define reader-lit2-sexp BSexp (s-atom (cons ?2 nil)))
+(define-by reader-lit2-refl
+  (Path (Maybe BSurf) (bsexp->bsurf reader-lit2-sexp) (just (su-succ (su-succ su-zero))))
+  refl)
+
+; A MULTI-digit numeral `12` exercises the decimal accumulator (`acc*10 + digit`, all on small values):
+; it must read as `nat->succs 12`, i.e. a 12-deep successor chain. Proving equality against
+; `nat->succs 12` pins `digits->nat` = 12 without spelling twelve `su-succ`s by hand.
+(define reader-lit12-sexp BSexp (s-atom (cons ?1 (cons ?2 nil))))
+(define-by reader-lit12-refl
+  (Path (Maybe BSurf) (bsexp->bsurf reader-lit12-sexp) (just (nat->succs 12)))
+  refl)

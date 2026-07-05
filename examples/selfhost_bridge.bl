@@ -43,6 +43,15 @@
   (su-lam (Arr Base Base)
     (su-lam Base
       (su-lam Base (su-app (su-app (su-var (Succ (Succ Zero))) (su-var (Succ Zero))) (su-var Zero))))))
+; ── S4a: the Nat base type (⟦NatT⟧ = the host `Nat`) and its zero/succ introducers ────────────────────
+; 7. λx:Nat. x                          : Nat → Nat                         (identity on Nat — ACCEPT)
+(define c7 BSurf (su-lam NatT (su-var Zero)))
+; 8. (succ (succ zero))                 : Nat                               (the literal 2 — ACCEPT)
+(define c8 BSurf (su-succ (su-succ su-zero)))
+; 9. λx:Nat. (succ x)                   : Nat → Nat                         (successor fn — ACCEPT)
+(define c9 BSurf (su-lam NatT (su-succ (su-var Zero))))
+; 10. (succ (λx:Base. x))              : —  (successor of a function)       (ill-typed — REJECT)
+(define c10 BSurf (su-succ (su-lam Base (su-var Zero))))
 
 ; Print one `BRIDGE <idx> <verdict>` line, then a newline, sequencing under `Console`.
 (deftotal emit (Pi ((idx Nat) (s BSurf)) (! Console Unit))
@@ -52,4 +61,10 @@
   (let ((u0 (emit 0 c0)))
     (let ((u1 (emit 1 c1)))
       (let ((u2 (emit 2 c2)))
-        (let ((u3 (emit 3 c3))) (let ((u4 (emit 4 c4))) (let ((u5 (emit 5 c5))) (emit 6 c6))))))))
+        (let ((u3 (emit 3 c3)))
+          (let ((u4 (emit 4 c4)))
+            (let ((u5 (emit 5 c5)))
+              (let ((u6 (emit 6 c6)))
+                (let ((u7 (emit 7 c7)))
+                  (let ((u8 (emit 8 c8)))
+                    (let ((u9 (emit 9 c9))) (emit 10 c10))))))))))))

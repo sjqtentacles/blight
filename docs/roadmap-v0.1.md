@@ -469,7 +469,14 @@ kernel/elab/recheck/codegen). Protocol, all gates pre-registered in the red comm
 Toy STLC (Base/Arr) → a real Blight fragment, one sub-milestone per feature, each re-running the
 S2 bridge differential and growing its corpus by ≥5 cases:
 
-- **S4a** — Nat literals + a second base type (post-E1).
+- **S4a** — Nat literals + a second base type (post-E1). **[x] DONE (2026-07-05).** `BTy` gains
+  `NatT` (name distinct from spore.bl's `Nat` datatype); intrinsic `BTm` gains `TZero`/`TSuc`;
+  `BSurf` gains `su-zero`/`su-succ`; the reader parses the `Nat` type keyword, the `(succ …)` form,
+  and numeric literals (a digit-atom desugars to a nested `su-succ` — detected with `nat-eq` ONLY,
+  never `nat-lt` on a codepoint, which re-triggers the discarded-IH blowup N5 fixed). The S2 bridge
+  differential grew by 7 Nat cases (kernel-`refl`-certified accord with the Rust front end);
+  `selfhost_bridge.bl` (+4 Nat cases, kernel re-checks each `(the Nat …)` payload) and
+  `selfhost_check.bl` (numeral + Nat successor read from disk, native run) both extended.
 - **S4b** — user inductives: BTy gains declared datatypes; `belaborate` gains constructors +
   match on non-indexed inductives.
 - **S4c** — dependent Pi (BTy indexed by context; the intrinsic two-index machinery is already

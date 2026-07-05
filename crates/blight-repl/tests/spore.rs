@@ -405,6 +405,50 @@ fn self_host_differential_agrees_with_rust() {
                               (the (Pi ((x Base)) Base) (lam (x) x))))",
                 bsurf: "(su-app (su-lam Base (su-var Zero)) (su-lam Base (su-var Zero)))",
             },
+            // ── S4a: the Nat base type + zero/succ (≥5 new cases, both outcomes) ──
+            // A bare Nat literal `0`.
+            Case {
+                label: "nat-zero",
+                rust: "(the Nat Zero)",
+                bsurf: "su-zero",
+            },
+            // `(succ (succ 0))` = 2 : Nat.
+            Case {
+                label: "nat-two",
+                rust: "(the Nat (Succ (Succ Zero)))",
+                bsurf: "(su-succ (su-succ su-zero))",
+            },
+            // λx:Nat. x : Nat → Nat — the identity on the new base type.
+            Case {
+                label: "nat-identity",
+                rust: "(the (Pi ((x Nat)) Nat) (lam (x) x))",
+                bsurf: "(su-lam NatT (su-var Zero))",
+            },
+            // λf:(Nat→Nat). λx:Nat. (f x) : (Nat→Nat) → Nat → Nat — application over Nat.
+            Case {
+                label: "nat-apply",
+                rust: "(the (Pi ((f (Pi ((x Nat)) Nat)) (x Nat)) Nat) (lam (f x) (f x)))",
+                bsurf: "(su-lam (Arr NatT NatT) (su-lam NatT (su-app (su-var (Succ Zero)) (su-var Zero))))",
+            },
+            // ── ill-typed in both ──
+            // `(succ (λx:Base. x))` — successor of a function: no typed elaboration.
+            Case {
+                label: "succ-of-function",
+                rust: "(the Nat (Succ (the (Pi ((x Base)) Base) (lam (x) x))))",
+                bsurf: "(su-succ (su-lam Base (su-var Zero)))",
+            },
+            // λf:(Nat→Nat). λx:Base. (f x) — argument Base where the domain is Nat.
+            Case {
+                label: "nat-base-domain-mismatch",
+                rust: "(the (Pi ((f (Pi ((x Nat)) Nat)) (x Base)) Nat) (lam (f x) (f x)))",
+                bsurf: "(su-lam (Arr NatT NatT) (su-lam Base (su-app (su-var (Succ Zero)) (su-var Zero))))",
+            },
+            // `(succ x)` where x:Base is bound — successor of a non-Nat variable.
+            Case {
+                label: "succ-of-base-var",
+                rust: "(the (Pi ((x Base)) Nat) (lam (x) (Succ x)))",
+                bsurf: "(su-lam Base (su-succ (su-var Zero)))",
+            },
         ];
 
         // (1) The Rust verdict per program (the base type is declared in a fresh env each time so the
@@ -412,7 +456,12 @@ fn self_host_differential_agrees_with_rust() {
         fn rust_accepts(body: &str) -> bool {
             let mut env = ElabEnv::new();
             let mut prog = Program::with_resolver(&mut env, prelude_resolver);
-            prog.run(&format!("(defdata Base () (b0))\n{body}")).is_ok()
+            // `Base` is an opaque base type; `Nat` is the S4a second base type (Zero/Succ), so the
+            // Rust side of the differential can express the same object programs as the `.bl` side.
+            prog.run(&format!(
+                "(defdata Base () (b0))\n(defdata Nat () (Zero) (Succ (n Nat)))\n{body}"
+            ))
+            .is_ok()
         }
         let verdicts: Vec<bool> = corpus.iter().map(|c| rust_accepts(c.rust)).collect();
 

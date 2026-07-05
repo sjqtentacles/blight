@@ -49,10 +49,20 @@
 
 (define good String "(lam (x Base) x)")
 (define bad String "(lam (x Base) (x x))")
+; S4a sources, read from disk and driven through the SAME native front end: a numeric literal (the
+; reader desugars `2` to `(succ (succ zero))`) and a `Nat`-typed successor function (the `Nat` type
+; keyword + the `(succ …)` form). Both are well-typed, so the front end accepts and lowers each.
+(define nat-lit String "2")
+(define nat-succ String "(lam (x Nat) (succ x))")
 
 (define nl String "\n")
 
 (define main (! (Console FileIO Bytes) Unit)
   (let ((v-good (check-source good)))
     (let ((u1 (put-str (string-append v-good nl))))
-      (let ((v-bad (check-source bad))) (put-str (string-append v-bad nl))))))
+      (let ((v-bad (check-source bad)))
+        (let ((u2 (put-str (string-append v-bad nl))))
+          (let ((v-lit (check-source nat-lit)))
+            (let ((u3 (put-str (string-append v-lit nl))))
+              (let ((v-succ (check-source nat-succ)))
+                (put-str (string-append v-succ nl))))))))))
