@@ -1749,12 +1749,81 @@ theorem PSteps.confluent {a b c : Expr} (hab : PSteps a b) (hac : PSteps a c) :
       obtain ⟨e, hbe, hd'e⟩ := PSteps.strip hb'b hb'd'
       exact ⟨e, hbe, hcd'.tail hd'e⟩
 
--- Axiom audit (B2.2 Church-Rosser core): the substitutivity heart, the Takahashi diamond, and
--- confluence are all sorry-free. These are what the general conversion-rule preservation rests on
--- (pi-injectivity from confluence; substitution-congruence of definitional equality from PStep.subst).
+/-- Transitivity of parallel-reduction sequences. -/
+theorem PSteps.trans {a b c : Expr} (hab : PSteps a b) (hbc : PSteps b c) : PSteps a c := by
+  induction hbc with
+  | refl => exact hab
+  | tail _ h ih => exact ih.tail h
+
+/-- A single parallel step is a parallel-reduction sequence. -/
+theorem PSteps.single {a b : Expr} (h : PStep a b) : PSteps a b := (PSteps.refl a).tail h
+
+/-- CBV small-step is contained in parallel reduction. -/
+theorem step_to_pstep {a b : Expr} (h : Step a b) : PStep a b := by
+  induction h with
+  | app1 _ ih => exact .app ih (PStep.refl _)
+  | app2 _ _ ih => exact .app (PStep.refl _) ih
+  | beta _ => exact .beta (PStep.refl _) (PStep.refl _)
+  | ite_cond _ ih => exact .ite ih (PStep.refl _) (PStep.refl _)
+  | ite_tt => exact .iteTt (PStep.refl _) (PStep.refl _)
+  | ite_ff => exact .iteFf (PStep.refl _) (PStep.refl _)
+
+/-- `pi` is preserved under a single parallel step (its head is rigid; only `PStep.pi` applies). -/
+theorem PStep.pi_inv {g : Grade} {A B x : Expr} (h : PStep (Expr.pi g A B) x) :
+    ∃ A' B', x = Expr.pi g A' B' ∧ PStep A A' ∧ PStep B B' := by
+  cases h with
+  | pi hd hc => exact ⟨_, _, rfl, hd, hc⟩
+
+/-- `pi` is preserved under parallel-reduction sequences, component-wise. -/
+theorem PSteps.pi_inv {g : Grade} {A B x : Expr} (h : PSteps (Expr.pi g A B) x) :
+    ∃ A' B', x = Expr.pi g A' B' ∧ PSteps A A' ∧ PSteps B B' := by
+  induction h with
+  | refl => exact ⟨A, B, rfl, PSteps.refl A, PSteps.refl B⟩
+  | tail _ hbc ih =>
+      obtain ⟨A', B', rfl, hAA', hBB'⟩ := ih
+      obtain ⟨A'', B'', rfl, hA'A'', hB'B''⟩ := hbc.pi_inv
+      exact ⟨A'', B'', rfl, hAA'.tail hA'A'', hBB'.tail hB'B''⟩
+
+/-- **Definitional equality**: `a` and `b` share a common parallel reduct. Confluence makes this an
+    equivalence; the rigidity of `pi` makes it injective; `PStep.subst` makes it a substitution
+    congruence. These are exactly the three facts the conversion-rule preservation needs. -/
+def Conv (a b : Expr) : Prop := ∃ c, PSteps a c ∧ PSteps b c
+
+theorem Conv.refl (a : Expr) : Conv a a := ⟨a, .refl a, .refl a⟩
+theorem Conv.symm {a b : Expr} (h : Conv a b) : Conv b a := let ⟨c, h1, h2⟩ := h; ⟨c, h2, h1⟩
+
+theorem Conv.trans {a b c : Expr} (hab : Conv a b) (hbc : Conv b c) : Conv a c := by
+  obtain ⟨d1, had1, hbd1⟩ := hab
+  obtain ⟨d2, hbd2, hcd2⟩ := hbc
+  obtain ⟨e, hd1e, hd2e⟩ := PSteps.confluent hbd1 hbd2
+  exact ⟨e, had1.trans hd1e, hcd2.trans hd2e⟩
+
+theorem conv_of_step {a b : Expr} (h : Step a b) : Conv a b :=
+  ⟨b, PSteps.single (step_to_pstep h), PSteps.refl b⟩
+
+/-- **`pi`-injectivity of definitional equality** (from confluence + `pi`-rigidity). The fact the
+    beta case of preservation needs. -/
+theorem Conv.pi_inj {g g' : Grade} {A B A' B' : Expr} (h : Conv (pi g A B) (pi g' A' B')) :
+    g = g' ∧ Conv A A' ∧ Conv B B' := by
+  obtain ⟨c, h1, h2⟩ := h
+  obtain ⟨A1, B1, rfl, hAA1, hBB1⟩ := h1.pi_inv
+  obtain ⟨A2, B2, hpi, hA'A2, hB'B2⟩ := h2.pi_inv
+  injection hpi with hg hA hB
+  subst hg; subst hA; subst hB
+  exact ⟨rfl, ⟨A1, hAA1, hA'A2⟩, ⟨B1, hBB1, hB'B2⟩⟩
+
+/-- **Substitution-congruence** of definitional equality in the substituted position — the fact the
+    argument-step (`app2`) case of preservation needs. -/
+theorem Conv.subst0_congr {a a' : Expr} (B : Expr) (h : Step a a') :
+    Conv (subst0 a B) (subst0 a' B) :=
+  ⟨subst0 a' B, PSteps.single ((PStep.refl B).subst 0 (step_to_pstep h)), PSteps.refl _⟩
+
+-- Axiom audit (B2.2 Church-Rosser core): the substitutivity heart, the Takahashi diamond,
+-- confluence, and the definitional-equality metatheory (pi-injectivity, subst-congruence) it yields.
 #print axioms PStep.subst
-#print axioms PStep.triangle
 #print axioms PSteps.confluent
+#print axioms Conv.pi_inj
+#print axioms Conv.subst0_congr
 
 end Dep
 end BlightMeta
