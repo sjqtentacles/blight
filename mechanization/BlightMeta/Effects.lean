@@ -150,10 +150,46 @@ inductive HasType (opDom opCod : Ty) (opGrade : Grade) :
   | handle {Γ body retC opC σ A B φbody φretC φopC δret δk δarg Ebody}
       (hbody : HasType opDom opCod opGrade Γ body A σ Ebody φbody)
       (hretC : HasType opDom opCod opGrade (A :: Γ) retC B σ none (δret :: φretC))
-      (hopC : HasType opDom opCod opGrade (opCod :: opDom :: Γ) opC B σ none
+      (hopC : HasType opDom opCod opGrade ((.arr Grade.omega opCod B) :: opDom :: Γ) opC B σ none
         (δk :: δarg :: φopC))
       (hgrade : δk ≤ opGrade) :
       HasType opDom opCod opGrade Γ (.handle body retC opC) B σ none
+        (Usage.add φbody (Usage.add φretC φopC))
+
+/-- **Frozen "value-continuation" judgement (the documented BEFORE).**  An exact copy of the
+    original `HasType` whose `handle` rule types the op-clause's continuation binder (index 0) at the
+    *value* type `opCod`.  Kept so the machine-checked negative result
+    `handle_perform_not_preserving` — which exhibits that this value-typed presentation is not
+    subject-reduction-safe — survives verbatim after `HasType.handle` is retyped to bind the
+    continuation at its first-class function type `.arr ω opCod B`. -/
+inductive HasTypeVC (opDom opCod : Ty) (opGrade : Grade) :
+    List Ty → Tm → Ty → Grade → Row → Usage → Prop where
+  | var {Γ i A σ} (h : Γ[i]? = some A) :
+      HasTypeVC opDom opCod opGrade Γ (.var i) A σ none (Usage.unit i Γ.length σ)
+  | lam {Γ body ρ σ δ A B rest}
+      (hbody : HasTypeVC opDom opCod opGrade (A :: Γ) body B σ none (δ :: rest)) (hle : δ ≤ ρ) :
+      HasTypeVC opDom opCod opGrade Γ (.lam body) (.arr ρ A B) σ none rest
+  | app {Γ f a ρ σ A B φf φa Ef Ea}
+      (hf : HasTypeVC opDom opCod opGrade Γ f (.arr ρ A B) σ Ef φf)
+      (ha : HasTypeVC opDom opCod opGrade Γ a A (σ.mul ρ) Ea φa) :
+      HasTypeVC opDom opCod opGrade Γ (.app f a) B σ (Row.union Ef Ea) (Usage.add φf φa)
+  | tt {Γ σ} : HasTypeVC opDom opCod opGrade Γ .tt .bool σ none (Usage.zero Γ.length)
+  | ff {Γ σ} : HasTypeVC opDom opCod opGrade Γ .ff .bool σ none (Usage.zero Γ.length)
+  | ite {Γ c t e σ A φc φt φe Ec Et Ee}
+      (hc : HasTypeVC opDom opCod opGrade Γ c .bool σ Ec φc)
+      (ht : HasTypeVC opDom opCod opGrade Γ t A σ Et φt)
+      (he : HasTypeVC opDom opCod opGrade Γ e A σ Ee φe) :
+      HasTypeVC opDom opCod opGrade Γ (.ite c t e) A σ (Row.union Ec (Row.union Et Ee))
+        (Usage.add φc (Usage.add φt φe))
+  | perform {Γ a σ φ} (ha : HasTypeVC opDom opCod opGrade Γ a opDom σ none φ) :
+      HasTypeVC opDom opCod opGrade Γ (.perform a) opCod σ (some opGrade) φ
+  | handle {Γ body retC opC σ A B φbody φretC φopC δret δk δarg Ebody}
+      (hbody : HasTypeVC opDom opCod opGrade Γ body A σ Ebody φbody)
+      (hretC : HasTypeVC opDom opCod opGrade (A :: Γ) retC B σ none (δret :: φretC))
+      (hopC : HasTypeVC opDom opCod opGrade (opCod :: opDom :: Γ) opC B σ none
+        (δk :: δarg :: φopC))
+      (hgrade : δk ≤ opGrade) :
+      HasTypeVC opDom opCod opGrade Γ (.handle body retC opC) B σ none
         (Usage.add φbody (Usage.add φretC φopC))
 
 /-- **Effect-safety corollary 1 (inversion): every well-typed `handle` term's op-clause is
@@ -166,7 +202,8 @@ theorem handle_grade_safe {opDom opCod : Ty} {opGrade : Grade} {Γ body retC opC
     ∃ A φbody φretC φopC δret δk δarg Ebody,
       HasType opDom opCod opGrade Γ body A σ Ebody φbody ∧
       HasType opDom opCod opGrade (A :: Γ) retC B σ none (δret :: φretC) ∧
-      HasType opDom opCod opGrade (opCod :: opDom :: Γ) opC B σ none (δk :: δarg :: φopC) ∧
+      HasType opDom opCod opGrade ((.arr Grade.omega opCod B) :: opDom :: Γ) opC B σ none
+        (δk :: δarg :: φopC) ∧
       δk ≤ opGrade := by
   cases h with
   | handle hbody hretC hopC hgrade =>
@@ -196,7 +233,7 @@ theorem handle_abort_never_resumes {opDom opCod : Ty} {Γ body retC opC B σ φ}
     ∃ A φbody φretC φopC δret δarg Ebody,
       HasType opDom opCod Grade.zero Γ body A σ Ebody φbody ∧
       HasType opDom opCod Grade.zero (A :: Γ) retC B σ none (δret :: φretC) ∧
-      HasType opDom opCod Grade.zero (opCod :: opDom :: Γ) opC B σ none
+      HasType opDom opCod Grade.zero ((.arr Grade.omega opCod B) :: opDom :: Γ) opC B σ none
         (Grade.zero :: δarg :: φopC) := by
   obtain ⟨A, φbody, φretC, φopC, δret, δk, δarg, Ebody, hbody, hretC, hopC, hgrade⟩ :=
     handle_grade_safe h
@@ -215,7 +252,8 @@ theorem handle_linear_at_most_once {opDom opCod : Ty} {Γ body retC opC B σ φ}
     ∃ A φbody φretC φopC δret δk δarg Ebody,
       HasType opDom opCod Grade.one Γ body A σ Ebody φbody ∧
       HasType opDom opCod Grade.one (A :: Γ) retC B σ none (δret :: φretC) ∧
-      HasType opDom opCod Grade.one (opCod :: opDom :: Γ) opC B σ none (δk :: δarg :: φopC) ∧
+      HasType opDom opCod Grade.one ((.arr Grade.omega opCod B) :: opDom :: Γ) opC B σ none
+        (δk :: δarg :: φopC) ∧
       (δk = Grade.zero ∨ δk = Grade.one) := by
   obtain ⟨A, φbody, φretC, φopC, δret, δk, δarg, Ebody, hbody, hretC, hopC, hgrade⟩ :=
     handle_grade_safe h
@@ -487,7 +525,7 @@ theorem demote {Γ : List Ty} {e : Tm} {A : Ty} {σ : Grade} {E : Row} {φ : Usa
       | cons x xs => exact ⟨x, xs, rfl⟩
     subst hφr'eq
     -- split φo' = δk' :: δarg' :: φopC'
-    have hleno : φo'.length = (opCod :: opDom :: Γ).length := usage_length hφo'
+    have hleno : φo'.length = ((.arr Grade.omega opCod B) :: opDom :: Γ).length := usage_length hφo'
     obtain ⟨δk', φo'', hφo'eq⟩ : ∃ δk' φo'', φo' = δk' :: φo'' := by
       cases φo' with
       | nil => simp at hleno
@@ -767,24 +805,26 @@ theorem subst_lemma_aux {A' : Ty} {Γ0 : List Ty} {e : Tm} {B : Ty} {σ : Grade}
       | nil => simp at hlenR''
       | cons x xs => exact ⟨x, xs, rfl⟩
     subst hφR''eq
-    -- === opC : substitute at k+2 in insertTy (opCod::opDom::Γ) (k+2) A' ===
-    have heqO : opCod :: opDom :: insertTy Γ k A'
-        = insertTy (opCod :: opDom :: Γ) (k + 2) A' := rfl
+    -- === opC : substitute at k+2 in insertTy ((arr ω opCod B)::opDom::Γ) (k+2) A' ===
+    have heqO : (.arr Grade.omega opCod B) :: opDom :: insertTy Γ k A'
+        = insertTy ((.arr Grade.omega opCod B) :: opDom :: Γ) (k + 2) A' := rfl
     rw [heqO] at hopC
-    have haO : HasType opDom opCod opGrade (opCod :: opDom :: Γ)
+    have haO : HasType opDom opCod opGrade ((.arr Grade.omega opCod B) :: opDom :: Γ)
         (Tm.shiftAbove 0 (Tm.shiftAbove 0 a)) A' π none (insertUsage (insertUsage φa 0) 0) := by
       have hw1 := weaken ha 0 opDom
       rw [insertTy_zero] at hw1
-      have hw2 := weaken hw1 0 opCod
+      have hw2 := weaken hw1 0 (.arr Grade.omega opCod B)
       rw [insertTy_zero] at hw2
       exact hw2
     have hgetO' : Usage.get (δk :: δarg :: φopC) (k + 2) ≤ π := by
       show Usage.get φopC k ≤ π; exact hgeto
     obtain ⟨φO'', hφO'', hLeO⟩ :=
-      @ihopC (k + 2) (opCod :: opDom :: Γ) rfl (by simp only [List.length_cons]; omega)
+      @ihopC (k + 2) ((.arr Grade.omega opCod B) :: opDom :: Γ) rfl
+        (by simp only [List.length_cons]; omega)
         (Tm.shiftAbove 0 (Tm.shiftAbove 0 a)) π (insertUsage (insertUsage φa 0) 0) haO hgetO'
     -- split φO'' = δk' :: δarg' :: φopC'
-    have hlenO'' : φO''.length = (opCod :: opDom :: Γ).length := usage_length hφO''
+    have hlenO'' : φO''.length = ((.arr Grade.omega opCod B) :: opDom :: Γ).length :=
+      usage_length hφO''
     obtain ⟨δk', φO2, hφO''eq⟩ : ∃ δk' φO2, φO'' = δk' :: φO2 := by
       cases φO'' with
       | nil => simp at hlenO''
@@ -1225,12 +1265,400 @@ theorem preservation_core {Γ e e' A σ E φ} (hσ : σ = Grade.omega ∨ σ = G
         exact ⟨none, φ', hφ', Row.Le.refl _⟩
 
 -- ══════════════════════════════════════════════════════════════════════════════════════════════
--- The deep-handler `handle_perform` rule does NOT preserve types (machine-checked counterexample)
+-- Effect-continuation retyping (RB1): typing the CAPTURED CONTINUATION, and preservation for
+-- `handle_perform` under the retyped `handle` rule (op-clause binder 0 at `.arr ω opCod B`).
 -- ══════════════════════════════════════════════════════════════════════════════════════════════
+
+/-- A well-typed term's free variables are all `< Γ.length`, so shifting above `Γ.length` (or any
+    larger cut `c`) is the identity — in particular a *closed* term (`Γ = []`) is fixed by every
+    `shiftAbove c`.  This lets the captured continuation `k = lam (handle E[var 0] retC opC)` be
+    typed in the extended context `opCod :: []` without disturbing `E`'s (closed) sub-terms. -/
+theorem shiftAbove_closed {Γ : List Ty} {e : Tm} {A : Ty} {σ : Grade} {E : Row} {φ : Usage}
+    (h : HasType opDom opCod opGrade Γ e A σ E φ) :
+    ∀ {c : Nat}, Γ.length ≤ c → Tm.shiftAbove c e = e := by
+  induction h with
+  | @var Γ i A σ hlk =>
+    intro c hc
+    have hlt : i < Γ.length := lookup_lt hlk
+    simp only [Tm.shiftAbove, if_pos (by omega : i < c)]
+  | @lam Γ body ρ σ δ A B rest _ _ ih =>
+    intro c hc
+    simp only [Tm.shiftAbove]
+    rw [ih (by simp only [List.length_cons]; omega)]
+  | @app Γ f a ρ σ A B φf φa Ef Ea _ _ ihf iha =>
+    intro c hc
+    simp only [Tm.shiftAbove]
+    rw [ihf hc, iha hc]
+  | tt => intro c _; rfl
+  | ff => intro c _; rfl
+  | @ite Γ cnd t e σ A φc φt φe Ec Et Ee _ _ _ ihc iht ihe =>
+    intro c hc
+    simp only [Tm.shiftAbove]
+    rw [ihc hc, iht hc, ihe hc]
+  | @perform Γ a σ φ _ iha =>
+    intro c hc
+    simp only [Tm.shiftAbove]
+    rw [iha hc]
+  | @handle Γ body retC opC σ A B φbody φretC φopC δret δk δarg Ebody _ _ _ _ ihbody ihretC ihopC =>
+    intro c hc
+    simp only [Tm.shiftAbove]
+    rw [ihbody hc, ihretC (by simp only [List.length_cons]; omega),
+      ihopC (by simp only [List.length_cons]; omega)]
+
+/-- **The operation argument is well-typed at `opDom`.**  Descending through `E` to the hole
+    `perform v`, `perform`-inversion exposes `v : opDom` (at the ambient the hole sits at).  Used to
+    obtain a typing of the operation argument `v` that `handle_perform`'s reduct substitutes into the
+    op-clause's argument slot. -/
+theorem plug_perform_arg_typing (E : ECtx) {v : Tm} {Γ A σ Erow φ}
+    (h : HasType opDom opCod opGrade Γ (E.plug (.perform v)) A σ Erow φ) :
+    ∃ σv φv0, HasType opDom opCod opGrade Γ v opDom σv none φv0 := by
+  induction E generalizing Γ A σ Erow φ with
+  | hole =>
+    cases h with
+    | perform ha => exact ⟨_, _, ha⟩
+  | appL E' a ih =>
+    cases h with
+    | app hf _ => exact ih hf
+  | appR f hf E' ih =>
+    cases h with
+    | app _ ha => exact ih ha
+  | iteC E' t e ih =>
+    cases h with
+    | ite hc _ _ => exact ih hc
+  | perf E' ih =>
+    cases h with
+    | perform ha => exact ih ha
+
+/-- **Plug-typing decomposition / continuation-body reconstruction (the crux of RB1).**  From a
+    closed derivation of `E[perform v] : A`, the hole sits at the operation's codomain `opCod` (that
+    is what `perform` produces), and re-plugging `var 0 : opCod` — the resume value the captured
+    continuation binds — re-types the whole plugged term `E[var 0] : A` in the extended context
+    `[opCod]`.  Because `E` never binds (its formers are `appL`/`appR`/`iteC`/`perf`) and `E`'s
+    non-hole sub-terms are closed, they lift to `[opCod]` unchanged (`shiftAbove_closed`).  This is
+    exactly what is needed to give the captured continuation `k = lam (handle E[var 0] retC opC)`
+    its first-class function type `.arr ω opCod B`. -/
+theorem plug_reconstruct_var0 (E : ECtx) {v : Tm} {A σ Erow φ}
+    (h : HasType opDom opCod opGrade [] (E.plug (.perform v)) A σ Erow φ) :
+    ∃ Erow' φ', HasType opDom opCod opGrade [opCod] (E.plug (.var 0)) A σ Erow' φ' := by
+  induction E generalizing A σ Erow φ with
+  | hole =>
+    -- E.plug (perform v) = perform v : opCod  ⟹  A = opCod; plug var0 : opCod in [opCod].
+    cases h with
+    | @perform _ _ _ _ ha =>
+      exact ⟨none, _, HasType.var (by rfl : ([opCod] : List Ty)[0]? = some opCod)⟩
+  | appL E' a ih =>
+    cases h with
+    | @app _ _ _ ρ _ A' _ φf φa Ef Ea hf ha =>
+      obtain ⟨Ef', φf', hf'⟩ := ih hf
+      -- a is closed; lift it to [opCod] unchanged.
+      have haw := weaken ha 0 opCod
+      rw [insertTy_zero, shiftAbove_closed ha (by simp)] at haw
+      exact ⟨_, _, HasType.app hf' haw⟩
+  | appR f hf E' ih =>
+    cases h with
+    | @app _ _ _ ρ _ A' _ φf φa Ef Ea hf0 ha =>
+      obtain ⟨Ea', φa', ha'⟩ := ih ha
+      have hfw := weaken hf0 0 opCod
+      rw [insertTy_zero, shiftAbove_closed hf0 (by simp)] at hfw
+      exact ⟨_, _, HasType.app hfw ha'⟩
+  | iteC E' t e ih =>
+    cases h with
+    | @ite _ _ _ _ _ _ φc φt φe Ec Et Ee hc ht he =>
+      obtain ⟨Ec', φc', hc'⟩ := ih hc
+      have htw := weaken ht 0 opCod
+      rw [insertTy_zero, shiftAbove_closed ht (by simp)] at htw
+      have hew := weaken he 0 opCod
+      rw [insertTy_zero, shiftAbove_closed he (by simp)] at hew
+      exact ⟨_, _, HasType.ite hc' htw hew⟩
+  | perf E' ih =>
+    cases h with
+    | @perform _ _ _ _ ha =>
+      obtain ⟨Ea', φa', ha'⟩ := ih ha
+      -- ha' : HasType [opCod] (E'.plug (var 0)) opDom σ Ea' φa'.  But `perform` needs its argument
+      -- pure-rowed.  ha' may carry a `some` row; demote its ambient is unnecessary — we need the
+      -- ROW to be none.  In fact the argument E'[var 0] can be non-pure only if E' contained a
+      -- perform, but perform's argument was required pure in the original derivation `ha`.  We
+      -- reconstruct with the row we get: perform only accepts a none row, so we must show Ea' = none.
+      -- The original `ha : HasType [] (E'.plug (perform v)) opDom σ none φa` has row `none`; the
+      -- reconstruction preserves the "row is none" obligation because plug_row is determined by the
+      -- non-hole structure of E' plus the hole — but the hole changed from `some opGrade` to `none`.
+      -- Since the outer perform demanded `none`, E'[perform v] had row none, which (by
+      -- plug_perform_row_some, contrapositive) is impossible unless E' = hole is excluded... Actually
+      -- E'[perform v] with row none contradicts plug_perform_row_some.  So this branch is vacuous.
+      exact absurd ha (by
+        intro hcontra
+        obtain ⟨g, hg⟩ := plug_perform_row_some E' hcontra
+        exact absurd hg (by simp))
+
+/-- **Closed booleans are typeable at every ambient (in particular `ω`).**  A closed value at `bool`
+    is `tt`/`ff` (canonical forms), each of which types at any ambient grade with the zero usage.
+    This makes a boolean operation argument `v : bool` available at grade `ω`, discharging the
+    op-clause's argument demand `δarg ≤ ω` in the `handle_perform` reduct WITHOUT any (false)
+    ambient-raising on general values — see the obstruction note before `handle_perform_preserving`. -/
+theorem bool_value_any_ambient {v : Tm} {σ E φ} (hv : Value v)
+    (h : HasType opDom opCod opGrade [] v .bool σ E φ) :
+    ∀ σ', ∃ φ', HasType opDom opCod opGrade [] v .bool σ' none φ' := by
+  intro σ'
+  rcases canonical_bool hv h with rfl | rfl
+  · exact ⟨_, HasType.tt⟩
+  · exact ⟨_, HasType.ff⟩
+
+-- ══════════════════════════════════════════════════════════════════════════════════════════════
+-- Preservation for the deep-handler `handle_perform` rule under the RETYPED handle rule
+-- (op-clause binder 0 typed at the continuation's function type `.arr ω opCod B`).
+--
+-- OBSTRUCTION / SCOPE (a sharper negative-result residue).  Full preservation over an ARBITRARY
+-- operation-domain `opDom` is *not* provable in this fragment: the reduct substitutes the operation
+-- argument `v` into the op-clause's argument slot, which the clause may use `δarg` times (up to the
+-- ambient `σ`); so `v` must be available at grade `δarg`.  When `opDom` is a *function* type and
+-- `v` is a `lam`, `v` cannot in general be re-typed at a higher ambient (raising ambient inflates a
+-- lambda's or handler's measured demands past its domain-grade / `opGrade` bound — "ambient raise to
+-- ω" is genuinely FALSE for sub-`ω` grades).  This is a SEPARATE defect from the (now-fixed)
+-- continuation-typing one, in the argument-grade accounting of `HasType.perform`.  It vanishes when
+-- `opDom` is a base type: a `bool` argument is `tt`/`ff` (`bool_value_any_ambient`), typeable at
+-- every ambient.  Preservation is therefore proved for `opDom = .bool`, fully general in the
+-- continuation grade `opGrade` (the retyped continuation binder is what makes it go through).
+--
+-- The retyping fixes the exact defect the frozen `HasTypeVC` presentation exhibits
+-- (`handle_perform_not_preserving`): the captured continuation `k = lam (handle E[var 0] retC opC)`
+-- is an ARROW, and now lands in an arrow-typed binder.  Preservation is proved at `opGrade = ω`,
+-- the multiplicity at which a handler may resume its continuation without bound — matching the
+-- kernel's `Π^ω` continuation domain.  For sub-`ω` opGrade the operation argument (when it is a
+-- function value) may fail to be available at the op-clause's argument demand; that obstruction is
+-- exactly `raise_omega`'s failure and is documented there.
+-- ══════════════════════════════════════════════════════════════════════════════════════════════
+
+/-- **Preservation for `handle_perform`** (the positive result RB1 targets), for a boolean operation
+    argument (`opDom = .bool`) and FULLY GENERAL continuation grade `opGrade`.  A closed, well-typed
+    handler catching an operation — the exact `handle_perform` redex — steps to a term still
+    well-typed at the same result type `B` and ambient `ω`.  The captured continuation
+    `k = lam (handle E[var 0] retC opC)` types at its first-class function type `.arr ω opCod B`
+    (via `plug_reconstruct_var0` + `shiftAbove_closed`), and the two substitutions (argument
+    `v : bool`, continuation `k`) are discharged by `subst_lemma`, the boolean argument being
+    available at `ω` by `bool_value_any_ambient` (canonical forms).  See the obstruction note above
+    for why a general `opDom` is not provable in this fragment. -/
+theorem handle_perform_preserving {opCod : Ty} {opGrade : Grade} {σ : Grade}
+    (hσ : σ = Grade.omega ∨ σ = Grade.zero)
+    {E : ECtx} {v retC opC : Tm} {B φ} (hv : Value v)
+    (h : HasType .bool opCod opGrade [] (.handle (E.plug (.perform v)) retC opC) B σ
+          none φ) :
+    ∃ φ', HasType .bool opCod opGrade []
+      (Tm.subst0 (Tm.lam (.handle (E.plug (.var 0)) retC opC)) (Tm.subst 1 v opC)) B σ
+      none φ' := by
+  -- Invert the handle.
+  cases h with
+  | @handle _ _ _ _ _ A _ φbody φretC φopC δret δk δarg Ebody hbody hretC hopC hgrade =>
+    -- 1. The captured continuation body `E[var 0] : A` in `[opCod]`.
+    obtain ⟨ErowK, φK, hEbodyK⟩ := plug_reconstruct_var0 (opDom := .bool) (opCod := opCod)
+      (opGrade := opGrade) E hbody
+    -- 2. Weaken retC/opC into the continuation's extended context (they are closed, so unshifted).
+    --    retC : [A] ⟶ [A, opCod]  (insert opCod at index 1).
+    have hretCw := weaken hretC 1 opCod
+    rw [shiftAbove_closed hretC (by simp)] at hretCw
+    have hretC_ins : insertTy (A :: ([] : List Ty)) 1 opCod = A :: opCod :: [] := by
+      show A :: insertTy ([] : List Ty) 0 opCod = A :: opCod :: []
+      rw [insertTy_zero]
+    rw [hretC_ins] at hretCw
+    have hins_retU : insertUsage (δret :: φretC) 1 = δret :: insertUsage φretC 0 := rfl
+    rw [hins_retU] at hretCw
+    --    opC : [arr ω opCod B, bool] ⟶ [arr ω opCod B, bool, opCod]  (insert opCod at index 2).
+    have hopCw := weaken hopC 2 opCod
+    rw [shiftAbove_closed hopC (by simp)] at hopCw
+    have hopC_ins : insertTy ((.arr Grade.omega opCod B) :: Ty.bool :: ([] : List Ty)) 2 opCod
+        = (.arr Grade.omega opCod B) :: Ty.bool :: opCod :: [] := by
+      show (.arr Grade.omega opCod B) :: Ty.bool :: insertTy ([] : List Ty) 0 opCod
+        = (.arr Grade.omega opCod B) :: Ty.bool :: opCod :: []
+      rw [insertTy_zero]
+    rw [hopC_ins] at hopCw
+    have hins_opU : insertUsage (δk :: δarg :: φopC) 2 = δk :: δarg :: insertUsage φopC 0 := rfl
+    rw [hins_opU] at hopCw
+    -- 3. Build the inner handle `handle (E[var 0]) retC opC : B` in `[opCod]`, at ambient σ.
+    have hinnerHandle : HasType .bool opCod opGrade [opCod]
+        (.handle (E.plug (.var 0)) retC opC) B σ none
+        (Usage.add φK (Usage.add (insertUsage φretC 0) (insertUsage φopC 0))) :=
+      HasType.handle hEbodyK hretCw hopCw hgrade
+    -- 4. The inner-handle usage lives in `[opCod]` (length 1); split it as `δinner :: restK`.
+    have hleninner : (Usage.add φK (Usage.add (insertUsage φretC 0) (insertUsage φopC 0))).length
+        = ([opCod] : List Ty).length := usage_length hinnerHandle
+    obtain ⟨δinner, restK, hφinnereq⟩ :
+        ∃ δinner restK,
+          Usage.add φK (Usage.add (insertUsage φretC 0) (insertUsage φopC 0)) = δinner :: restK := by
+      cases hcase : Usage.add φK (Usage.add (insertUsage φretC 0) (insertUsage φopC 0)) with
+      | nil => rw [hcase] at hleninner; simp at hleninner
+      | cons x xs => exact ⟨x, xs, rfl⟩
+    rw [hφinnereq] at hinnerHandle
+    -- 5. Build the captured continuation `k = lam (...) : arr ω opCod B` in `[]`, usage `restK`,
+    --    at ambient σ.
+    have hK : HasType .bool opCod opGrade []
+        (Tm.lam (.handle (E.plug (.var 0)) retC opC)) (.arr Grade.omega opCod B) σ none
+        restK :=
+      HasType.lam hinnerHandle (by cases δinner <;> decide)
+    -- 6. The operation argument is a BOOLEAN value, hence typeable at ambient ω (canonical forms).
+    obtain ⟨σv, φv0, hvty0⟩ : ∃ σv φv0, HasType .bool opCod opGrade [] v .bool σv none φv0 :=
+      plug_perform_arg_typing E hbody
+    obtain ⟨φvω, hvω⟩ := bool_value_any_ambient (opCod := opCod) (opGrade := opGrade) hv hvty0
+      Grade.omega
+    -- lift v into `[arr ω opCod B]` (closed, so unshifted).
+    have hvw := weaken hvω 0 (.arr Grade.omega opCod B)
+    rw [insertTy_zero, shiftAbove_closed hvω (by simp)] at hvw
+    -- 7. First substitution: `subst 1 v opC : B` in `[arr ω opCod B]`.
+    --    opC : [arr ω opCod B, bool] = insertTy [arr ω opCod B] 1 bool.
+    have hopC_asins : ((.arr Grade.omega opCod B) :: Ty.bool :: ([] : List Ty))
+        = insertTy ((.arr Grade.omega opCod B) :: ([] : List Ty)) 1 Ty.bool := by
+      show (.arr Grade.omega opCod B) :: Ty.bool :: [] = (.arr Grade.omega opCod B) :: insertTy [] 0 Ty.bool
+      rw [insertTy_zero]
+    have hopC' : HasType .bool opCod opGrade
+        (insertTy ((.arr Grade.omega opCod B) :: ([] : List Ty)) 1 Ty.bool) opC B σ none
+        (δk :: δarg :: φopC) := by rw [← hopC_asins]; exact hopC
+    -- demand at slot 1 is δarg ≤ ω (v is available at ω).
+    have hget1 : Usage.get (δk :: δarg :: φopC) 1 ≤ Grade.omega := by
+      show δarg ≤ Grade.omega; cases δarg <;> decide
+    obtain ⟨φ1, hφ1, _⟩ := subst_lemma hvw hopC' (by simp) hget1
+    -- 8. Second substitution: `subst 0 k (subst 1 v opC) : B` in `[]`, k available at ambient σ.
+    --    (subst 1 v opC) : [arr ω opCod B] = insertTy [] 0 (arr ω opCod B).
+    have hφ1' : HasType .bool opCod opGrade
+        (insertTy ([] : List Ty) 0 (.arr Grade.omega opCod B))
+        (Tm.subst 1 v opC) B σ none φ1 := by
+      rw [insertTy_zero]; exact hφ1
+    -- demand at slot 0 (the continuation slot) is ≤ σ: at σ = ω trivial; at σ = 0 forced 0.
+    have hget0 : Usage.get φ1 0 ≤ σ := by
+      rcases hσ with rfl | rfl
+      · cases (Usage.get φ1 0) <;> decide
+      · have hz := ambient_zero_usage hφ1 rfl
+        rw [hz, Usage.get_zero]; exact Grade.le_refl _
+    obtain ⟨φ2, hφ2, _⟩ := subst_lemma hK hφ1' (by simp) hget0
+    -- 9. Assemble the reduct.  `Tm.subst0 k (Tm.subst 1 v opC) = Tm.subst 0 k (Tm.subst 1 v opC)`.
+    refine ⟨φ2, ?_⟩
+    show HasType .bool opCod opGrade []
+      (Tm.subst0 (Tm.lam (.handle (E.plug (.var 0)) retC opC)) (Tm.subst 1 v opC)) B σ
+      none φ2
+    unfold Tm.subst0
+    exact hφ2
+
+/-- **Full preservation over `Step`** (all rules, INCLUDING the deep-handler `handle_perform`) for a
+    boolean operation argument at the runtime ambient `σ = ω`.  Combines `preservation_core` (the
+    type-preserving fragment `StepC`) with `handle_perform_preserving` (the retyped deep-handler
+    rule).  The reduct keeps type `A` and ambient `ω`; only the usage/row are left existential.  This
+    is the positive counterpart of the (frozen) `handle_perform_not_preserving`: under the retyped
+    `handle` rule, the SAME small-step semantics IS type-preserving. -/
+theorem preservation {opCod : Ty} {opGrade : Grade} {e e' : Tm} {A : Ty} {σ : Grade} {E : Row} {φ}
+    (hσ : σ = Grade.omega ∨ σ = Grade.zero)
+    (h : HasType .bool opCod opGrade [] e A σ E φ) (hstep : Step e e') :
+    ∃ E' φ', HasType .bool opCod opGrade [] e' A σ E' φ' ∧ Row.Le E' E := by
+  induction hstep generalizing A σ E φ with
+  | app1 _ ih =>
+    cases h with
+    | app hf0 ha0 =>
+      obtain ⟨Ef', φf', hφf', hle⟩ := ih hσ hf0
+      exact ⟨_, _, HasType.app hφf' ha0, Row.union_mono hle (Row.Le.refl _)⟩
+  | @app2 f a a' hf _ ih =>
+    cases h with
+    | @app _ _ _ ρ _ _ _ _ _ _ _ hf0 ha0 =>
+      have hσ' : σ.mul ρ = Grade.omega ∨ σ.mul ρ = Grade.zero := by
+        rcases hσ with rfl | rfl
+        · cases ρ <;> simp [Grade.mul]
+        · right; rfl
+      obtain ⟨Ea', φa', hφa', hle⟩ := ih hσ' ha0
+      exact ⟨_, _, HasType.app hf0 hφa', Row.union_mono (Row.Le.refl _) hle⟩
+  | beta ha =>
+    exact preservation_core hσ h (StepC.beta ha)
+  | ite_cond _ ih =>
+    cases h with
+    | ite hc0 ht0 he0 =>
+      obtain ⟨Ec', φc', hφc', hle⟩ := ih hσ hc0
+      exact ⟨_, _, HasType.ite hφc' ht0 he0, Row.union_mono hle (Row.Le.refl _)⟩
+  | ite_tt =>
+    exact preservation_core hσ h StepC.ite_tt
+  | ite_ff =>
+    exact preservation_core hσ h StepC.ite_ff
+  | perform_arg _ ih =>
+    cases h with
+    | perform ha0 =>
+      obtain ⟨Ea', φ', hφ', hle⟩ := ih hσ ha0
+      -- `HasType.perform` requires the argument pure-rowed (`none`); the argument started at row
+      -- `none`, so its reduct's row `Ea' ≤ none` forces `Ea' = none`.
+      have hEa' : Ea' = none := by cases Ea' with
+        | none => rfl
+        | some g => exact absurd hle (by simp [Row.Le])
+      subst hEa'
+      exact ⟨some opGrade, φ', HasType.perform hφ', Row.Le.refl _⟩
+  | handle_body _ ih =>
+    cases h with
+    | handle hbody0 hretC0 hopC0 hgrade0 =>
+      obtain ⟨Eb', φ', hφ', _⟩ := ih hσ hbody0
+      exact ⟨_, _, HasType.handle hφ' hretC0 hopC0 hgrade0, Row.Le.refl _⟩
+  | handle_ret hvret =>
+    exact preservation_core hσ h (StepC.handle_ret hvret)
+  | handle_perform hv =>
+    -- the handle redex carries row `none` (handle rule); force `E = none` by inverting, then apply
+    -- `handle_perform_preserving` (which covers both runtime ambients σ ∈ {ω, 0}).
+    cases h with
+    | @handle _ _ _ _ _ A2 _ φbody φretC φopC δret δk δarg Ebody hbody hretC hopC hgrade =>
+      obtain ⟨φ', hty⟩ := handle_perform_preserving hσ hv
+        (HasType.handle hbody hretC hopC hgrade)
+      exact ⟨none, φ', hty, trivial⟩
+
+-- ══════════════════════════════════════════════════════════════════════════════════════════════
+-- NON-VACUITY: a concrete `handle_perform` redex whose op-clause GENUINELY RESUMES its continuation
+-- ══════════════════════════════════════════════════════════════════════════════════════════════
+
+/-- **Non-vacuity witness for `handle_perform_preserving`.**  Take `op : bool → bool` at grade `ω`,
+    `E = hole`, `v = tt`, and the op-clause `opC = app (var 0) (var 1)` which APPLIES the captured
+    continuation (`var 0 = k`) to the operation argument (`var 1 = x`) — a genuine resume, not a
+    discard.  The redex `handle (perform tt) (var 0) (app (var 0) (var 1))` type-checks at `bool`;
+    it steps (`Step.handle_perform`); and its reduct
+    `app (lam (handle (var 0) (var 0) (app (var 0) (var 1)))) tt`
+    is again well-typed at `bool` — so preservation here is about a real reduction that resumes a
+    real continuation, not a vacuous one.  (Contrast `handle_perform_not_preserving`, the same
+    *shape* of redex against the frozen value-typed rule, whose reduct is ill-typed.) -/
+theorem handle_perform_preserving_nonvacuous :
+    -- (1) the redex is well-typed at `bool`:
+    (∃ φ, HasType .bool .bool Grade.omega []
+        (.handle (ECtx.hole.plug (.perform .tt)) (.var 0) (.app (.var 0) (.var 1)))
+        .bool Grade.omega none φ)
+    ∧
+    -- (2) it steps via `handle_perform` to the continuation-applying reduct:
+    (Step (.handle (ECtx.hole.plug (.perform .tt)) (.var 0) (.app (.var 0) (.var 1)))
+      (.app (.lam (.handle (.var 0) (.var 0) (.app (.var 0) (.var 1)))) .tt))
+    ∧
+    -- (3) the reduct is STILL well-typed at `bool` (preservation holds, non-vacuously):
+    (∃ φ', HasType .bool .bool Grade.omega []
+        (.app (.lam (.handle (.var 0) (.var 0) (.app (.var 0) (.var 1)))) .tt)
+        .bool Grade.omega none φ') := by
+  -- The redex typing, proved once (op-clause usage inferred from the `app` sub-derivation).
+  -- op-clause typing, built first so the handle rule reads its usage vector off this hypothesis.
+  have hopc : HasType .bool .bool Grade.omega
+      ((.arr Grade.omega .bool .bool) :: .bool :: []) (.app (.var 0) (.var 1)) .bool Grade.omega none
+      (Usage.add (Usage.unit 0 2 Grade.omega) (Usage.unit 1 2 (Grade.omega.mul Grade.omega))) :=
+    HasType.app
+      (HasType.var (by rfl : ((.arr Grade.omega .bool .bool :: .bool :: []) : List Ty)[0]?
+        = some (.arr Grade.omega .bool .bool)))
+      (HasType.var (by rfl : ((.arr Grade.omega .bool .bool :: .bool :: []) : List Ty)[1]?
+        = some .bool))
+  have hredex : ∃ φ, HasType .bool .bool Grade.omega []
+      (.handle (ECtx.hole.plug (.perform .tt)) (.var 0) (.app (.var 0) (.var 1)))
+      .bool Grade.omega none φ :=
+    ⟨_, HasType.handle (HasType.perform HasType.tt) (HasType.var rfl) hopc
+      (by decide : Grade.omega ≤ Grade.omega)⟩
+  refine ⟨hredex, ?_, ?_⟩
+  · -- (2) the step.  Its literal reduct simplifies to the continuation-applying app.
+    have hstep := Step.handle_perform (E := ECtx.hole) (v := .tt) (retC := .var 0)
+      (opC := .app (.var 0) (.var 1)) Value.tt
+    simpa [ECtx.plug, Tm.subst0, Tm.subst, Tm.shiftAbove] using hstep
+  · -- (3) reduct typing, obtained from the redex typing via `handle_perform_preserving`.
+    obtain ⟨φ, hφ⟩ := hredex
+    obtain ⟨φ', hφ'⟩ := handle_perform_preserving (E := ECtx.hole) (Or.inl rfl) Value.tt hφ
+    refine ⟨φ', ?_⟩
+    simpa [ECtx.plug, Tm.subst0, Tm.subst, Tm.shiftAbove] using hφ'
 
 /-- A `lam` never inhabits `Ty.bool` (canonical forms, contrapositive). -/
 theorem lam_not_bool {Γ body σ E φ} :
     ¬ HasType opDom opCod opGrade Γ (.lam body) .bool σ E φ := by
+  intro h; cases h
+
+/-- The `HasTypeVC` (frozen value-continuation judgement) analogue of `lam_not_bool`. -/
+theorem lam_not_bool_VC {Γ body σ E φ} :
+    ¬ HasTypeVC opDom opCod opGrade Γ (.lam body) .bool σ E φ := by
   intro h; cases h
 
 /-- **Refutation of operational preservation for the deep-handler `handle_perform` rule.**
@@ -1249,23 +1677,23 @@ theorem lam_not_bool {Γ body σ E φ} :
     discipline (`handle_grade_safe`, `handle_linear_at_most_once`) is sound, but the naive
     delimited-continuation reduction is not type-preserving against this presentation. -/
 theorem handle_perform_not_preserving :
-    -- (1) the LHS is well-typed at `bool`:
-    (∃ φ, HasType .bool .bool Grade.omega []
+    -- (1) the LHS is well-typed at `bool` (against the frozen value-continuation judgement):
+    (∃ φ, HasTypeVC .bool .bool Grade.omega []
         (.handle (ECtx.hole.plug (.perform .tt)) (.var 0) (.var 0)) .bool Grade.one none φ)
     ∧
     -- (2) but there is a step whose target is NOT well-typed at `bool` (at any usage):
     (∃ e', Step (.handle (ECtx.hole.plug (.perform .tt)) (.var 0) (.var 0)) e' ∧
-      ¬ ∃ φ', HasType .bool .bool Grade.omega [] e' .bool Grade.one none φ') := by
+      ¬ ∃ φ', HasTypeVC .bool .bool Grade.omega [] e' .bool Grade.one none φ') := by
   refine ⟨?_, ?_⟩
   · -- LHS typing.  φ is determined by the derivation.
-    exact ⟨_, HasType.handle (HasType.perform HasType.tt) (HasType.var rfl) (HasType.var rfl)
-      (by decide : Grade.one ≤ Grade.omega)⟩
+    exact ⟨_, HasTypeVC.handle (HasTypeVC.perform HasTypeVC.tt) (HasTypeVC.var rfl)
+      (HasTypeVC.var rfl) (by decide : Grade.one ≤ Grade.omega)⟩
   · -- the reduct is a lam, not of type bool.
     refine ⟨_, Step.handle_perform (E := ECtx.hole) (v := .tt) Value.tt, ?_⟩
     rintro ⟨φ', hφ'⟩
     -- reduct = subst0 (lam (handle (var 0) (var 0) (var 0))) (subst 1 tt (var 0))
     --        = lam (handle (var 0) (var 0) (var 0))
-    exact lam_not_bool hφ'
+    exact lam_not_bool_VC hφ'
 
 -- ══════════════════════════════════════════════════════════════════════════════════════════════
 -- Operational resume-once: upgrading handle_linear_at_most_once from static to operational
@@ -1297,7 +1725,8 @@ theorem resume_once_operational {Γ v retC opC B σ φ} {Ec : ECtx} (_hv : Value
     ∃ A φbody φretC φopC δret δk δarg Ebody,
       HasType opDom opCod Grade.one Γ (Ec.plug (.perform v)) A σ Ebody φbody ∧
       HasType opDom opCod Grade.one (A :: Γ) retC B σ none (δret :: φretC) ∧
-      HasType opDom opCod Grade.one (opCod :: opDom :: Γ) opC B σ none (δk :: δarg :: φopC) ∧
+      HasType opDom opCod Grade.one ((.arr Grade.omega opCod B) :: opDom :: Γ) opC B σ none
+        (δk :: δarg :: φopC) ∧
       -- the continuation slot is resumed 0 or 1 times, never unboundedly:
       (δk = Grade.zero ∨ δk = Grade.one) := by
   obtain ⟨A, φbody, φretC, φopC, δret, δk, δarg, Ebody, hbody, hretC, hopC, hgrade⟩ :=
@@ -1317,7 +1746,7 @@ theorem never_resumes_operational {Γ v retC opC B σ φ} {Ec : ECtx} (_hv : Val
     ∃ A φbody φretC φopC δret δarg Ebody,
       HasType opDom opCod Grade.zero Γ (Ec.plug (.perform v)) A σ Ebody φbody ∧
       HasType opDom opCod Grade.zero (A :: Γ) retC B σ none (δret :: φretC) ∧
-      HasType opDom opCod Grade.zero (opCod :: opDom :: Γ) opC B σ none
+      HasType opDom opCod Grade.zero ((.arr Grade.omega opCod B) :: opDom :: Γ) opC B σ none
         (Grade.zero :: δarg :: φopC) := by
   obtain ⟨A, φbody, φretC, φopC, δret, δk, δarg, Ebody, hbody, hretC, hopC, hgrade⟩ :=
     handle_grade_safe h
@@ -1413,6 +1842,72 @@ theorem stepC_is_step {e e' : Tm} (hstep : StepC e e') : Step e e' := by
   | handle_body _ ih => exact .handle_body ih
   | handle_ret hv => exact .handle_ret hv
 
+/-- **Machine-checked SHARP OBSTRUCTION — why `preservation` above is proved only for
+    `opDom = .bool`, not for an arbitrary operation-argument type.**
+
+    Take `op : (arr 1 bool bool) → bool` at grade ω and the redex
+    `handle (app (lam tt) (perform (lam (var 0)))) (var 0) (app (var 1) tt)` — the performed value
+    `lam (var 0)` sits in a *grade-0* evaluation position (the `app (lam tt) □` argument slot, whose
+    domain grade is 0), so the whole term type-checks at `bool`/ω (part 1).
+
+    Its `handle_perform` reduct `app (lam (var 0)) tt` IS well-typed at `bool`/ω (part 2) — but ONLY
+    because the enclosing application **re-grades** the captured value's arrow domain from `1` up to
+    `ω`. Preservation therefore still *holds* on this instance; what fails is the *proof route*:
+    `subst_lemma` places the performed value `v` at its declared type `opDom = arr 1 bool bool`, and
+    `lam (var 0)` provably does NOT inhabit `arr 1 bool bool` at ambient ω (its binder demand ω ⊄ 1,
+    part 3). So the reduct's real derivation goes through a non-compositional arrow-regrading that no
+    substitution lemma can supply. This is exactly why `handle_perform_preserving`/`preservation`
+    are proved for `opDom = .bool` (a base value is `tt`/`ff`, `bool_value_any_ambient`, so no
+    regrading is ever needed) and left open for higher operation-argument types — a precise,
+    sorry-free characterization of the residual gap, not a refutation. -/
+theorem handle_perform_regrade_obstruction :
+    -- (1) a `σ = ω` redex with the perform in a grade-0 hole (E = appR (lam tt) _ hole):
+    (∃ φ, HasType (.arr Grade.one .bool .bool) .bool Grade.omega []
+        (.handle (.app (.lam .tt) (.perform (.lam (.var 0)))) (.var 0) (.app (.var 1) .tt))
+        .bool Grade.omega none φ)
+    ∧
+    -- (2) its reduct `app (lam (var 0)) tt` IS well-typed at bool/ω (via arrow re-grading 1 ⟶ ω):
+    (∃ φ, HasType (.arr Grade.one .bool .bool) .bool Grade.omega []
+        (.app (.lam (.var 0)) .tt) .bool Grade.omega none φ)
+    ∧
+    -- (3) but the substituted value `lam (var 0)` is NOT typeable at `opDom = arr 1 bool bool` at
+    --     ambient ω — so `subst_lemma` (which fixes that arrow) cannot yield the reduct derivation:
+    (¬ ∃ φ, HasType (.arr Grade.one .bool .bool) .bool Grade.omega []
+        (.lam (.var 0)) (.arr Grade.one .bool .bool) Grade.omega none φ) := by
+  refine ⟨?_, ?_, ?_⟩
+  · -- redex typing (hole ambient ω·0 = 0).
+    have bodyf : HasType (.arr Grade.one .bool .bool) .bool Grade.omega []
+        (.app (.lam .tt) (.perform (.lam (.var 0)))) .bool Grade.omega
+        (Row.union none (some Grade.omega)) _ :=
+      HasType.app
+        (A := .bool) (B := .bool) (ρ := Grade.zero)
+        (HasType.lam (A := .bool) (B := .bool) (ρ := Grade.zero) HasType.tt (by decide))
+        (HasType.perform (HasType.lam (A := .bool) (B := .bool) (ρ := Grade.one)
+          (HasType.var rfl) (by decide)))
+    exact ⟨_, HasType.handle (A := .bool) bodyf (HasType.var rfl)
+      (HasType.app (A := .bool) (B := .bool) (ρ := Grade.one) (HasType.var rfl) HasType.tt)
+      (by decide)⟩
+  · -- reduct types via ρ = ω regrading of the lam's domain.
+    exact ⟨_, HasType.app (A := .bool) (B := .bool) (ρ := Grade.omega)
+      (HasType.lam (HasType.var rfl) (by decide)) HasType.tt⟩
+  · -- lam (var 0) : arr 1 bool bool at ω requires binder demand ω ≤ 1, which is false.
+    rintro ⟨φ, h⟩
+    cases h with
+    | @lam _ _ ρ _ δ _ _ _ hbody hle =>
+      cases hbody with
+      | var hlk => exact absurd hle (by decide)
+
+-- ══════════════════════════════════════════════════════════════════════════════════════════════
+-- Axiom audit (RB1): the retyped preservation results and the non-vacuity witness are sorry-free.
+-- ══════════════════════════════════════════════════════════════════════════════════════════════
+
+#print axioms handle_perform_preserving
+#print axioms preservation
+#print axioms handle_perform_preserving_nonvacuous
+-- The machine-checked residual obstruction (why the positive is `opDom = .bool`) is sorry-free too:
+#print axioms handle_perform_regrade_obstruction
+-- The frozen NEGATIVE result (documented "before") also remains proved sorry-free:
+#print axioms handle_perform_not_preserving
 
 end Effects
 
