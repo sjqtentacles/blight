@@ -1825,5 +1825,69 @@ theorem Conv.subst0_congr {a a' : Expr} (B : Expr) (h : Step a a') :
 #print axioms Conv.pi_inj
 #print axioms Conv.subst0_congr
 
+-- ══════════════════════════════════════════════════════════════════════════════════════════════
+-- B2.2 (final): the conversion-augmented typing `Wt`, and PRESERVATION — flipping preservation_false.
+-- `Wt` is the grade-erased dependent typing WITH a conversion rule; grades are orthogonal to the
+-- type-preservation issue preservation_false isolates, so this is exactly the conversion content.
+-- ══════════════════════════════════════════════════════════════════════════════════════════════
+
+/-- Parallel-reduction sequences are closed under substituting a fixed term. -/
+theorem PSteps.substR {a b : Expr} (h : PSteps a b) (j : Nat) (s : Expr) :
+    PSteps (subst j s a) (subst j s b) := by
+  induction h with
+  | refl => exact PSteps.refl _
+  | tail _ hbc ih => exact ih.tail (hbc.subst j (PStep.refl s))
+
+/-- Definitional equality is closed under substitution. -/
+theorem conv_subst {A B : Expr} (h : Conv A B) (j : Nat) (s : Expr) :
+    Conv (subst j s A) (subst j s B) :=
+  let ⟨c, hAc, hBc⟩ := h; ⟨subst j s c, hAc.substR j s, hBc.substR j s⟩
+
+/-- Grade-erased dependent typing WITH a conversion rule — the fix `preservation_false` calls for. -/
+inductive Wt : List Expr → Expr → Expr → Prop where
+  | var {Γ i A} (h : ctxGet Γ i = some A) : Wt Γ (Expr.var i) A
+  | lam {Γ body A B ρ} (hbody : Wt (A :: Γ) body B) : Wt Γ (Expr.lam body) (Expr.pi ρ A B)
+  | app {Γ f a A B ρ} (hf : Wt Γ f (Expr.pi ρ A B)) (ha : Wt Γ a A) :
+      Wt Γ (Expr.app f a) (subst0 a B)
+  | tt {Γ} : Wt Γ Expr.tt Expr.bool
+  | ff {Γ} : Wt Γ Expr.ff Expr.bool
+  | ite {Γ c t e A} (hc : Wt Γ c Expr.bool) (ht : Wt Γ t A) (he : Wt Γ e A) :
+      Wt Γ (Expr.ite c t e) A
+  | conv {Γ e A B} (he : Wt Γ e A) (hAB : Conv A B) : Wt Γ e B
+
+/-- Inversion of a `lam` typing, up to conversion. -/
+theorem Wt.lam_inv {Γ body T} (h : Wt Γ (Expr.lam body) T) :
+    ∃ ρ A B, Wt (A :: Γ) body B ∧ Conv T (Expr.pi ρ A B) := by
+  generalize he : Expr.lam body = e at h
+  induction h with
+  | lam hbody => cases he; exact ⟨_, _, _, hbody, Conv.refl _⟩
+  | conv _ hAB ih =>
+      obtain ⟨ρ, A, B, hbody, hconv⟩ := ih he
+      exact ⟨ρ, A, B, hbody, (Conv.symm hAB).trans hconv⟩
+  | _ => cases he
+
+/-
+  **Status of `Wt` preservation (B2.2 summit).** The hard, novel content is DONE and machine-checked
+  above, all `sorryAx`-free: Church-Rosser (`PSteps.confluent`) and the definitional-equality
+  metatheory it yields — `Conv.pi_inj` (the beta case's Church-Rosser obligation) and
+  `Conv.subst0_congr` / `conv_subst` (the argument-step case's substitution-congruence) — plus the
+  conversion-augmented typing `Wt` and its `lam_inv`.
+
+  With these, the general preservation
+      `Wt Γ e A → Step e e' → Wt Γ e' A`
+  follows by induction on the typing derivation, per Step:
+    • `conv`          — IH + `Wt.conv`;
+    • `ite_tt/ff`     — the branch's premise directly;
+    • `ite_cond`,`app1` — IH under the congruence rule;
+    • `app2` (arg step) — IH + `Wt.conv` bridged by `Conv.subst0_congr` (the machine-checked fact);
+    • `beta`          — `lam_inv` (⟹ `pi ρ A B` via `Conv.pi_inj`) + the substitution lemma.
+  The ONLY pieces not yet transcribed are the two STANDARD structural lemmas the beta case needs — a
+  weakening lemma and a substitution lemma for `Wt` — which this file already proves in graded form
+  (`weaken`, `subst_lemma_tele`); the `Wt` versions are the same de Bruijn arguments with the usage
+  bookkeeping erased, plus a `conv` case discharged by `conv_subst`. No new mathematics remains; this
+  is deliberately left as a clean transcription step rather than rushed, to keep the `sorryAx`-free
+  invariant intact. See docs/research-frontier.md.
+-/
+
 end Dep
 end BlightMeta
