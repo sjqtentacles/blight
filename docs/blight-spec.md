@@ -237,6 +237,12 @@ Term, Type ::=
   | Op  op args                    -- perform an algebraic operation
   | Handle h t                     -- run t under handler h
   | Cont k                         -- a captured (delimited) continuation value
+
+  -- primitive machine integers (M10/M11; a pragmatic, TCB-growing base type, not inductive)
+  | Int                            -- the type of 64-bit machine integers,  Int : Univ 0
+  | IntLit n                       -- an integer literal  n : Int  (a native i64, not unary Nat)
+  | IntPrim op a b                 -- op ∈ {+,-,*,/,=,<}; arithmetic and comparison, all : Int
+  | IfZero s t e                   -- the Int eliminator: branch on whether s : Int is 0
 ```
 
 Cofibrations `φ` (the "where is this partial element defined" constraints) have their own
@@ -257,6 +263,14 @@ Notes that matter:
 - Grades `ρ` (on `Pi` binders and in contexts) are specified in §3; the cubical and effect
   rules below thread grades through but we keep grade bookkeeping in §3 to avoid clutter
   here.
+- The **primitive machine-integer** layer (`Int`/`IntLit`/`IntPrim`/`IfZero`) is a deliberate,
+  TCB-growing addition (M10/M11): `Int` is a native `i64` base type, *not* an inductive `Data`, so
+  it has no `Con`/`Elim`. The comparisons `IntPrim {=,<}` return an `Int` flag (`1`/`0`) rather than a
+  `Bool`, keeping the fragment self-contained (its typing rule needs no `Bool` in scope). `IfZero s t
+  e` is its **sole eliminator** — it reduces to `t` when `s ≡ 0`, to `e` when `s ≡ n≠0`, and stays
+  stuck on a neutral `s`; both branches share one type `A` independent of `s`, so subject reduction is
+  trivial. Untrusted stdlib (`std/int.bl`, `examples/int_branch.bl`) builds the friendly
+  `Bool`-returning `int-eq?`/`int-lt?` on top of `if-zero`.
 
 ### 2.3 Judgements
 
@@ -320,6 +334,20 @@ A definition may be **level-polymorphic**: `id : ∀ u. (A : Univ u) → A → A
 relies on this so that derived constructions (lists, traits, modules) are generic over
 universe level rather than duplicated per level. Cumulativity (`U-Cumul`) lets a `Univ ℓ`
 inhabitant be used where a higher universe is expected without explicit lifting.
+
+Cumulativity propagates **structurally** through function and pair types (kernel `subtype`): the
+`Univ ℓ ≤ Univ ℓ'` lift is carried *covariantly* into the **codomain** of a `Π` and the second
+component of a `Σ`, so e.g. `Π(x :^ρ A). Univ 0 ≤ Π(x :^ρ A). Univ 1`. It is **not** carried into the
+domain (a `Π(_:Univ 0). C` may not stand in for `Π(_:Univ 1). C` — a covariant domain is unsound), and
+a `Π`'s **grade `ρ` must match exactly** — a grade is a promise about the already-checked body's usage,
+never something cumulativity relaxes. The subtyping relation stays `⊇ conv`, so nothing typable before
+is rejected.
+
+> **Implementation status.** As of this writing the kernel implements the cumulativity above
+> (`U-Cumul` + the structural Π/Σ lift). *Universe polymorphism* (`U-Poly`, `∀ u.`, level variables)
+> is the design target but is **not yet implemented** — concrete levels only; a level *variable* is
+> currently rejected (roadmap: universe-polymorphism milestone). The `∀ u.` forms above describe the
+> intended rule.
 
 > **Design note (Prop / proof irrelevance).** Because we chose univalence (§2.6), we
 > **cannot** have definitional UIP (it contradicts univalence). Proof irrelevance, where we
