@@ -21,7 +21,9 @@ pub mod term;
 pub mod usage;
 pub mod value;
 
-pub use check::{check_top, check_top_metered, check_top_with, Checker, TypeError};
+pub use check::{
+    check_top, check_top_leveled, check_top_metered, check_top_with, Checker, TypeError,
+};
 pub use context::Context;
 pub use proof::{Judgement, Proof};
 pub use row::{EffName, Row, RowVar};

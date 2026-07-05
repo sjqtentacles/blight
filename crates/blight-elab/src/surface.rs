@@ -63,8 +63,12 @@ pub enum Surface {
     /// `(match scrut … clauses…)` — sugar; compiles to nested `Elim`. Supports multiple scrutinees,
     /// nested/wildcard patterns, and inference-mode (motive from the first clause / an ascription).
     Match(Vec<Surface>, Vec<Clause>),
-    /// A universe `(Type ℓ)`.
+    /// A universe `(Type ℓ)` at a concrete level.
     Univ(usize),
+    /// A universe `(Type u)` at a **level variable** `u` (T2): resolved against the prenex level
+    /// binders of an enclosing `(define-level …)` during elaboration. Kept as a name here because
+    /// `parse_surface` is context-free; the level → de Bruijn index is assigned in `elab`.
+    UnivVar(String),
     /// `(Delay A)` — the partiality (Capretta delay) type former (spec §4.5).
     Delay(Box<Surface>),
     /// `(now a)` — an immediately-available delayed value.

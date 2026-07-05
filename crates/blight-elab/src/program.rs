@@ -415,6 +415,11 @@ impl<'a> Program<'a> {
                     "define" => {
                         return self.process_define(items).map(|()| Outcome::Declared);
                     }
+                    // `(define-level name (u …) T body)` — a level-polymorphic definition (T2.1),
+                    // checked through the kernel's leveled door.
+                    "define-level" => {
+                        return self.process_define_level(items).map(|()| Outcome::Declared);
+                    }
                     // `(define-by name T <tactic>)` — prove goal `T` by running the tactic script;
                     // the resulting term is re-checked by the spore (LCF) and bound as a global.
                     "define-by" => {
@@ -514,6 +519,40 @@ impl<'a> Program<'a> {
                 "(define name body) or (define name T body)".into(),
             )),
         }
+    }
+
+    /// `(define-level name (u …) T body)`: a level-polymorphic definition (T2.1). Parse the prenex
+    /// level binders `(u …)`, then elaborate `T` and `body` with those level names in scope and
+    /// verify the pair through the kernel's leveled door.
+    fn process_define_level(&mut self, items: &[Sexpr]) -> Result<(), ElabError> {
+        if items.len() != 5 {
+            return Err(ElabError::BadForm(
+                "(define-level name (u …) T body)".into(),
+            ));
+        }
+        let name = crate::elab::sym_pub(&items[1])?;
+        let level_names = match &items[2] {
+            Sexpr::List(binders) => binders
+                .iter()
+                .map(crate::elab::sym_pub)
+                .collect::<Result<Vec<String>, _>>()?,
+            _ => {
+                return Err(ElabError::BadForm(
+                    "(define-level name (u …) T body): the level binders must be a list".into(),
+                ))
+            }
+        };
+        if level_names.is_empty() {
+            return Err(ElabError::BadForm(
+                "(define-level name (u …) T body): declare at least one level variable (use \
+                 `define` for a non-level-polymorphic definition)"
+                    .into(),
+            ));
+        }
+        let ty_surface = crate::elab::parse_surface(&items[3])?;
+        let body_surface = crate::elab::parse_surface(&items[4])?;
+        self.env
+            .declare_level(&name, &level_names, &ty_surface, &body_surface)
     }
 
     /// `(define-by name T <tactic>)`: prove the goal type `T` by running the tactic script against
@@ -633,6 +672,42 @@ mod tests {
         assert!(
             env.global_term("one").is_some(),
             "the definition is recorded"
+        );
+    }
+
+    /// T2.1: a level-polymorphic definition `(define-level id (u) T body)` binds a prenex level
+    /// variable `u`, elaborates `(Type u)` to `Univ (Var 0)`, and routes through the kernel's
+    /// `check_top_leveled` — so `λA.λx.x : (A :^ω Type u) → A → A` is accepted under `u : Level`
+    /// (the surface analogue of the kernel pin `level_polymorphic_identity_checks`).
+    #[test]
+    fn define_level_routes_through_check_top_leveled() {
+        let mut env = ElabEnv::new();
+        {
+            let mut prog = Program::new(&mut env);
+            prog.run(
+                "(define-level id (u) \
+                    (Pi ((A (Type u) omega)) (Pi ((x A omega)) A)) \
+                    (lam (A x) x))",
+            )
+            .expect("level-polymorphic identity checks under u : Level");
+        }
+        assert!(
+            env.global_term("id").is_some(),
+            "the level-polymorphic definition is recorded"
+        );
+    }
+
+    /// T2.1 twin negative: a universe level variable with no `(define-level … (u) …)` binder in
+    /// scope is *rejected*, never silently treated as a fresh universe — `(Type u)` outside a level
+    /// binder is unbound.
+    #[test]
+    fn level_var_without_binder_rejected() {
+        let mut env = ElabEnv::new();
+        let mut prog = Program::new(&mut env);
+        let result = prog.run("(define bad (the (Type u) (Type u)))");
+        assert!(
+            result.is_err(),
+            "an unbound universe level variable must be rejected, got {result:?}"
         );
     }
 

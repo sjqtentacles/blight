@@ -227,6 +227,44 @@ impl ElabEnv {
         }
     }
 
+    /// `(define-level name (u …) T body)` (T2.1): a **level-polymorphic** definition. The prenex
+    /// level binders `(u …)` are introduced at the checking boundary (not as a first-class
+    /// `∀u. : Univ ω` former — so no Girard/impredicativity landmine), `(Type u)` inside `T`/`body`
+    /// resolves to `Level::Var`, and the pair is verified through the kernel's *leveled* door
+    /// [`blight_kernel::check_top_leveled`] rather than the closed `check_top_with` (which rejects
+    /// level variables). The declared type is validated too (a `Univ(Var u)` with `u` out of the
+    /// prenex scope is rejected). A non-empty effect row is "outside the pure door" — skipped, not
+    /// rejected — mirroring [`Self::kernel_check_def`].
+    pub fn declare_level(
+        &mut self,
+        name: &str,
+        level_names: &[String],
+        ty_surface: &Surface,
+        body_surface: &Surface,
+    ) -> Result<(), ElabError> {
+        let ty_core = elaborate_leveled(self, ty_surface, None, level_names)?;
+        let body_core = elaborate_leveled(self, body_surface, Some(&ty_core), level_names)?;
+        match blight_kernel::check_top_leveled(
+            self.signature().clone(),
+            body_core.clone(),
+            ty_core.clone(),
+            level_names.len(),
+        ) {
+            Ok(_) => {}
+            // A non-empty effect/partial row on a pure-looking declared type ⟹ outside the pure
+            // door; verified by its own rule / `--recheck`, not here (rejecting would be a false
+            // soundness alarm). Mirrors `kernel_check_def`.
+            Err(blight_kernel::TypeError::EffectError(_)) => {}
+            Err(e) => {
+                return Err(ElabError::BadForm(format!(
+                    "kernel rejected level-polymorphic definition `{name}` at its declared type: {e}"
+                )))
+            }
+        }
+        self.define_global(name.to_string(), body_core, Some(ty_core));
+        Ok(())
+    }
+
     /// Record the implicit-binder specs of global `name` (computed from its surface type), so use
     /// sites insert and resolve them. Empty ⟹ no implicits.
     pub fn set_implicit_specs(&mut self, name: &str, specs: Vec<ImplicitSpec>) {
@@ -693,10 +731,14 @@ fn parse_list(items: &[Sexpr]) -> Result<Surface, ElabError> {
                 if items.len() != 2 {
                     return Err(ElabError::BadForm("(Type ℓ)".into()));
                 }
-                let lvl: usize = sym(&items[1])?
-                    .parse()
-                    .map_err(|_| ElabError::BadForm("(Type ℓ): ℓ must be a nat".into()))?;
-                return Ok(Surface::Univ(lvl));
+                let l = sym(&items[1])?;
+                // `(Type 0)` / `(Type 3)` — a concrete level. `(Type u)` with a non-numeric atom is
+                // a *level variable* (T2), resolved against the enclosing `(define-level …)` binders
+                // in `elab` (parse is context-free, so we only record the name here).
+                return Ok(match l.parse::<usize>() {
+                    Ok(lvl) => Surface::Univ(lvl),
+                    Err(_) => Surface::UnivVar(l.to_string()),
+                });
             }
             "Delay" => {
                 if items.len() != 2 {
@@ -1428,6 +1470,22 @@ pub fn elaborate_against(
     elab(env, &scope, term, Some(expected))
 }
 
+/// Elaborate under a set of prenex universe-level binders (T2): `level_names` are the `∀u.` binders
+/// of a `(define-level …)`, so `(Type u)` inside `term` resolves to `Level::Var(i)` for
+/// `level_names[i]`. `expected` is the (already level-elaborated) declared type, if checking.
+pub fn elaborate_leveled(
+    env: &ElabEnv,
+    term: &Surface,
+    expected: Option<&Term>,
+    level_names: &[String],
+) -> Result<Term, ElabError> {
+    let mut scope = Scope::new();
+    for n in level_names {
+        scope = scope.push_level(n);
+    }
+    elab(env, &scope, term, expected)
+}
+
 /// A lexical scope tracking term-variable and dimension-variable names (each its own de Bruijn
 /// space), plus an optional recursive self-name and the variable it structurally recurses on.
 #[derive(Clone)]
@@ -1438,6 +1496,12 @@ struct Scope {
     var_types: Vec<Option<Term>>,
     /// Dimension variables, innermost last.
     dims: Vec<String>,
+    /// Prenex universe-level variables (T2), in declaration order: `levels[i]` is `Level::Var(i)`.
+    /// Non-empty only inside a `(define-level …)` body/type. Unlike `vars`/`dims` (de Bruijn
+    /// *indices*, reverse-position), a level name maps to its *forward* position — matching the
+    /// kernel, which introduces the prenex binders left-to-right via `extend_level` and treats a
+    /// `Level::Var(u)` as well-formed iff `u < n_levels` (the count alone; level vars are opaque).
+    levels: Vec<String>,
     /// The name of the recursive function currently being elaborated, with the name of its
     /// recursion argument and the set of induction-hypothesis bindings available.
     rec: Option<RecCtx>,
@@ -1504,6 +1568,7 @@ impl Scope {
             vars: Vec::new(),
             var_types: Vec::new(),
             dims: Vec::new(),
+            levels: Vec::new(),
             rec: None,
         }
     }
@@ -1525,12 +1590,25 @@ impl Scope {
         s
     }
 
+    /// Push a prenex level variable (T2). Its `Level::Var` index is its forward position, so binders
+    /// are pushed in declaration order (`u` first ⟹ `Level::Var(0)`).
+    fn push_level(&self, name: &str) -> Self {
+        let mut s = self.clone();
+        s.levels.push(name.to_string());
+        s
+    }
+
     fn var_index(&self, name: &str) -> Option<usize> {
         self.vars.iter().rev().position(|n| n == name)
     }
 
     fn dim_index(&self, name: &str) -> Option<usize> {
         self.dims.iter().rev().position(|n| n == name)
+    }
+
+    /// Resolve a level-variable name to its `Level::Var` de Bruijn index (forward position).
+    fn level_index(&self, name: &str) -> Option<usize> {
+        self.levels.iter().position(|n| n == name)
     }
 }
 
@@ -2017,6 +2095,16 @@ fn elab(
         }
 
         Surface::Univ(l) => Ok(Term::Univ(nat_level(*l))),
+
+        // `(Type u)` at a level variable (T2): resolve `u` against the enclosing `(define-level …)`
+        // prenex binders. Unbound ⟹ a hard error (never a silently-fresh universe) — this is the
+        // twin negative for level-polymorphic checking.
+        Surface::UnivVar(name) => match scope.level_index(name) {
+            Some(idx) => Ok(Term::Univ(blight_kernel::Level::Var(idx))),
+            None => Err(ElabError::Unbound(format!(
+                "universe level variable `{name}` (only in scope inside a `(define-level … ({name} …) …)`)"
+            ))),
+        },
 
         Surface::Lam(names, body) => {
             // Peel the expected Pi-telescope binder-by-binder, recording each binder's domain type
@@ -3343,8 +3431,9 @@ fn collect_escaping_vars(
                 go(e, out);
             }
         }
-        // Leaves with no variable sub-terms.
-        Univ(_) | IntTy | IntLit(_) | NatLit(_) => {}
+        // Leaves with no (term-)variable sub-terms. `UnivVar` names a *level* variable, not a term
+        // variable, so it contributes nothing to the free-term-variable set.
+        Univ(_) | UnivVar(_) | IntTy | IntLit(_) | NatLit(_) => {}
     }
 }
 
