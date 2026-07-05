@@ -5,7 +5,9 @@
 ; structurally on a single argument. Blight's structural-descent checker (`deftotal`) therefore
 ; *rejects* the natural Ackermann definition — the recursive call `(ack (Succ m1) n1)` is on
 ; `Succ m1`, which is not a sub-term of `m`. That is the honest boundary: the kernel only certifies
-; the totality it can *see*.
+; the totality it can *see*. (A PLAIN `deftotal`, that is — the lexicographic `(measure m n)`
+; clause certifies Ackermann as genuinely total; see `ackermann_total.bl`. This file remains the
+; general-recursion/`Delay`/`force` showcase.)
 ;
 ; `define-rec` is Blight's *general* recursion. A non-structural recursive call compiles to a
 ; `later`-guarded step of the Capretta delay monad (spec §4.5): the result becomes a *partial* value

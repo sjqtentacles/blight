@@ -743,6 +743,70 @@ mod tests {
         }
     }
 
+    /// D3 lexicographic measures: Ackermann — THE function a single measure cannot bound — is
+    /// `deftotal` with `(measure m n)` and computes EXACTLY (adequate lex measures never hit the
+    /// default). Run on a dedicated big-stack worker (the `examples.rs` discipline): the
+    /// tree-walking evaluator's native recursion over unary-`Nat` Ackermann outruns libtest's
+    /// default 2 MiB thread.
+    #[test]
+    fn lex_measured_ackermann_is_exact() {
+        std::thread::Builder::new()
+            .stack_size(32 * 1024 * 1024)
+            .spawn(lex_measured_ackermann_is_exact_inner)
+            .expect("spawn big-stack worker")
+            .join()
+            .expect("ackermann worker panicked");
+    }
+
+    fn lex_measured_ackermann_is_exact_inner() {
+        let mut env = ElabEnv::new();
+        {
+            let mut prog = Program::new(&mut env);
+            prog.run(
+                "(defdata Nat () (Zero) (Succ (n Nat)))\n\
+                 (deftotal ack (Pi ((m Nat) (n Nat)) Nat)\n\
+                   (measure m n)\n\
+                   (default Zero)\n\
+                   (lam (m n)\n\
+                     (match m\n\
+                       [(Zero) (Succ n)]\n\
+                       [(Succ mm)\n\
+                         (match n\n\
+                           [(Zero) (ack mm (Succ Zero))]\n\
+                           [(Succ nn) (ack mm (ack m nn))])])))",
+            )
+            .expect("lexicographically-measured ackermann elaborates + checks");
+        }
+        // A(2,·) exercises every dispatch path: m-decreasing calls (outer burn), n-decreasing
+        // calls (inner burn), and the nested `(ack m nn)`-as-argument shape. A(3,3) is exact too
+        // but its ~2.4k-call unary-Nat evaluation overruns the tree-walking evaluator's native
+        // stack (an interpreter depth limit, not a semantics one — verified at the 8 MiB REPL).
+        assert_eq!(
+            crate::eval_value_str(&env, "(ack (Succ (Succ Zero)) (Succ (Succ (Succ Zero))))")
+                .expect("ack 2 3 evaluates"),
+            "9",
+            "A(2,3) = 9 exactly (never the default)"
+        );
+        assert_eq!(
+            crate::eval_value_str(
+                &env,
+                "(ack (Succ (Succ Zero)) (Succ (Succ (Succ (Succ Zero)))))"
+            )
+            .expect("ack 2 4 evaluates"),
+            "11",
+            "A(2,4) = 11 exactly"
+        );
+        assert_eq!(
+            crate::eval_value_str(
+                &env,
+                "(ack (Succ Zero) (Succ (Succ (Succ (Succ (Succ Zero))))))"
+            )
+            .expect("ack 1 5 evaluates"),
+            "7",
+            "A(1,5) = 7 exactly"
+        );
+    }
+
     /// T2.2 hygiene-path twin: a *macro-introduced* bare reference to a level-polymorphic global
     /// (which resolves through the marked-identifier fallback, not the primary Var path) gets the
     /// same clear `inst` error — the guard covers both global-lookup paths.

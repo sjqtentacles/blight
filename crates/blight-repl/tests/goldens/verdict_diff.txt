@@ -1719,6 +1719,11 @@ GLOBAL examples/ackermann.bl plus-two-three-is-five Ok
 GLOBAL examples/ackermann.bl pred Ok
 GLOBAL examples/ackermann.bl seven Ok
 GLOBAL examples/ackermann.bl sub Ok
+FILE examples/ackermann_total.bl forms=6 declared=6 checked=0
+GLOBAL examples/ackermann_total.bl ack Ok
+GLOBAL examples/ackermann_total.bl msr_cmp_ack Ok
+GLOBAL examples/ackermann_total.bl msr_inner_ack Ok
+GLOBAL examples/ackermann_total.bl msr_outer_ack Ok
 FILE examples/actor_pingpong.bl forms=55 declared=49 checked=6
 GLOBAL examples/actor_pingpong.bl actor-receive Ok
 GLOBAL examples/actor_pingpong.bl actor-send Ok

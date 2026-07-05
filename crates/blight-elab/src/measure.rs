@@ -41,7 +41,9 @@
 //! body is `(lam (p1 … pn) BODY)` matching those binders; every self-reference to `f` is a
 //! *saturated* `n`-ary application (a bare `f` or a wrong-arity call is an error — eta-expand it);
 //! and the body actually contains at least one self-call (else the `measure`/`default` clauses are
-//! pointless — write a plain `deftotal`). Lexicographic / multi-argument measures are deferred.
+//! pointless — write a plain `deftotal`). A TWO-component `(measure e1 e2)` is the LEXICOGRAPHIC
+//! form (D3): see the dedicated section below — same contract, four generated forms, and an
+//! Ackermann-exact adequacy story. Three or more components are rejected (fold the tail).
 
 use crate::elab::ElabError;
 use crate::sexpr::Sexpr;
@@ -162,13 +164,73 @@ fn count_self_refs(s: &Sexpr, f: &str) -> usize {
     }
 }
 
-/// Is this the measured-`deftotal` shape — a 6-item `(deftotal name T (measure …) (default …)
+/// The `(measure e…)` clause's component expressions (1 = the E6 single measure, 2 = the
+/// lexicographic pair), if `form` is a measure clause at all.
+fn measure_args(form: &Sexpr) -> Option<&[Sexpr]> {
+    match form {
+        Sexpr::List(items) if items.len() >= 2 && as_atom(&items[0]) == Some("measure") => {
+            Some(&items[1..])
+        }
+        _ => None,
+    }
+}
+
+/// Is this the measured-`deftotal` shape — a 6-item `(deftotal name T (measure e…) (default …)
 /// (lam …))`? Cheap check for the `run_form` dispatch, before committing to `desugar_measured`.
 pub fn is_measured(items: &[Sexpr]) -> bool {
     items.len() == 6
         && as_atom(&items[0]) == Some("deftotal")
-        && one_arg(&items[3], "measure").is_some()
+        && measure_args(&items[3]).is_some()
         && one_arg(&items[4], "default").is_some()
+}
+
+/// Substitute parameter-name atoms by sexprs, stopping under a `lam`/`let` that rebinds a mapped
+/// name (the same shadow discipline as [`rewrite_self_calls`]).
+fn subst_params(s: &Sexpr, map: &[(String, Sexpr)]) -> Sexpr {
+    match s {
+        Sexpr::Atom(a) => map
+            .iter()
+            .find(|(n, _)| n == a)
+            .map(|(_, e)| e.clone())
+            .unwrap_or_else(|| atom(a.clone())),
+        Sexpr::List(items) => {
+            if let Some(head) = items.first().and_then(as_atom) {
+                if (head == "lam" || head == "let") && items.len() == 3 {
+                    let live: Vec<(String, Sexpr)> = map
+                        .iter()
+                        .filter(|(n, _)| !binds_name(&items[1], n))
+                        .cloned()
+                        .collect();
+                    // `let` binding *expressions* still see the full map; only the body loses the
+                    // shadowed names.
+                    let binders = if head == "let" {
+                        match &items[1] {
+                            Sexpr::List(bs) => list(
+                                bs.iter()
+                                    .map(|b| match b {
+                                        Sexpr::List(pair) if pair.len() == 2 => list(vec![
+                                            pair[0].clone(),
+                                            subst_params(&pair[1], map),
+                                        ]),
+                                        other => other.clone(),
+                                    })
+                                    .collect(),
+                            ),
+                            other => other.clone(),
+                        }
+                    } else {
+                        items[1].clone()
+                    };
+                    return list(vec![
+                        items[0].clone(),
+                        binders,
+                        subst_params(&items[2], &live),
+                    ]);
+                }
+            }
+            list(items.iter().map(|i| subst_params(i, map)).collect())
+        }
+    }
 }
 
 /// Desugar a measured `(deftotal name T (measure e) (default e) (lam …))` into the fueled helper +
@@ -184,11 +246,18 @@ pub fn desugar_measured(items: &[Sexpr]) -> Result<Vec<Sexpr>, ElabError> {
         .ok_or_else(|| bad("(deftotal name …): name must be a symbol"))?
         .to_string();
     let ty = &items[2];
-    let e_m = one_arg(&items[3], "measure").ok_or_else(|| {
+    let margs = measure_args(&items[3]).ok_or_else(|| {
         bad(format!(
-            "measured `{name}`: expected `(measure e)` as the 4th element"
+            "measured `{name}`: expected `(measure e)` or `(measure e1 e2)` as the 4th element"
         ))
     })?;
+    if margs.len() > 2 {
+        return Err(bad(format!(
+            "measured `{name}`: at most two lexicographic measure components are supported \
+             (got {}); fold the tail into the second component",
+            margs.len()
+        )));
+    }
     let e_d = one_arg(&items[4], "default").ok_or_else(|| {
         bad(format!(
             "measured `{name}`: a `(measure …)` clause requires a following `(default e)` clause \
@@ -197,7 +266,7 @@ pub fn desugar_measured(items: &[Sexpr]) -> Result<Vec<Sexpr>, ElabError> {
     })?;
 
     // A `(measure …)` / `(default …)` must not itself call `f`.
-    if mentions(e_m, &name) || mentions(e_d, &name) {
+    if margs.iter().any(|m| mentions(m, &name)) || mentions(e_d, &name) {
         return Err(bad(format!(
             "measured `{name}`: the `(measure …)`/`(default …)` expressions cannot call `{name}`"
         )));
@@ -266,6 +335,32 @@ pub fn desugar_measured(items: &[Sexpr]) -> Result<Vec<Sexpr>, ElabError> {
         })
         .collect::<Result<_, _>>()?;
 
+    // The body must actually recurse — else the measure/default are pointless. (Checked here so
+    // both the single and the lexicographic path share the guard.)
+    if count_self_refs(&body, &name) == 0 {
+        return Err(bad(format!(
+            "measured `{name}`: the body never calls `{name}` — a `(measure …)` clause is only for \
+             recursive definitions; drop it and use a plain `(deftotal {name} T (lam …) )`"
+        )));
+    }
+
+    // Two components ⟹ the lexicographic desugar (its own generator).
+    if margs.len() == 2 {
+        return desugar_lex_measured(
+            &name,
+            ty,
+            &binders,
+            &result,
+            &params,
+            &param_names,
+            &body,
+            &margs[0],
+            &margs[1],
+            e_d,
+        );
+    }
+    let e_m = &margs[0];
+
     let helper = format!("msr_fueled_{}", sanitize(&name));
     let fuel = "msr_fuel";
     let fuel_k = "msr_k";
@@ -276,14 +371,6 @@ pub fn desugar_measured(items: &[Sexpr]) -> Result<Vec<Sexpr>, ElabError> {
                 "measured `{name}`: parameter `{p}` clashes with the generated fuel binder; rename it"
             )));
         }
-    }
-
-    // The body must actually recurse — else the measure/default are pointless.
-    if count_self_refs(&body, &name) == 0 {
-        return Err(bad(format!(
-            "measured `{name}`: the body never calls `{name}` — a `(measure …)` clause is only for \
-             recursive definitions; drop it and use a plain `(deftotal {name} T (lam …) )`"
-        )));
     }
 
     // BODY with self-calls rewritten to thread the smaller fuel `msr_k`.
@@ -324,6 +411,398 @@ pub fn desugar_measured(items: &[Sexpr]) -> Result<Vec<Sexpr>, ElabError> {
     ]);
 
     Ok(vec![helper_form, wrapper_form])
+}
+
+// =================================================================================================
+// Lexicographic measures (D3): `(measure e1 e2)`.
+//
+// A single fuel cannot bound a lexicographic recursion (Ackermann's step count is not a cheap
+// function of either component), so the desugar generates a two-level fueled structure — every
+// piece an already-certified shape:
+//
+//   1. `msr_cmp_f` — a dep-free CPS `Nat` comparator (structural on its first argument): calls
+//      `kLt` when `a < b`, else `kGe`. Continuations take a dummy `Nat` so no `Bool`/`Unit`
+//      dependency is introduced.
+//   2. `msr_inner_f` — structural on the inner fuel `msr_f2`, carrying the current frame's
+//      measure values `(msr_v1, msr_v2)` and `msr_step : Π(binders…) R` — the "burn one outer
+//      unit" continuation. Its `Zero` arm falls back to `msr_step` (inadequate-measure safety
+//      net). Every user self-call `(f a…)` becomes a DISPATCH: bind the (rewritten) arguments,
+//      compute the callee's measures `m1'`/`m2'`, then
+//        * `m1' <  v1`            → `(msr_step x…)`                      — burn an outer unit;
+//        * `m1' ≥ v1 ∧ m2' < v2`  → `(msr_inner_f msr_j m1' m2' step x…)` — burn an inner unit;
+//        * otherwise              → the default (the measure is not lexicographically decreasing
+//                                   at this call — "total but possibly wrong", never unsound).
+//   3. `msr_outer_f` — structural on the outer fuel `msr_f1`; its `Succ` arm seeds the inner loop
+//      with a FRESH inner fuel `Succ e2(args)` and passes its own first-class induction
+//      hypothesis `(msr_outer_f msr_k1)` as `msr_step` — so an outer burn re-derives the frame
+//      from the callee's own arguments.
+//   4. the wrapper — seeds `(Succ e1(args))`.
+//
+// Adequacy (why an adequate lex measure never hits the default): fuels are plain `Nat` values, so
+// each branch of the call tree consumes its own copies — accounting is per root-to-leaf path. On
+// a path, an outer unit burns only when `m1` strictly decreases (≤ e1+1 burns), and between outer
+// burns the inner fuel was seeded past the strictly-decreasing `m2` run (≤ e2@seed+1 calls). The
+// kernel certifies totality unconditionally either way — adequacy only buys exactness.
+//
+// v1 gate: the result type must not mention the parameters (the comparator is instantiated at it
+// from a different scope). Same "total but possibly wrong, never unsound" contract as E6.
+// =================================================================================================
+
+/// Rewrite every saturated self-call in the lexicographic body to the compare-and-dispatch chain.
+/// `e1`/`e2` are the measure expressions over the ORIGINAL parameter names; the callee's measures
+/// are computed by substituting the let-bound argument copies into them.
+#[allow(clippy::too_many_arguments)]
+fn rewrite_self_calls_lex(
+    s: &Sexpr,
+    f: &str,
+    inner: &str,
+    cmp: &str,
+    arity: usize,
+    param_names: &[String],
+    e1: &Sexpr,
+    e2: &Sexpr,
+    e_d: &Sexpr,
+) -> Result<Sexpr, ElabError> {
+    match s {
+        Sexpr::Atom(a) => {
+            if a == f {
+                return Err(bad(format!(
+                    "measured `{f}`: bare reference to `{f}` — a self-reference must be a saturated \
+                     call `({f} arg…)` ({arity} argument(s)); eta-expand a partial use as \
+                     `(lam (…) ({f} …))`"
+                )));
+            }
+            Ok(atom(a.clone()))
+        }
+        Sexpr::List(items) => {
+            if let Some(head) = items.first().and_then(as_atom) {
+                if (head == "lam" || head == "let") && items.len() == 3 && binds_name(&items[1], f)
+                {
+                    return Ok(s.clone());
+                }
+                if head == f {
+                    let n_args = items.len() - 1;
+                    if n_args != arity {
+                        return Err(bad(format!(
+                            "measured `{f}`: self-call `({f} …)` has {n_args} argument(s) but `{f}` \
+                             takes {arity}; every recursive call must be saturated"
+                        )));
+                    }
+                    // Rewritten argument expressions (nested self-calls dispatch recursively).
+                    let args_rw: Vec<Sexpr> = items[1..]
+                        .iter()
+                        .map(|a| {
+                            rewrite_self_calls_lex(
+                                a, f, inner, cmp, arity, param_names, e1, e2, e_d,
+                            )
+                        })
+                        .collect::<Result<_, _>>()?;
+                    // Bind the arguments once (`msr_x{i}`), then the callee's measures over them.
+                    let xs: Vec<String> =
+                        (0..arity).map(|i| format!("msr_x{i}")).collect();
+                    let subst_map: Vec<(String, Sexpr)> = param_names
+                        .iter()
+                        .cloned()
+                        .zip(xs.iter().map(|x| atom(x.clone())))
+                        .collect();
+                    let m1n = subst_params(e1, &subst_map);
+                    let m2n = subst_params(e2, &subst_map);
+                    // The dispatch core (innermost expression).
+                    let call_args: Vec<Sexpr> = xs.iter().map(|x| atom(x.clone())).collect();
+                    let step_call = {
+                        let mut c = vec![atom("msr_step")];
+                        c.extend(call_args.iter().cloned());
+                        list(c)
+                    };
+                    let inner_call = {
+                        let mut c = vec![
+                            atom(inner),
+                            atom("msr_j"),
+                            atom("msr_m1n"),
+                            atom("msr_m2n"),
+                            atom("msr_step"),
+                        ];
+                        c.extend(call_args.iter().cloned());
+                        list(c)
+                    };
+                    let k = |body: Sexpr, binder: &str| {
+                        list(vec![
+                            atom("lam"),
+                            list(vec![atom(binder)]),
+                            body,
+                        ])
+                    };
+                    let inner_cmp = list(vec![
+                        atom(cmp),
+                        atom("msr_m2n"),
+                        atom("msr_v2"),
+                        k(inner_call, "msr_u2"),
+                        k(e_d.clone(), "msr_u2"),
+                    ]);
+                    let dispatch = list(vec![
+                        atom(cmp),
+                        atom("msr_m1n"),
+                        atom("msr_v1"),
+                        k(step_call, "msr_u"),
+                        k(inner_cmp, "msr_u"),
+                    ]);
+                    // let msr_x{i} = arg_i in … let msr_m1n = m1' in let msr_m2n = m2' in dispatch
+                    let mut out = dispatch;
+                    out = list(vec![
+                        atom("let"),
+                        list(vec![list(vec![atom("msr_m2n"), m2n])]),
+                        out,
+                    ]);
+                    out = list(vec![
+                        atom("let"),
+                        list(vec![list(vec![atom("msr_m1n"), m1n])]),
+                        out,
+                    ]);
+                    for (x, a) in xs.iter().zip(args_rw.iter()).rev() {
+                        out = list(vec![
+                            atom("let"),
+                            list(vec![list(vec![atom(x.clone()), a.clone()])]),
+                            out,
+                        ]);
+                    }
+                    return Ok(out);
+                }
+            }
+            Ok(list(
+                items
+                    .iter()
+                    .map(|i| {
+                        rewrite_self_calls_lex(
+                            i, f, inner, cmp, arity, param_names, e1, e2, e_d,
+                        )
+                    })
+                    .collect::<Result<_, _>>()?,
+            ))
+        }
+    }
+}
+
+/// Generate the four forms of a lexicographically-measured definition (comparator, inner, outer,
+/// wrapper). See the module-section comment above for the design and adequacy argument.
+#[allow(clippy::too_many_arguments)]
+fn desugar_lex_measured(
+    name: &str,
+    ty: &Sexpr,
+    binders: &[Sexpr],
+    result: &Sexpr,
+    params: &[Sexpr],
+    param_names: &[String],
+    body: &Sexpr,
+    e1: &Sexpr,
+    e2: &Sexpr,
+    e_d: &Sexpr,
+) -> Result<Vec<Sexpr>, ElabError> {
+    let arity = binders.len();
+    // v1 gate: the comparator is instantiated at the result type from a scope without the
+    // parameters, so a dependent result cannot be threaded through the dispatch.
+    for p in param_names {
+        if mentions(result, p) {
+            return Err(bad(format!(
+                "measured `{name}`: a lexicographic `(measure e1 e2)` needs a result type that \
+                 does not mention the parameters (found `{p}`); use a single `(measure e)` or a \
+                 non-dependent result"
+            )));
+        }
+    }
+    // Clash guards for every generated binder.
+    let mut reserved: Vec<String> = [
+        "msr_f1", "msr_f2", "msr_k1", "msr_j", "msr_v1", "msr_v2", "msr_step", "msr_u", "msr_u2",
+        "msr_m1n", "msr_m2n",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    reserved.extend((0..arity).map(|i| format!("msr_x{i}")));
+    for p in param_names {
+        if reserved.contains(p) {
+            return Err(bad(format!(
+                "measured `{name}`: parameter `{p}` clashes with a generated lexicographic-fuel \
+                 binder; rename it"
+            )));
+        }
+    }
+
+    let cmp = format!("msr_cmp_{}", sanitize(name));
+    let inner = format!("msr_inner_{}", sanitize(name));
+    let outer = format!("msr_outer_{}", sanitize(name));
+
+    // 1. The CPS comparator: `(cmp a b kLt kGe)` — `kLt` iff `a < b`. Structural on `a`,
+    //    SPECIALIZED at the (closed — see the gate above) result type: a leading `(C (Type 0))`
+    //    type parameter trips the structural-recursion motive generalization, and the comparator
+    //    is per-definition anyway, so nothing is lost.
+    let cmp_form = {
+        let k_ty = || {
+            list(vec![
+                atom("Pi"),
+                list(vec![list(vec![atom("u"), atom("Nat")])]),
+                result.clone(),
+            ])
+        };
+        let pi = list(vec![
+            atom("Pi"),
+            list(vec![
+                list(vec![atom("a"), atom("Nat")]),
+                list(vec![atom("b"), atom("Nat")]),
+                list(vec![atom("kLt"), k_ty()]),
+                list(vec![atom("kGe"), k_ty()]),
+            ]),
+            result.clone(),
+        ]);
+        let klt_zero = list(vec![atom("kLt"), atom("Zero")]);
+        let kge_zero = list(vec![atom("kGe"), atom("Zero")]);
+        let body = list(vec![
+            atom("match"),
+            atom("a"),
+            list(vec![
+                list(vec![atom("Zero")]),
+                list(vec![
+                    atom("match"),
+                    atom("b"),
+                    list(vec![list(vec![atom("Zero")]), kge_zero.clone()]),
+                    list(vec![
+                        list(vec![atom("Succ"), atom("bb")]),
+                        klt_zero,
+                    ]),
+                ]),
+            ]),
+            list(vec![
+                list(vec![atom("Succ"), atom("aa")]),
+                list(vec![
+                    atom("match"),
+                    atom("b"),
+                    list(vec![list(vec![atom("Zero")]), kge_zero]),
+                    list(vec![
+                        list(vec![atom("Succ"), atom("bb")]),
+                        list(vec![
+                            atom(cmp.clone()),
+                            atom("aa"),
+                            atom("bb"),
+                            atom("kLt"),
+                            atom("kGe"),
+                        ]),
+                    ]),
+                ]),
+            ]),
+        ]);
+        list(vec![
+            atom("deftotal"),
+            atom(cmp.clone()),
+            pi,
+            list(vec![
+                atom("lam"),
+                list(vec![atom("a"), atom("b"), atom("kLt"), atom("kGe")]),
+                body,
+            ]),
+        ])
+    };
+
+    // The step continuation's type: `Π(binders…) R`.
+    let step_ty = list(vec![
+        atom("Pi"),
+        list(binders.to_vec()),
+        result.clone(),
+    ]);
+
+    // 2. The inner loop, structural on `msr_f2`.
+    let inner_form = {
+        let mut tele = vec![
+            list(vec![atom("msr_f2"), atom("Nat")]),
+            list(vec![atom("msr_v1"), atom("Nat")]),
+            list(vec![atom("msr_v2"), atom("Nat")]),
+            list(vec![atom("msr_step"), step_ty.clone()]),
+        ];
+        tele.extend(binders.iter().cloned());
+        let pi = list(vec![atom("Pi"), list(tele), result.clone()]);
+        let mut lam_params = vec![
+            atom("msr_f2"),
+            atom("msr_v1"),
+            atom("msr_v2"),
+            atom("msr_step"),
+        ];
+        lam_params.extend(params.iter().cloned());
+        let step_fallback = {
+            let mut c = vec![atom("msr_step")];
+            c.extend(param_names.iter().map(|p| atom(p.clone())));
+            list(c)
+        };
+        let body_prime = rewrite_self_calls_lex(
+            body, name, &inner, &cmp, arity, param_names, e1, e2, e_d,
+        )?;
+        let match_form = list(vec![
+            atom("match"),
+            atom("msr_f2"),
+            list(vec![list(vec![atom("Zero")]), step_fallback]),
+            list(vec![
+                list(vec![atom("Succ"), atom("msr_j")]),
+                body_prime,
+            ]),
+        ]);
+        list(vec![
+            atom("deftotal"),
+            atom(inner.clone()),
+            pi,
+            list(vec![atom("lam"), list(lam_params), match_form]),
+        ])
+    };
+
+    // 3. The outer loop, structural on `msr_f1`; the `Succ` arm seeds the inner loop with the
+    //    first-class IH `(outer msr_k1)` as the step continuation.
+    let outer_form = {
+        let mut tele = vec![list(vec![atom("msr_f1"), atom("Nat")])];
+        tele.extend(binders.iter().cloned());
+        let pi = list(vec![atom("Pi"), list(tele), result.clone()]);
+        let mut lam_params = vec![atom("msr_f1")];
+        lam_params.extend(params.iter().cloned());
+        let seed_inner = {
+            let mut c = vec![
+                atom(inner.clone()),
+                list(vec![atom("Succ"), e2.clone()]),
+                e1.clone(),
+                e2.clone(),
+                list(vec![atom(outer.clone()), atom("msr_k1")]),
+            ];
+            c.extend(param_names.iter().map(|p| atom(p.clone())));
+            list(c)
+        };
+        let match_form = list(vec![
+            atom("match"),
+            atom("msr_f1"),
+            list(vec![list(vec![atom("Zero")]), e_d.clone()]),
+            list(vec![
+                list(vec![atom("Succ"), atom("msr_k1")]),
+                seed_inner,
+            ]),
+        ]);
+        list(vec![
+            atom("deftotal"),
+            atom(outer.clone()),
+            pi,
+            list(vec![atom("lam"), list(lam_params), match_form]),
+        ])
+    };
+
+    // 4. The wrapper, seeding the outer fuel with `(Succ e1)`.
+    let wrapper_form = {
+        let mut seed_call = vec![atom(outer), list(vec![atom("Succ"), e1.clone()])];
+        seed_call.extend(param_names.iter().map(|p| atom(p.clone())));
+        list(vec![
+            atom("deftotal"),
+            atom(name.to_string()),
+            ty.clone(),
+            list(vec![
+                atom("lam"),
+                list(params.to_vec()),
+                list(seed_call),
+            ]),
+        ])
+    };
+
+    Ok(vec![cmp_form, inner_form, outer_form, wrapper_form])
 }
 
 #[cfg(test)]
@@ -415,5 +894,84 @@ mod tests {
             "(deftotal f (Pi ((n Nat)) Nat) (measure (f n)) (default Zero) (lam (n) (f n)))",
         );
         assert!(e.is_err(), "the measure expression cannot call `f`");
+    }
+}
+
+#[cfg(test)]
+mod lex_tests {
+    use super::*;
+    use crate::sexpr::read_all;
+
+    fn desugar(src: &str) -> Result<Vec<Sexpr>, ElabError> {
+        let forms = read_all(src).expect("reads");
+        let Sexpr::List(items) = &forms[0] else { panic!() };
+        desugar_measured(items)
+    }
+
+    const ACK: &str = "(deftotal ack (Pi ((m Nat) (n Nat)) Nat)\n\
+                         (measure m n)\n\
+                         (default Zero)\n\
+                         (lam (m n)\n\
+                           (match m\n\
+                             [(Zero) (Succ n)]\n\
+                             [(Succ mm)\n\
+                               (match n\n\
+                                 [(Zero) (ack mm (Succ Zero))]\n\
+                                 [(Succ nn) (ack mm (ack m nn))])])))";
+
+    /// The lexicographic desugar emits exactly four forms — comparator, inner (fuel-2 loop with
+    /// the `msr_step` continuation), outer (fuel-1 loop passing its first-class IH), wrapper —
+    /// and the rewritten body dispatches through the comparator.
+    #[test]
+    fn lex_desugar_emits_cmp_inner_outer_wrapper() {
+        let out = desugar(ACK).expect("desugars");
+        assert_eq!(out.len(), 4, "cmp + inner + outer + wrapper");
+        let names: Vec<String> = out
+            .iter()
+            .map(|f| match f {
+                Sexpr::List(items) => as_atom(&items[1]).unwrap().to_string(),
+                _ => panic!(),
+            })
+            .collect();
+        assert_eq!(
+            names,
+            ["msr_cmp_ack", "msr_inner_ack", "msr_outer_ack", "ack"]
+        );
+        let inner = format!("{:?}", out[1]);
+        assert!(inner.contains("msr_step"), "inner threads the step continuation");
+        assert!(inner.contains("msr_cmp_ack"), "self-calls dispatch through the comparator");
+        assert!(inner.contains("msr_j"), "inner burns thread the smaller fuel");
+        let outer = format!("{:?}", out[2]);
+        assert!(
+            outer.contains("msr_outer_ack\"), Atom(\"msr_k1"),
+            "outer passes its first-class IH as the step continuation: {outer}"
+        );
+    }
+
+    /// Three or more measure components are rejected with a clear message.
+    #[test]
+    fn rejects_three_measures() {
+        let e = desugar(
+            "(deftotal f (Pi ((a Nat) (b Nat) (c Nat)) Nat) (measure a b c) (default Zero) \
+             (lam (a b c) (f a b c)))",
+        );
+        match e {
+            Err(ElabError::BadForm(m)) => assert!(m.contains("two lexicographic"), "{m}"),
+            other => panic!("expected the 3-component rejection, got {other:?}"),
+        }
+    }
+
+    /// A lexicographic measure with a result type mentioning a parameter is rejected (the
+    /// comparator is instantiated at the result from a scope without the parameters).
+    #[test]
+    fn rejects_dependent_result_for_lex() {
+        let e = desugar(
+            "(deftotal f (Pi ((A (Type 0)) (n Nat)) A) (measure n n) (default d) \
+             (lam (A n) (f A n)))",
+        );
+        match e {
+            Err(ElabError::BadForm(m)) => assert!(m.contains("does not mention"), "{m}"),
+            other => panic!("expected the dependent-result rejection, got {other:?}"),
+        }
     }
 }

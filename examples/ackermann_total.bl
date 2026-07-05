@@ -1,0 +1,23 @@
+; Ackermann, TOTAL — via a lexicographic measure (D3; the sibling of `ackermann.bl`, which shows
+; the same function through general recursion + `Delay`/`force`).
+;
+; A single measure cannot bound Ackermann's recursion (its step count grows faster than any
+; primitive-recursive function of either argument), but `(measure m n)` — decrease `m`, or keep
+; `m` and decrease `n` — is exactly its termination argument. The desugar (measure.rs) compiles
+; this into structurally-certified fueled loops with a runtime lexicographic dispatch; an adequate
+; measure never touches the `default`, so the function computes EXACTLY — no `Delay`, no
+; `Partial` row, an ordinary total `Nat -> Nat -> Nat`.
+;
+;   A(0,n) = n+1 · A(m,0) = A(m-1,1) · A(m,n) = A(m-1, A(m, n-1))
+;
+; `main = A(2,3) = 9` (kept at m = 2: the tree-walking evaluator's native recursion bounds how
+; deep a unary-Nat Ackermann the CHECK-time evaluator can run; the termination certificate itself
+; is depth-independent).
+(defdata Nat () (Zero) (Succ (n Nat)))
+
+(deftotal ack (Pi ((m Nat) (n Nat)) Nat) (measure m n) (default Zero)
+  (lam (m n)
+    (match m [(Zero) (Succ n)]
+      [(Succ mm) (match n [(Zero) (ack mm 1)] [(Succ nn) (ack mm (ack m nn))])])))
+
+(define main (the Nat (ack 2 3)))
