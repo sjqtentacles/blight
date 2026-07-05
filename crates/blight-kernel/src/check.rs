@@ -132,6 +132,42 @@ fn level_to_nat(l: &Level) -> Result<u32, TypeError> {
     }
 }
 
+/// A **sound** (possibly incomplete) symbolic order on universe [`Level`]s: returns `true` only when
+/// `a ≤ b` holds *for every* assignment of the level variables (T2, universe polymorphism). This is
+/// the level analogue of `subtype`'s `U-Cumul` and the foundation the symbolic-level machinery needs
+/// once level variables can occur; on **closed** levels it agrees exactly with `≤` on their
+/// [`level_to_nat`] values (so it is a drop-in that changes nothing for the concrete-level fragment
+/// programs produce today), and it is reflexive (hence `⊇ conv`). Where the order cannot be decided
+/// structurally it answers `false` — safe: a spurious `false` only *rejects*, never accepts.
+///
+/// The rules (each valid under every variable assignment):
+/// - `0 ≤ b` always;  `max(a₁,a₂) ≤ b` iff both `a₁ ≤ b` and `a₂ ≤ b`.
+/// - `suc a' ≤ suc b'` iff `a' ≤ b'`;  `a ≤ max(b₁,b₂)` iff `a ≤ b₁` or `a ≤ b₂`.
+/// - `u ≤ suc b'` iff `u ≤ b'` (an unconstrained variable can only be shown `≤` by descending);
+///   `u ≤ v` iff `u = v` (distinct variables are incomparable without constraints).
+/// - anything else (`suc _ ≤ 0`/`≤ v`, `u ≤ 0`) is `false`.
+fn level_leq(a: &Level, b: &Level) -> bool {
+    match a {
+        // 0 is the bottom of the lattice.
+        Level::Zero => true,
+        // `max(a₁,a₂) ≤ b` exactly when each summand is.
+        Level::Max(a1, a2) => level_leq(a1, b) && level_leq(a2, b),
+        Level::Suc(a1) => match b {
+            Level::Suc(b1) => level_leq(a1, b1),
+            Level::Max(b1, b2) => level_leq(a, b1) || level_leq(a, b2),
+            // `suc a' ≤ 0` / `≤ v` cannot hold for all assignments.
+            Level::Zero | Level::Var(_) => false,
+        },
+        Level::Var(u) => match b {
+            Level::Var(v) => u == v,
+            Level::Suc(b1) => level_leq(a, b1),
+            Level::Max(b1, b2) => level_leq(a, b1) || level_leq(a, b2),
+            // `u ≤ 0` cannot hold for all assignments.
+            Level::Zero => false,
+        },
+    }
+}
+
 /// Build a [`Level`] from a natural number.
 fn nat_to_level(n: u32) -> Level {
     let mut l = Level::Zero;
@@ -2396,10 +2432,9 @@ impl Checker {
 /// Anything else falls back to plain definitional equality.
 fn subtype(lvl: usize, actual: &Value, expected: &Value) -> bool {
     match (actual, expected) {
-        (Value::Univ(a), Value::Univ(e)) => match (level_to_nat(a), level_to_nat(e)) {
-            (Ok(na), Ok(ne)) => na <= ne,
-            _ => conv(lvl, actual, expected),
-        },
+        // `Univ ℓ ≤ Univ ℓ'` by the symbolic level order (`U-Cumul`), which handles level variables
+        // (T2) and agrees with `≤` on concrete levels. It is reflexive, so this stays `⊇ conv`.
+        (Value::Univ(a), Value::Univ(e)) => level_leq(a, e),
         (Value::Pi(g0, d0, c0), Value::Pi(g1, d1, c1)) => {
             g0 == g1 && conv(lvl, d0, d1) && {
                 let fresh = Value::Neutral(Neutral::Var(lvl));
@@ -3336,6 +3371,41 @@ mod tests {
             check_top(idf(), pi(Grade::Omega, dom_hi(), dom_lo())).is_err(),
             "cumulativity does not run backwards"
         );
+    }
+
+    /// T2 foundation: the symbolic level order `level_leq` agrees with `≤` on concrete levels and is
+    /// a sound (reflexive) order on level variables — `u ≤ suc u`, distinct variables incomparable,
+    /// `max` handled — answering `false` only where the order is genuinely undecided.
+    #[test]
+    fn level_leq_concrete_and_variables() {
+        let z = Level::Zero;
+        let suc = |l: Level| Level::Suc(Box::new(l));
+        let nat = |n: u32| {
+            let mut l = Level::Zero;
+            for _ in 0..n {
+                l = Level::Suc(Box::new(l));
+            }
+            l
+        };
+        let max = |a: Level, b: Level| Level::Max(Box::new(a), Box::new(b));
+        let u = Level::Var(0);
+        let v = Level::Var(1);
+        // Concrete: exactly `≤` on the nat values.
+        assert!(level_leq(&nat(2), &nat(3)));
+        assert!(!level_leq(&nat(3), &nat(2)));
+        assert!(level_leq(&nat(3), &nat(3)));
+        assert!(level_leq(&z, &nat(5)));
+        // Variables (each rule sound under every assignment).
+        assert!(level_leq(&u, &u), "reflexive: u ≤ u");
+        assert!(level_leq(&u, &suc(u.clone())), "u ≤ suc u");
+        assert!(!level_leq(&suc(u.clone()), &u), "suc u ⊄ u");
+        assert!(!level_leq(&u, &v), "distinct variables are incomparable");
+        assert!(!level_leq(&u, &z), "u ⊄ 0 (u may be positive)");
+        assert!(level_leq(&z, &u), "0 ≤ u");
+        // max.
+        assert!(level_leq(&u, &max(u.clone(), v.clone())), "u ≤ max(u,v)");
+        assert!(level_leq(&max(z.clone(), u.clone()), &u), "max(0,u) ≤ u");
+        assert!(!level_leq(&max(u.clone(), v.clone()), &u), "max(u,v) ⊄ u");
     }
 
     /// The polymorphic identity at `Univ 0`: `λ A. λ x. x : (A :^ω Univ 0) → (x :^ω A) → A`.
