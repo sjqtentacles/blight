@@ -624,6 +624,54 @@ fn f64_scratch_example_loads() {
     }
 }
 
+/// R1 (flat_esc) — REPRODUCTION + DIAGNOSIS (currently `#[ignore]`d; un-ignore when the elaborator
+/// fix lands). A **nested** `Pair`-of-`Pair` match: the outer match binds `(inner z)` and the inner
+/// match binds `(a b)`, so the body's reference to the outer binder `z` sits under the inner match's
+/// scrutinee-lambda wrapper. `Pair` is a parameterized, non-indexed family — the exact shape of
+/// `examples/flat_esc.bl`'s `main`, the sole corpus global the re-checker `Reject`s.
+///
+/// **Root cause (diagnosed 2026-07-05, correcting the plan's guess):** this is NOT a re-checker bug.
+/// The *elaborator* stores a mis-scoped core term for `main`: the Surface→Term lowering of the nested
+/// `match`→`Elim` desugaring (`App(Ann(λ s. Elim{…}), scrut)`) under-counts the de-Bruijn index of the
+/// outer binder `z` by one — it indexes `z` as if the inner match's scrutinee-lambda `s` weren't there.
+/// `check_top_with` on the *stored* `global_term("main")` makes the **kernel itself reject it** with the
+/// same `inferred Pair(Nat,Nat) but expected Nat`. It escapes elaboration only because a ground-value
+/// `main : Nat` is *skipped* by the kernel door (`kernel_check_def`/`gate_routes_through_kernel` —
+/// "kernel-checking a ground value degenerates into running the program"), so the skew is never
+/// caught. `--recheck`/`verdict_diff` re-checks the stored term and correctly flags it. The fix
+/// belongs in the elaborator's match/`Elim` de-Bruijn accounting (`lower_match` is name-based and
+/// fine; the bug is in the Surface→Term binder resolution), red-first — a focused, TCB-adjacent change.
+#[test]
+#[ignore = "R1: elaborator emits a mis-scoped term for a nested parameterized match (kernel itself \
+            rejects the stored global_term); fix belongs in match→Elim de-Bruijn elaboration"]
+fn recheck_nested_pair_match() {
+    let src = "(load \"std/nat.bl\")\n\
+               (load \"std/pair.bl\")\n\
+               (deftotal mk (Pi ((n Nat)) (Pair (Pair Nat Nat) Nat))\n\
+                 (lam (n) (mk-pair (mk-pair n (Succ n)) (Succ (Succ n)))))\n\
+               (define main Nat\n\
+                 (match (mk (Succ Zero))\n\
+                   [(mk-pair inner z) (match inner [(mk-pair a b) (plus (plus a b) z)])]))\n";
+    let mut env = ElabEnv::new();
+    {
+        let mut prog = Program::with_resolver(&mut env, prelude_resolver);
+        prog.run(src).expect("elaboration succeeds (ground-value main skips the kernel door)");
+    }
+    let ty = env.global_type("main").expect("main type").clone();
+    let term = env.global_term("main").expect("main term").clone();
+    // The heart of the diagnosis: the KERNEL ITSELF rejects the stored term, so the re-checker's
+    // `Reject` is correct — the elaborated core term is genuinely ill-scoped.
+    assert!(
+        blight_kernel::check_top_with(env.signature().clone(), term.clone(), ty.clone()).is_ok(),
+        "the kernel should accept `main`'s stored core term (currently fails: elaborator de-Bruijn skew)"
+    );
+    blight_recheck::recheck_judgement(
+        env.signature(),
+        &blight_kernel::Judgement::HasType { term, ty },
+    )
+    .expect("re-checker ACCEPTS a nested parameterized-family (Pair-of-Pair) match");
+}
+
 /// `int_arith.bl`: native machine `Int` (M11). `(int* (int 100000) (int 100000))` type-checks at
 /// `Int` and — unlike the unary-`Nat` tower — the re-checker *ACCEPTS* it: `Int`/`IntLit`/`IntPrim`
 /// are primitive kernel nodes the independent re-checker models directly. It defines a buildable
