@@ -507,13 +507,21 @@ impl<'ctx> Codegen<'ctx> {
             // x86_64 stack. Emit a STRONG tailcc wrapper that ccc-calls the C impl; `make_cont` stores
             // THIS as the continuation's code pointer, so both the IR path and `bl_apply1` reach it as
             // tailcc, uniformly. effects.c ships a weak ccc `bl_cont_apply_tc` for C-only harnesses.
-            let cont_impl = self.module.get_function("bl_cont_apply").unwrap_or_else(|| {
-                self.module
-                    .add_function("bl_cont_apply", self.func_ty(), Some(Linkage::External))
-            });
-            let cont_tc =
-                self.module
-                    .add_function("bl_cont_apply_tc", self.func_ty(), Some(Linkage::External));
+            let cont_impl = self
+                .module
+                .get_function("bl_cont_apply")
+                .unwrap_or_else(|| {
+                    self.module.add_function(
+                        "bl_cont_apply",
+                        self.func_ty(),
+                        Some(Linkage::External),
+                    )
+                });
+            let cont_tc = self.module.add_function(
+                "bl_cont_apply_tc",
+                self.func_ty(),
+                Some(Linkage::External),
+            );
             cont_tc.set_call_conventions(self.call_conv); // tailcc entry
             let cbb = self.context.append_basic_block(cont_tc, "entry");
             let cb = self.context.create_builder();
