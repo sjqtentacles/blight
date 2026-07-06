@@ -133,6 +133,7 @@ static int in_old_from(BlValue p) {
 }
 
 void bl_gc_init(size_t heap_bytes) {
+  fprintf(stderr, "[rt] gc_init enter (heap=%zu)\n", heap_bytes); fflush(stderr); /* TEMP: localize Linux segfault */
   /* Split the budget: a modest nursery, the rest into two old semi-spaces. The divisors and absolute
    * sizes are env-tunable (A4); see the knob documentation above. */
   size_t nursery_div = env_size("BL_GC_NURSERY_DIV", 8);

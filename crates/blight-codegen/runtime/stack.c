@@ -35,7 +35,9 @@ static Segment *new_segment(size_t size, Segment *prev) {
 }
 
 void bl_stack_init(void) {
+  fprintf(stderr, "[rt] stack_init enter\n"); fflush(stderr); /* TEMP: localize Linux segfault */
   g_seg = new_segment(g_seg_default, NULL);
+  fprintf(stderr, "[rt] stack_init ok\n"); fflush(stderr); /* TEMP */
 }
 
 void *bl_stack_grow(size_t bytes) {
