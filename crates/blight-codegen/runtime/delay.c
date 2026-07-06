@@ -19,8 +19,9 @@
 typedef BlValue (*BlStep)(BlValue closure, BlValue arg);
 
 static BlValue step_thunk(BlValue thunk) {
-  BlStep fn = (BlStep)(void *)(uintptr_t)thunk->header.aux;
-  return fn(thunk, NULL);
+  /* Route through bl_call_tailcc: the thunk's code is a lifted (tailcc) function; a direct C-pointer
+   * call would use the wrong ABI on x86_64 (tailcc≠ccc) and segfault. See blight_rt.h. */
+  return bl_call_tailcc((void *)(uintptr_t)thunk->header.aux, thunk, NULL);
 }
 
 BL_HOT BlValue bl_force(BlValue delay) {

@@ -360,6 +360,9 @@ typedef struct BlStrData {
 
 static BlValue bl_string_from_view(const uint64_t *cps, uint64_t off, uint64_t len) {
   BlStrData *d = (BlStrData *)malloc(sizeof(BlStrData));
+  /* The view struct hangs off `header.aux` of a zero-field BL_STRING the GC copies but never traces,
+   * so it is intentionally immortal (freeing it would dangle the aux pointer). Tell LSan so. */
+  BL_LSAN_IGNORE(d);
   d->cps = cps;
   d->off = off;
   d->len = len;
@@ -374,6 +377,7 @@ BlValue bl_string_from_codepoints(const uint64_t *cps, uint64_t n) {
   if (n != 0) {
     buf = (uint64_t *)malloc((size_t)n * sizeof(uint64_t));
     memcpy(buf, cps, (size_t)n * sizeof(uint64_t));
+    BL_LSAN_IGNORE(buf); /* program-lifetime intern buffer, never freed by design (see above) */
   }
   return bl_string_from_view(buf, 0, n);
 }

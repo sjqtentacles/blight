@@ -473,6 +473,69 @@ impl<'ctx> Codegen<'ctx> {
             self.emit_tail(&f.body, fv, &mut fr, funcs_ref, true, 0)?;
         }
 
+        // P0 (Linux x86_64 fix): emit the strong `bl_call_tailcc` adapter. Lifted functions use the
+        // `tailcc` convention on native, whose x86_64 register/stack ABI differs from C's — so the C
+        // runtime (bl_apply1 / bl_app_global / the delay stepper / graphics) cannot call a lifted code
+        // pointer through a plain C function pointer without corrupting the stack (segfault; the two
+        // ABIs happen to coincide on arm64, which is why it only bit x86_64). Those sites route through
+        // this adapter instead: a C-callable (ccc) function that performs the closure-code indirect
+        // call under the lifted convention. Native only — on wasm the lifted convention is already
+        // ccc, so the weak ccc fallback in effects.c is correct and no strong override is needed.
+        if self.call_conv == TAILCC {
+            let p = self.ptr_ty();
+            let adapter_ty = p.fn_type(&[p.into(), p.into(), p.into()], false);
+            let adapter =
+                self.module
+                    .add_function("bl_call_tailcc", adapter_ty, Some(Linkage::External));
+            let abb = self.context.append_basic_block(adapter, "entry");
+            let ab = self.context.create_builder();
+            ab.position_at_end(abb);
+            let fnp = adapter.get_nth_param(0).unwrap().into_pointer_value();
+            let a0 = adapter.get_nth_param(1).unwrap();
+            let a1 = adapter.get_nth_param(2).unwrap();
+            let call = ab
+                .build_indirect_call(self.func_ty(), fnp, &[a0.into(), a1.into()], "adapt")
+                .unwrap();
+            call.set_call_convention(self.call_conv);
+            let r = call.try_as_basic_value().unwrap_basic();
+            ab.build_return(Some(&r)).unwrap();
+
+            // Tailcc trampoline for the runtime's delimited continuation (`bl_cont_apply`, effects.c).
+            // A continuation `k` is a BL_CLOSURE whose code is an ordinary C (ccc) function, but user
+            // code applies `(k v)` through the pure application path — `build_indirect_call` under the
+            // lifted (tailcc) convention (see `Tail::TailCall`) — where a ccc callee corrupts the
+            // x86_64 stack. Emit a STRONG tailcc wrapper that ccc-calls the C impl; `make_cont` stores
+            // THIS as the continuation's code pointer, so both the IR path and `bl_apply1` reach it as
+            // tailcc, uniformly. effects.c ships a weak ccc `bl_cont_apply_tc` for C-only harnesses.
+            let cont_impl = self
+                .module
+                .get_function("bl_cont_apply")
+                .unwrap_or_else(|| {
+                    self.module.add_function(
+                        "bl_cont_apply",
+                        self.func_ty(),
+                        Some(Linkage::External),
+                    )
+                });
+            let cont_tc = self.module.add_function(
+                "bl_cont_apply_tc",
+                self.func_ty(),
+                Some(Linkage::External),
+            );
+            cont_tc.set_call_conventions(self.call_conv); // tailcc entry
+            let cbb = self.context.append_basic_block(cont_tc, "entry");
+            let cb = self.context.create_builder();
+            cb.position_at_end(cbb);
+            let c0 = cont_tc.get_nth_param(0).unwrap();
+            let c1 = cont_tc.get_nth_param(1).unwrap();
+            // Plain ccc call to the C impl (do NOT set tailcc on this call).
+            let ccall = cb
+                .build_call(cont_impl, &[c0.into(), c1.into()], "cont_impl")
+                .unwrap();
+            let cr = ccall.try_as_basic_value().unwrap_basic();
+            cb.build_return(Some(&cr)).unwrap();
+        }
+
         // Emit `bl_program_entry() -> ptr` wrapping the entry tail.
         let entry_fn =
             self.module
@@ -1832,8 +1895,6 @@ impl<'ctx> Codegen<'ctx> {
             Target::Wasm32 => {
                 LlvmTarget::initialize_webassembly(&InitializationConfig::default());
                 let triple = TargetTriple::create("wasm32-unknown-unknown");
-                // The module's data layout/triple must match the target machine for wasm.
-                self.module.set_triple(&triple);
                 (triple, String::new(), String::new(), RelocMode::Static)
             }
         };
@@ -1848,10 +1909,14 @@ impl<'ctx> Codegen<'ctx> {
                 CodeModel::Default,
             )
             .ok_or("could not create target machine")?;
-        if matches!(target, Target::Wasm32) {
-            self.module
-                .set_data_layout(&machine.get_target_data().get_data_layout());
-        }
+        // The module must carry the target machine's triple + data layout before any target-aware IR
+        // pass or emission runs — for EVERY target, not just wasm. With an empty/default layout the
+        // optimizer and instruction selector assume the wrong pointer size / alignment / ABI: native
+        // x86_64 was silently miscompiled (it worked by luck on the arm64 dev host, but segfaulted on
+        // Linux x86_64). `machine.get_target_data()` gives the exact layout for the triple we emit with.
+        self.module.set_triple(&triple);
+        self.module
+            .set_data_layout(&machine.get_target_data().get_data_layout());
         // Run the IR-level optimization pipeline (new pass manager) before object emission. The
         // `default<Ox>` pipelines preserve `musttail` markers, so tail-call soundness is unaffected;
         // a verifier pass guards against a malformed module reaching the backend.
@@ -1907,7 +1972,6 @@ impl<'ctx> Codegen<'ctx> {
             Target::Wasm32 => {
                 LlvmTarget::initialize_webassembly(&InitializationConfig::default());
                 let triple = TargetTriple::create("wasm32-unknown-unknown");
-                self.module.set_triple(&triple);
                 (triple, String::new(), String::new(), RelocMode::Static)
             }
         };
@@ -1922,10 +1986,13 @@ impl<'ctx> Codegen<'ctx> {
                 CodeModel::Default,
             )
             .ok_or("could not create target machine")?;
-        if matches!(target, Target::Wasm32) {
-            self.module
-                .set_data_layout(&machine.get_target_data().get_data_layout());
-        }
+        // Same defect/fix as `write_object`: the module must carry the target machine's triple + data
+        // layout for EVERY target before passes/emission run. This is the LTO/bitcode path (the default
+        // `blight build`, `BL_NO_LTO` unset → `build_lto`), so the missing native layout here is what the
+        // segfaulting Linux benches actually went through.
+        self.module.set_triple(&triple);
+        self.module
+            .set_data_layout(&machine.get_target_data().get_data_layout());
         if let Some(pipeline) = opt.pipeline() {
             use inkwell::passes::PassBuilderOptions;
             let options = PassBuilderOptions::create();

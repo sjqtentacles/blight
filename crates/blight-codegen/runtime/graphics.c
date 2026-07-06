@@ -130,17 +130,20 @@ static void bl_graphics_present(void) {
   SDL_RenderPresent(g_renderer);
 }
 
-/* `is_opnode`/`bl_apply1` mirror the identically-named `static` helpers in `effects.c` exactly
- * (effects.c's copies are file-private, and this is a separate translation unit) — the same
- * duplication `runtime/tests/effects_test.c` already uses for its own hand-built OpNode trees. Both
- * are trivial, defined only in terms of the public `BlValue`/`BlHeader` layout, so there is nothing
- * meaningfully "shared logic" to factor out. */
+/* `bl_gfx_is_opnode` mirrors the identically-named file-private helper in `effects.c` (trivial,
+ * defined only in terms of the public `BlValue`/`BlHeader` layout — the same duplication
+ * `runtime/tests/effects_test.c` already uses). `bl_gfx_apply1`, by contrast, now DELEGATES to the
+ * shared external `bl_apply1` (blight_rt.h) rather than duplicating it, so graphics dispatch gets the
+ * same ccc/tailcc closure-convention dispatch every other effect runner uses. */
 static int bl_gfx_is_opnode(BlValue v) { return v != NULL && !bl_is_imm(v) && BL_TAG(v) == BL_OPNODE; }
 
 static BlValue bl_gfx_apply1(BlValue clo, BlValue arg) {
-  typedef BlValue (*Fn1)(BlValue, BlValue);
-  Fn1 fn = (Fn1)(void *)(uintptr_t)clo->header.aux;
-  return fn(clo, arg);
+  /* Route through the shared bl_apply1, NOT a raw bl_call_tailcc: a graphics op's continuation is a
+   * `perform` thunk — a runtime *ccc* closure (bl_perform_apply) — which bl_apply1 dispatches to a ccc
+   * call. A raw tailcc call (as this did before) mis-calls it and corrupts the x86_64 stack, exactly
+   * how graphics_scratch segfaulted on Linux while the bl_apply1-based console/bytes runners did not.
+   * See blight_rt.h. */
+  return bl_apply1(clo, arg);
 }
 
 BlValue bl_run_graphics(BlValue comp) {

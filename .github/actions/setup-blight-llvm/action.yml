@@ -1,0 +1,44 @@
+name: Setup Blight LLVM toolchain
+description: >
+  Rust toolchain + a shared compile cache (Swatinem/rust-cache with a common key so the split
+  llvm-family jobs restore one prebuilt target dir) + LLVM 18 (clang / wasm-ld / lld / Polly,
+  optionally SDL2) and every env var the blight-codegen `llvm`/`graphics` build needs. Assumes the
+  repository is already checked out (this action lives in the repo, so checkout must precede it).
+
+inputs:
+  sdl2:
+    description: Also install libsdl2-dev (for the `graphics` feature).
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+    # One shared key across every job that uses this action, so the parallel llvm-family jobs all
+    # restore the SAME cached target dir (LLVM-sys bindings + deps prebuilt) instead of each compiling
+    # the heavy dependency graph cold. That shared restore is what makes splitting the old monolithic
+    # llvm job into parallel jobs cheap rather than N× the dependency compile.
+    - uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: blight-llvm
+    - name: Install LLVM 18 (+ optional SDL2)
+      shell: bash
+      run: |
+        wget https://apt.llvm.org/llvm.sh
+        chmod +x llvm.sh
+        sudo ./llvm.sh 18
+        # lld-18 supplies wasm-ld (the wasm32 link `driver::link_wasm` needs); libpolly-18-dev supplies
+        # the static Polly lib `llvm-sys` links against (llvm.sh installs the runtime but not that dev
+        # static lib). SDL2 only when the graphics feature is being built.
+        sudo apt-get install -y lld-18 libpolly-18-dev
+        if [ "${{ inputs.sdl2 }}" = "true" ]; then
+          sudo apt-get install -y libsdl2-dev
+        fi
+        {
+          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18"
+          echo "BLIGHT_WASM_CC=$(command -v clang-18)"
+          echo "BLIGHT_WASM_LD=$(command -v wasm-ld-18)"
+        } >> "$GITHUB_ENV"

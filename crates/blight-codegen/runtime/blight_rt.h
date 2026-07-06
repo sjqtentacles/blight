@@ -195,6 +195,27 @@ static inline BlValue bl_obj_field(BlValue v, uint32_t i) {
 #define BL_ALWAYS_INLINE
 #endif
 
+/* Mark an allocation as intentionally immortal so LeakSanitizer does not report it. A few runtime
+ * buffers — notably the program-lifetime codepoint intern pool behind BL_STRING (numeric.c), which
+ * is deliberately never freed and shared by every tail view for the whole run — are immortal by
+ * design; LSan cannot know that and flags them as leaks. `__lsan_ignore_object` is the sanitizer's
+ * own API for exactly this case, so genuine leaks are still caught. Compiles to nothing unless the
+ * translation unit is built under AddressSanitizer (whose LSan component ships the interface header);
+ * an ordinary build takes no dependency on any sanitizer runtime. */
+#if defined(__SANITIZE_ADDRESS__)
+#define BL_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define BL_ASAN 1
+#endif
+#endif
+#ifdef BL_ASAN
+#include <sanitizer/lsan_interface.h>
+#define BL_LSAN_IGNORE(p) __lsan_ignore_object(p)
+#else
+#define BL_LSAN_IGNORE(p) ((void)(p))
+#endif
+
 /* ---- allocation + GC (gc.c) ---- */
 void bl_gc_init(size_t heap_bytes);
 BlValue bl_alloc(BlTag tag, uint32_t nfields, uint64_t aux);
@@ -314,6 +335,24 @@ BlValue bl_app(BlValue f, BlValue a);
  * function pointer) with a NULL env and argument `a`, skipping the per-call closure allocation. An
  * effectful (OpNode) argument falls back to `bl_app` so effects bubble identically to a normal call. */
 BlValue bl_app_global(void *fnptr, BlValue a);
+
+/* Call a *lifted* function pointer (`fn`, an opaque code pointer stored in a closure's header.aux)
+ * with the object's calling convention. Every C-runtime site that applies compiled closure code —
+ * `bl_apply1`, `bl_app_global`, the delay stepper, graphics dispatch — MUST go through this rather
+ * than casting `fn` to a plain C function pointer and calling it directly: on native the lifted
+ * functions use `tailcc`, whose x86_64 register/stack ABI differs from the C convention, so a direct
+ * C call corrupts the stack and segfaults (it happens to coincide on arm64). Codegen emits a strong
+ * definition that performs the call under `tailcc`; a weak C fallback (ccc) below keeps C-only test
+ * harnesses — which link the runtime but never emit a Blight program — linkable. */
+BlValue bl_call_tailcc(void *fn, BlValue clo, BlValue arg);
+
+/* Apply a closure value to one argument — the shared runtime apply used by every effect runner
+ * (console / bytes / arrays / graphics) and the handler fold. It distinguishes the runtime's OWN ccc
+ * closures (continuations, perform/compose thunks, con-bubble rebuilders) from lifted tailcc closures
+ * and calls each under the correct convention (see effects.c). A site that applies a closure through
+ * anything else — e.g. a raw `bl_call_tailcc`, which assumes tailcc — mis-calls those ccc runtime
+ * closures and corrupts the x86_64 stack (exactly how graphics dispatch segfaulted). */
+BlValue bl_apply1(BlValue clo, BlValue arg);
 
 /* OpNode-aware data construction (spec §4.3): after a Con/Tuple is built eagerly, this bubbles any
  * effectful field so `Succ (perform op a)` suspends with continuation `λn. Succ n`. Pure objects are

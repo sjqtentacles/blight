@@ -32,12 +32,6 @@
 #include <stdio.h>
 #include <string.h>
 
-/* The two-argument calling convention every lifted top-level function shares (env, arg) -> result
- * (mirrors `effects.c`'s identically-named, identically-scoped local typedef). Used by
- * `bl_pool_submit_code` (P4, roadmap Wave 10 / auto-parallelism) to invoke a task resolved by P5
- * `code_id` rather than a native `BlWorkerFn`. */
-typedef BlValue (*BlFn2)(BlValue env, BlValue arg);
-
 /* Which calling shape a task uses: a hand-written native C `BlWorkerFn` (the original M17 API,
  * `bl_pool_submit`) or a codegen-resolved lifted Blight function (P4's `bl_pool_submit_code`). */
 typedef enum { BL_TASK_NATIVE, BL_TASK_CODE } BlTaskKind;
@@ -49,7 +43,8 @@ typedef enum { BL_TASK_NATIVE, BL_TASK_CODE } BlTaskKind;
 struct BlTask {
   BlTaskKind kind;
   BlWorkerFn fn; /* BL_TASK_NATIVE: fn(arg) */
-  void *code_fn; /* BL_TASK_CODE: ((BlFn2)code_fn)(env, arg) — resolved from a P5 code_id at submit */
+  void *code_fn; /* BL_TASK_CODE: a lifted (tailcc) fn, invoked bl_call_tailcc(code_fn, env, arg);
+                  * resolved from a P5 code_id at submit */
   /* A serialized snapshot of the captured env (BL_TASK_CODE only; absent for a captureless
    * closure), so the worker can rebuild it in its own heap without touching the submitter's heap. */
   void *env_blob;
@@ -110,7 +105,10 @@ static void *worker_loop(void *arg) {
     if (t->kind == BL_TASK_CODE) {
       BlValue env = t->has_env ? bl_value_deserialize(t->env_blob, t->env_blob_len) : NULL;
       bl_gc_push_root(&env);
-      res = ((BlFn2)t->code_fn)(env, arg);
+      /* `code_fn` is a codegen-resolved *lifted* Blight function (tailcc on native); route through the
+       * adapter rather than a plain C call, which would use the wrong ABI on x86_64 and corrupt the
+       * stack. `env` plays the closure/first-arg role. See blight_rt.h `bl_call_tailcc`. */
+      res = bl_call_tailcc(t->code_fn, env, arg);
       bl_gc_pop_roots(1); /* env */
     } else {
       res = t->fn(arg);

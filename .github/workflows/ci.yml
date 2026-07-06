@@ -5,9 +5,20 @@ on:
     branches: [main]
   pull_request:
 
+# Cancel an in-flight run when a newer commit is pushed to the same ref: during push-heavy
+# iteration the old ~13-min run is dead weight, and each superseded run otherwise holds runner
+# slots the new one then queues behind. `main` is excluded (group is unique per-SHA there) so no
+# post-merge run is ever cancelled by a later merge.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # Incremental compilation buys little in CI (each run starts from a restored cache, not a warm
+  # target dir mid-edit) and bloats the rust-cache; off is the recommended CI default.
+  CARGO_INCREMENTAL: 0
 
 jobs:
   # R1 (v0.1 roadmap): the checker compiles for wasm32-unknown-unknown with the `net` feature
@@ -43,7 +54,9 @@ jobs:
           grep -q 'worker.js' playground/dist/playground.js
           grep -q 'blight_playground.wasm' playground/dist/worker.js
 
-  # Fast checks + the test suite that does not need the native backend.
+  # Fast checks + the test suite that does not need the native backend. This is the canonical home for
+  # the pure crates (kernel / elab / recheck / …): they carry no `llvm`/`graphics`-conditional code, so
+  # the feature jobs below deliberately do NOT re-run them — this `--workspace` pass covers them once.
   check:
     name: fmt + clippy + test (no llvm)
     runs-on: ubuntu-latest
@@ -65,58 +78,64 @@ jobs:
       - name: blight fmt --check (.bl corpus)
         run: cargo run -p blight-repl --bin blight -- fmt --check examples crates/blight-prelude bench/games
 
-  # The native/WASM backend path, gated behind the `llvm` feature (LLVM 18 + clang).
+  # The native/WASM backend path, gated behind the `llvm` feature (LLVM 18 + clang). Setup (toolchain,
+  # shared compile cache, LLVM 18) is factored into the local `setup-blight-llvm` composite action,
+  # reused by every llvm-family job below so the install/cache boilerplate lives in one place.
+  #
+  # The old single `llvm` job ran clippy → test → differential matrix → bench goldens → TSan strictly
+  # SERIALLY; the three trailing gates are independent, so they are now their own jobs
+  # (`llvm-differential`, `llvm-extras`) that run in parallel with this one, hidden under the long
+  # pole's shadow rather than tacked onto the end of it. Tests here are scoped to the two feature crates
+  # (`blight-codegen`, `blight-repl`) — the only crates with any `llvm`-conditional code — since the
+  # pure crates compile identically with or without the feature and are already covered by `check`.
   llvm:
     name: clippy + test (llvm)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - name: Install LLVM 18
-        run: |
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 18
-          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
-          # Wave 10 / P3: the wasm32 target link (`driver::link_wasm`, exercised by
-          # `blight-codegen/tests/wasm_exec.rs`) needs a wasm-capable `clang` (llvm.sh's `clang-18`
-          # already is one — unlike distro/Apple clang, apt.llvm.org builds every target in) and
-          # `wasm-ld` (shipped in the versioned `lld-18` package, not installed by `llvm.sh` itself).
-          # `libpolly-18-dev` supplies the static `Polly` lib `llvm-sys` links against — `llvm.sh`
-          # installs the LLVM runtime but not that dev static lib, so without it `llvm-sys` fails
-          # "could not find native static library `Polly`".
-          sudo apt-get install -y lld-18 libpolly-18-dev
-          echo "BLIGHT_WASM_CC=$(command -v clang-18)" >> "$GITHUB_ENV"
-          echo "BLIGHT_WASM_LD=$(command -v wasm-ld-18)" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup-blight-llvm
       - name: Clippy (llvm)
-        run: cargo clippy --workspace --all-targets --features blight-codegen/llvm,blight-repl/llvm -- -D warnings
+        run: cargo clippy -p blight-codegen -p blight-repl --all-targets --features blight-codegen/llvm,blight-repl/llvm -- -D warnings
       - name: Test (llvm)
-        run: cargo test --workspace --features blight-codegen/llvm,blight-repl/llvm
-      # B1: the *full* differential bit-identity matrix (every fast-path on/off vs. the slow
-      # reference). It is `#[ignore]`d in the normal run because it builds many native binaries; here
-      # we run it explicitly so a miscompiling optimization is caught on every PR.
+        run: cargo test -p blight-codegen -p blight-repl --features blight-codegen/llvm,blight-repl/llvm
+
+  # B1: the *full* differential bit-identity matrix (every fast-path on/off vs. the slow reference). It
+  # is `#[ignore]`d in the normal run because it builds many native binaries; its own job runs it in
+  # parallel with the main `llvm` test instead of serially after it.
+  llvm-differential:
+    name: differential matrix (llvm, bit-identity)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-blight-llvm
       - name: Differential matrix (full, bit-identity)
         run: cargo test -p blight-repl --features blight-codegen/llvm,blight-repl/llvm differential -- --ignored --nocapture
-      # Bench *correctness* gate: each Blight benchmark impl must still print its committed golden.
+
+  # The two smaller native-backend gates, grouped in one parallel job (each is quick relative to a cold
+  # LLVM setup, so grouping avoids paying that setup twice):
+  #   - Bench goldens: each Blight benchmark impl must still print its committed golden value
+  #     (correctness, not timing) — `bench/goldens.sh` builds its own release `blight`.
+  #   - ThreadSanitizer over the share-nothing multicore runtime (workers, pools): the threaded C
+  #     harnesses rebuilt with `-fsanitize=thread` when `BL_TSAN` is set catch data races in the
+  #     thread-local GC / worker pool that the normal run cannot see.
+  llvm-extras:
+    name: bench goldens + tsan (llvm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-blight-llvm
       - name: Bench goldens
         run: bash bench/goldens.sh
-      # ThreadSanitizer over the share-nothing multicore runtime (workers, pools). The threaded C
-      # harnesses are rebuilt with `-fsanitize=thread` when `BL_TSAN` is set, catching data races in
-      # the thread-local GC / worker pool that the normal run cannot see. (The `runtime` module is
-      # gated on the `llvm` feature, so this lives in the llvm job where LLVM is already installed.)
       - name: ThreadSanitizer (multicore runtime)
         env:
           BL_TSAN: "1"
         run: cargo test -p blight-codegen --features llvm -- share_nothing worker_pool --nocapture
 
-  # Wave 10 / P2: the `graphics` cargo feature (runtime/graphics.c + SDL2), gated in its own job so
-  # the default `llvm` job above never needs SDL2 dev headers. `SDL_VIDEODRIVER=dummy` (SDL's
-  # headless backend, no real display/GPU needed) is exported for the whole job so every graphics
-  # test — the C `graphics_test.c` harness and `example_graphics_scratch_builds_and_runs` alike —
-  # runs identically on a GUI-less CI runner as it would against a real window.
+  # Wave 10 / P2: the `graphics` cargo feature (runtime/graphics.c + SDL2), in its own job so the
+  # default llvm jobs never need SDL2 dev headers. `SDL_VIDEODRIVER=dummy` (SDL's headless backend, no
+  # real display/GPU needed) is exported for the whole job so every graphics test runs identically on a
+  # GUI-less CI runner as against a real window. Tests scoped to the feature crates, same rationale as
+  # the `llvm` job.
   graphics:
     name: clippy + test (llvm + graphics)
     runs-on: ubuntu-latest
@@ -124,22 +143,13 @@ jobs:
       SDL_VIDEODRIVER: dummy
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/setup-blight-llvm
         with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - name: Install LLVM 18 + SDL2
-        run: |
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 18
-          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
-          # libsdl2-dev for the graphics feature; libpolly-18-dev for `llvm-sys`'s static Polly link.
-          sudo apt-get install -y libsdl2-dev libpolly-18-dev
+          sdl2: "true"
       - name: Clippy (llvm + graphics)
-        run: cargo clippy --workspace --all-targets --features blight-codegen/graphics,blight-repl/graphics -- -D warnings
+        run: cargo clippy -p blight-codegen -p blight-repl --all-targets --features blight-codegen/graphics,blight-repl/graphics -- -D warnings
       - name: Test (llvm + graphics)
-        run: cargo test --workspace --features blight-codegen/graphics,blight-repl/graphics
+        run: cargo test -p blight-codegen -p blight-repl --features blight-codegen/graphics,blight-repl/graphics
 
   # D1: a *deterministic* gate on the committed fuzz seed corpus (Track D). `-runs=0` replays every
   # committed corpus file exactly once against the current build and exits non-zero on any crash —

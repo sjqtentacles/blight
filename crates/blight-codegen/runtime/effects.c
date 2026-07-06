@@ -92,7 +92,7 @@ const char *bl_effect_name_of(uint64_t idx) { return effect_name_of(idx); }
 
 static int is_opnode(BlValue v);
 static BlValue bl_perform_idx(uint64_t opidx, BlValue arg);
-static BlValue bl_apply1(BlValue clo, BlValue arg); /* fwd */
+BlValue bl_apply1(BlValue clo, BlValue arg); /* fwd */
 
 /* A "perform on resume" closure: fields [0]=old continuation (or NULL), [1]=BL_INT op-index. When
  * resumed with a value, replay the captured continuation then perform the recorded op on the result.
@@ -155,7 +155,7 @@ BlValue bl_perform(const char *effect, const char *op, BlValue arg) {
  *   - effectful function `f`: bubble, recording "apply my resume value to the fixed argument `a`".
  * When a handler later resumes the continuation with a value `v`, the composed closure replays the
  * old continuation then performs the recorded application — excavating the captured computation. */
-static BlValue bl_apply1(BlValue clo, BlValue arg); /* fwd */
+BlValue bl_apply1(BlValue clo, BlValue arg); /* fwd */
 
 /* A composed-continuation closure. fields: [0]=old continuation (or NULL), [1]=mode tag boxed as
  * BL_INT (0 = apply f to resume; 1 = apply resume to a), [2]=the fixed operand (f or a). */
@@ -244,7 +244,7 @@ BlValue bl_app_global(void *fnptr, BlValue a) {
     bl_gc_pop_roots(1);
     return bl_app(clo, a);
   }
-  return ((BlFn2)fnptr)(NULL, a);
+  return bl_call_tailcc(fnptr, NULL, a);
 }
 
 /* ---- OpNode-aware data construction (spec §4.3). ----
@@ -373,9 +373,38 @@ BlValue bl_handle(BlValue env, BlThunk body, BlReturnClause ret,
  * the clause representation differs. */
 typedef BlValue (*BlClo1)(BlValue clo, BlValue arg);
 
-static BlValue bl_apply1(BlValue clo, BlValue arg) {
-  BlClo1 fn = (BlClo1)(void *)(uintptr_t)clo->header.aux;
-  return fn(clo, arg);
+/* Weak ccc fallback for `bl_call_tailcc` (declared in blight_rt.h). Codegen emits a STRONG `tailcc`
+ * definition that overrides this in every real `blight build` binary; this fallback exists only so
+ * C-only runtime test harnesses (which link the runtime but emit no Blight program, hence no strong
+ * definition) still link. In those harnesses every linked function is ccc, so a plain call is correct. */
+__attribute__((weak)) BlValue bl_call_tailcc(void *fn, BlValue clo, BlValue arg) {
+  return ((BlClo1)fn)(clo, arg);
+}
+
+/* `bl_cont_apply` (the delimited continuation's code) is EXTERNAL: the codegen emits a strong tailcc
+ * `bl_cont_apply_tc` wrapping it (see llvm.rs), and `make_cont` stores that wrapper as the continuation
+ * closure's code pointer so it is tailcc-callable on the pure IR application path too. This weak ccc
+ * `bl_cont_apply_tc` only keeps C-only runtime harnesses (no codegen; everything ccc) linking. */
+BlValue bl_cont_apply(BlValue clo, BlValue arg);
+__attribute__((weak)) BlValue bl_cont_apply_tc(BlValue clo, BlValue arg) {
+  return bl_cont_apply(clo, arg);
+}
+
+BlValue bl_apply1(BlValue clo, BlValue arg) {
+  void *fn = (void *)(uintptr_t)clo->header.aux;
+  /* Two kinds of closure share this apply path with DIFFERENT native calling conventions. A lifted
+   * Blight closure's code is `tailcc` and goes through the adapter (calling it as ccc corrupts the
+   * x86_64 stack — the original Linux segfault). The runtime also synthesizes closures whose code is
+   * an ordinary C (`ccc`) function applied ONLY from here — the `perform`/compose thunks and the
+   * con-bubble field rebuilder — which must be called ccc (calling ccc as tailcc corrupts the stack
+   * just the same). Dispatch by code pointer. (The delimited continuation is the one runtime closure
+   * user code can also apply via the pure IR path, so it instead carries the tailcc `bl_cont_apply_tc`
+   * wrapper and needs no special case here — it falls through to the adapter like any lifted closure.) */
+  if (fn == (void *)bl_perform_apply || fn == (void *)bl_compose_apply ||
+      fn == (void *)bl_rebuild_field_apply) {
+    return ((BlClo1)fn)(clo, arg);
+  }
+  return bl_call_tailcc(fn, clo, arg);
 }
 
 /* A heap "handler record" capturing everything needed to re-fold a resumed computation under the
@@ -398,7 +427,8 @@ typedef struct BlHandler {
  * an opaque integer-tagged object). */
 static BlValue bl_handle_fold(BlHandler *h, BlValue comp);
 
-static BlValue bl_cont_apply(BlValue clo, BlValue v) {
+/* EXTERNAL (not static): the codegen's strong tailcc `bl_cont_apply_tc` wrapper ccc-calls this. */
+BlValue bl_cont_apply(BlValue clo, BlValue v) {
   BlValue kont = clo->fields[0];
   BlHandler *h = (BlHandler *)(uintptr_t)clo->fields[1]->header.aux;
   BlValue resumed = (kont == NULL) ? v : bl_apply1(kont, v);
@@ -409,7 +439,10 @@ static BlValue make_cont(BlHandler *h, BlValue kont) {
   /* field[1] boxes the handler pointer as a BL_INT (an opaque, fieldless object the GC won't chase
    * into the malloc'd record). field[0] is the real captured continuation (traced). GC-safe: alloc
    * the closure first and root it before allocating the box. */
-  BlValue clo = bl_alloc(BL_CLOSURE, 2, (uint64_t)(uintptr_t)(void *)bl_cont_apply);
+  /* Store the codegen's tailcc `bl_cont_apply_tc` wrapper (weak ccc fallback in C-only harnesses), not
+   * the raw ccc `bl_cont_apply`, so user code applying this continuation on the pure IR path (a tailcc
+   * indirect call) hits the right ABI. See blight_rt.h / llvm.rs. */
+  BlValue clo = bl_alloc(BL_CLOSURE, 2, (uint64_t)(uintptr_t)(void *)bl_cont_apply_tc);
   clo->fields[0] = kont;
   bl_gc_push_root(&clo);
   BlValue hbox = bl_alloc(BL_INT, 0, (uint64_t)(uintptr_t)h);
