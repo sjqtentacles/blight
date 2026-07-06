@@ -796,6 +796,78 @@ fn bootstrap_self_host_loads() {
     });
 }
 
+/// S4c — the self-hosted **dependent** checker (`spore_dep.bl`): a bidirectional, conversion-free
+/// dependent type checker over spore.bl's raw `BTerm`, written in Blight. The intrinsic route to
+/// dependent Pi is blocked (it needs an inductive-inductive `BTy`/`BTyCtx` pair the kernel's
+/// no-mutual-datatype fragment forbids), so the dependent fragment is checked extrinsically by a
+/// single fuel-recursive function `dc` (infer + check merged, since mutual function recursion is also
+/// unavailable). Loading the file type-checks the whole checker through the kernel; its `-refl` demos
+/// additionally make the kernel CERTIFY the checker's verdicts by definitional computation — e.g. the
+/// polymorphic identity `λA.λx.x` checks against `Π(A:Type0).Π(x:A).A`, and three ill-typed terms are
+/// rejected. (A negative-control assertion of a wrong verdict fails `refl`, so the demos have teeth.)
+#[test]
+fn dep_checker_self_host_loads() {
+    on_big_stack(|| {
+        let mut env = ElabEnv::new();
+        let outcomes = {
+            let mut prog = Program::with_resolver(&mut env, prelude_resolver);
+            prog.run("(load \"spore_dep.bl\")")
+                .expect("spore_dep.bl is a dependent checker over BTerm and type-checks")
+        };
+        // Every top-level form — the checker and its kernel-certified `-refl` verdict demos — is
+        // kernel-accepted (a declaration or a checked judgment); none errors.
+        assert!(
+            outcomes
+                .iter()
+                .all(|o| matches!(o, Outcome::Declared | Outcome::Checked(_))),
+            "every spore_dep form is kernel-accepted: {outcomes:?}"
+        );
+        // The checker and its supporting functions are all present.
+        for fnsym in ["bcheck-dep", "binfer", "dc", "bterm-eq", "bctx-lookup", "nat-max"] {
+            assert!(
+                env.global_term(fnsym).is_some(),
+                "dependent checker defines fn `{fnsym}`"
+            );
+        }
+        // The five verdict certificates are kernel-checked globals (proof the checker computes the
+        // right accept/reject on each demo — the type of a `define-by` is a checked `Path`).
+        for cert in [
+            "dep-poly-id-ty-univ1",
+            "dep-poly-id-checks",
+            "dep-app-substitutes-arg",
+            "dep-unbound-var-rejected",
+            "dep-apply-nonfunction-rejected",
+            "dep-lam-vs-nonpi-rejected",
+        ] {
+            assert!(
+                env.global_term(cert).is_some(),
+                "the checker's verdict certificate `{cert}` is kernel-certified"
+            );
+        }
+        // The total checker backbone re-verifies Ok under the independent re-checker; nothing Rejected.
+        let sig = env.signature();
+        let mut dc_ok = false;
+        for (name, term, ty) in env.typed_globals() {
+            let j = blight_kernel::Judgement::HasType { term, ty };
+            match blight_recheck::recheck_judgement(sig, &j) {
+                Ok(()) => {
+                    if name == "dc" || name == "bcheck-dep" {
+                        dc_ok = true;
+                    }
+                }
+                Err(blight_recheck::RecheckError::Declined(_)) => {}
+                Err(blight_recheck::RecheckError::Rejected(m)) => {
+                    panic!("independent re-checker REJECTED dependent-checker global `{name}`: {m}")
+                }
+            }
+        }
+        assert!(
+            dc_ok,
+            "the dependent checker backbone is re-verified Ok by the independent re-checker"
+        );
+    });
+}
+
 /// S2 (v0.1 roadmap): the proposer/disposer bridge printer (`spore_print.bl`) loads and type-checks,
 /// its entry points are present, and its pure structural printers are re-verified `Ok` by the
 /// independent re-checker (nothing `Rejected`). The end-to-end kernel re-check of the bridge's

@@ -489,11 +489,28 @@ S2 bridge differential and growing its corpus by ≥5 cases:
   `inr` payload), `selfhost_check.bl` +2 sources (the Bool `if` and the Sum `case`, read from disk
   and run natively). A general *user-declared* datatype mechanism (arbitrary inductives via an
   object-level datatype environment) remains a deeper follow-up.
-- **S4c** — dependent Pi (BTy indexed by context; the intrinsic two-index machinery is already
-  proven by `spore_intrinsic.bl`).
+- **S4c** — dependent Pi. **[~] DONE via the EXTRINSIC route (2026-07-05); the intrinsic route the
+  original note sketched is BLOCKED.** The sketch ("`BTy` indexed by context") is *inductive-inductive*
+  — contexts contain types and types are indexed by contexts — which the kernel's directly-recursive,
+  no-mutual-datatype fragment forbids (verified: `(defdata Ctx () (csnoc (g Ctx) (a (Ty g))))` fails
+  "unbound name: Ty", and no ordering fixes a mutual dependency; mutual *functions* like `isEven`/
+  `isOdd` fail the same way). So dependent Pi is checked EXTRINSICALLY, over `spore.bl`'s raw
+  de-Bruijn `BTerm` (+ its proven `bsubst`/`bshift`), by a single fuel-recursive checker
+  `spore_dep.bl` (`dc`, infer+check merged since mutual recursion is unavailable). It is a genuine
+  bidirectional **dependent** checker: `BApp` substitutes the argument into the codomain
+  (`bsubst cod 0 a`), so a result type depends on the value applied. SCOPE = the conversion-free
+  fragment (SYNTACTIC conversion via `bterm-eq`; full β/η-conversion needs a normalizer — spore.bl's
+  own metatheory records subject reduction fails without a conversion rule, `preservation_false`).
+  Kernel-certified: 6 `-refl` verdict demos (the poly-identity's type infers to `Univ 1`; `λA.λx.x`
+  checks against `Π(A:Type0).Π(x:A).A`; a dependent application substitutes its argument; three
+  ill-typed terms rejected), a negative-control assertion fails `refl` (teeth), and the whole checker
+  re-verifies `Ok` under the independent re-checker. FOLLOW-UPS: a `BTerm`→kernel-surface embedding
+  for a true differential-vs-kernel; a conversion rule (normalizer) to leave the conversion-free
+  fragment; Σ (`BSig`/`BPair`/`BFst`/`BSnd`) checking.
 
 Each sub-milestone extends BSurf/BTy/BTm + `belaborate` + spore_print + the ⟦·⟧ embedding, and
-keeps everything re-checker-`Ok`.
+keeps everything re-checker-`Ok`. (S4c is the exception — extrinsic, over raw `BTerm`, for the
+inductive-inductive reason above.)
 
 ### [ ] S5 — Stage-1 declaration
 

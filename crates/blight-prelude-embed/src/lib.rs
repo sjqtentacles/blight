@@ -86,6 +86,7 @@ embedded_modules! {
     "spore_codegen_meta.bl",
     "spore_reader.bl",
     "spore_print.bl",
+    "spore_dep.bl",
 }
 
 /// The embedded module paths (the `(load "…")` keys), in table order.

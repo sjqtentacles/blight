@@ -1,0 +1,186 @@
+; spore_dep.bl — S4c: a bidirectional DEPENDENT type checker over spore.bl's raw `BTerm`, in Blight.
+;
+; UNTRUSTED metacircular tower code. Where the S4a/b self-host pipeline (spore_elab.bl `belaborate`)
+; is an *intrinsically-typed* elaborator into a *simply-typed* object core (`BTm g a`), that route
+; CANNOT reach dependent Pi: a dependently-typed intrinsic core needs `BTy` indexed by its context
+; and `BTyCtx` containing `BTy` — a mutually-defined (inductive-inductive) pair the kernel's
+; directly-recursive, no-mutual-datatype fragment forbids (verified: `(defdata Ctx () (csnoc (g Ctx)
+; (a (Ty g))))` fails "unbound name: Ty", and no ordering fixes a mutual dependency). So the dependent
+; fragment is checked the *extrinsic* way instead: over spore.bl's raw, de-Bruijn `BTerm` (one
+; datatype: `BVar`/`BUniv`/`BPi`/`BLam`/`BApp`/…), with a checking FUNCTION. The host kernel certifies
+; this whole file type-checks, and the `-refl` demos below certify the checker's verdicts by
+; computation — Blight describing (and the trusted kernel agreeing on) a dependent checker for itself.
+;
+; SCOPE — the conversion-free fragment. Full dependent checking needs a *conversion* rule (deciding
+; definitional equality up to β/η via normalization); spore.bl's own metatheory records that subject
+; reduction fails without one (`preservation_false` in Dependent.lean). This checker therefore uses
+; SYNTACTIC conversion (`bterm-eq`) — sound and complete exactly on terms whose types need no
+; computation (no β-redex in any type it compares), which is the honest, decidable dependent slice.
+; The `BApp` rule still does the essential dependent step: it substitutes the argument into the
+; codomain (`bsubst cod 0 a`), so the RESULT type genuinely depends on the argument. Σ (`BSig`/…) is
+; out of this increment (the four term-formers below return `nothing` in infer mode).
+;
+; NO MUTUAL RECURSION — one fuel-recursive function. `infer` and `check` are mutually recursive in the
+; textbook presentation, which the kernel's directly-recursive fragment also forbids (verified:
+; `isEven`/`isOdd` fail "unbound name"). They are merged into ONE function `dc` carrying the expected
+; type as a `Maybe` (nothing = infer, just = check) and recurring on a `Nat` FUEL — the same escape
+; hatch spore_reader.bl uses. Fuel is seeded generously from the term/type sizes (`dep-fuel`), always
+; enough for the structural traversal plus one check→infer mode switch per node.
+
+(load "spore.bl")  ; BTerm/BGrade/BCtx, bshift, bsubst, bsize, Nat, Bool, plus, nat-eq, band
+(load "std/maybe.bl")  ; Maybe / just / nothing / maybe-map
+
+; ── Small helpers ────────────────────────────────────────────────────────────────────────────────────
+; Max of two universe levels (used by the `BPi` formation rule). Structural on the first argument.
+(deftotal nat-max (Pi ((a Nat) (b Nat)) Nat)
+  (lam (a)
+    (match a [(Zero) (lam (b) b)]
+      [(Succ n) (lam (b) (match b [(Zero) (Succ n)] [(Succ m) (Succ (nat-max n m))]))])))
+
+; Grade equality (BPi carries a grade; syntactic conversion compares it).
+(deftotal bgrade-eq (Pi ((p BGrade) (q BGrade)) Bool)
+  (lam (p q)
+    (match p [(G0) (match q [(G0) true] [_ false])] [(G1) (match q [(G1) true] [_ false])]
+      [(Gw) (match q [(Gw) true] [_ false])])))
+
+; Syntactic (α-)equality on raw terms — the checker's conversion. Curried on `a` (structural), each
+; row matches the same constructor of `b` and recurses on the components, with `[_ false]` for a
+; head mismatch. This is exactly definitional equality on the conversion-free fragment.
+(define-rec bterm-eq (Pi ((a BTerm) (b BTerm)) Bool)
+  (lam (a)
+    (match a
+      [(BVar n) (lam (b) (match b [(BVar m) (nat-eq n m)] [_ false]))]
+      [(BUniv l) (lam (b) (match b [(BUniv m) (nat-eq l m)] [_ false]))]
+      [(BPi grd dom cod)
+        (lam (b)
+          (match b
+            [(BPi grd2 dom2 cod2)
+              (band (bgrade-eq grd grd2) (band (bterm-eq dom dom2) (bterm-eq cod cod2)))]
+            [_ false]))]
+      [(BLam bd) (lam (b) (match b [(BLam bd2) (bterm-eq bd bd2)] [_ false]))]
+      [(BApp f x)
+        (lam (b) (match b [(BApp f2 x2) (band (bterm-eq f f2) (bterm-eq x x2))] [_ false]))]
+      [(BSig dom cod)
+        (lam (b) (match b [(BSig dom2 cod2) (band (bterm-eq dom dom2) (bterm-eq cod cod2))] [_ false]))]
+      [(BPair x y)
+        (lam (b) (match b [(BPair x2 y2) (band (bterm-eq x x2) (bterm-eq y y2))] [_ false]))]
+      [(BFst p) (lam (b) (match b [(BFst p2) (bterm-eq p p2)] [_ false]))]
+      [(BSnd p) (lam (b) (match b [(BSnd p2) (bterm-eq p p2)] [_ false]))])))
+
+; Context lookup with de-Bruijn weakening: the type of variable `i` in `g`, shifted past the binders
+; between its declaration and this use (each recursion step passes one more binder, so shifts by 1).
+; Curried on `g` (structural), returning a function of `i` — the `lookup-var` shape from spore_elab.bl.
+(define-rec bctx-lookup (Pi ((g BCtx) (i Nat)) (Maybe BTerm))
+  (lam (g)
+    (match g [(BNil) (the (Pi ((i Nat)) (Maybe BTerm)) (lam (i) nothing))]
+      [(BSnoc rest ty)
+        (the (Pi ((i Nat)) (Maybe BTerm))
+          (lam (i)
+            (match i [(Zero) (just ((bshift ty) (Succ Zero) Zero))]
+              [(Succ k)
+                (maybe-map BTerm BTerm (lam (t) ((bshift t) (Succ Zero) Zero)) (bctx-lookup rest k))])))])))
+
+; Read an inferred type as a universe level (`BUniv l`), else `nothing` — the "is this a type?" test
+; the `BPi` formation rule needs for each component.
+(deftotal as-univ (Pi ((m (Maybe BTerm))) (Maybe Nat))
+  (lam (m) (match m [(nothing) nothing] [(just t) (match t [(BUniv l) (just l)] [_ nothing])])))
+
+; ── The checker ──────────────────────────────────────────────────────────────────────────────────────
+; `dc fuel g e exp` : in context `g`, INFER the type of `e` (when `exp = nothing`) or CHECK `e` against
+; `exp = just ty` — returning the resulting type (`just`) or `nothing` on ill-typedness. Fuel-recursive
+; (every self-call passes `k`, the `Succ`-predecessor of `fuel`, so `deftotal` sees the structural
+; decrease); `dep-fuel` seeds it large enough that the fuel-exhaustion `(Zero) => nothing` arm is dead.
+(deftotal dc (Pi ((fuel Nat) (g BCtx) (e BTerm) (exp (Maybe BTerm))) (Maybe BTerm))
+  (lam (fuel g e exp)
+    (match fuel [(Zero) nothing]
+      [(Succ k)
+        (match exp
+          ; ── CHECK mode ──
+          [(just ty)
+            (match e
+              ; a lambda is checked against the expected Pi: check its body against the codomain in
+              ; the context extended by the domain. (The one rule that is genuinely checking-only.)
+              [(BLam body)
+                (match ty
+                  [(BPi grd dom cod)
+                    (match (dc k (BSnoc g dom) body (just cod)) [(nothing) nothing]
+                      [(just bt) (just ty)])]
+                  [_ nothing])]
+              ; anything else: infer its type, then it checks iff that type converts to `ty`.
+              [_
+                (match (dc k g e nothing) [(nothing) nothing]
+                  [(just inferred)
+                    (match (bterm-eq inferred ty) [(true) (just ty)] [(false) nothing])])])]
+          ; ── INFER mode ──
+          [(nothing)
+            (match e
+              [(BVar n) (bctx-lookup g n)]
+              [(BUniv l) (just (BUniv (Succ l)))]
+              ; Pi formation: both components must be types; the result lives at their max level.
+              [(BPi grd dom cod)
+                (match (as-univ (dc k g dom nothing)) [(nothing) nothing]
+                  [(just l1)
+                    (match (as-univ (dc k (BSnoc g dom) cod nothing)) [(nothing) nothing]
+                      [(just l2) (just (BUniv (nat-max l1 l2)))])])]
+              ; application: the function must be a Pi, the argument must check against its domain, and
+              ; the result type is the codomain with the argument substituted in (the dependent step).
+              [(BApp f a)
+                (match (dc k g f nothing) [(nothing) nothing]
+                  [(just fty)
+                    (match fty
+                      [(BPi grd dom cod)
+                        (match (dc k g a (just dom)) [(nothing) nothing]
+                          [(just at) (just ((bsubst cod) Zero a))])]
+                      [_ nothing])])]
+              ; a bare lambda has no inferable type (it is checking-only); Σ-formers are out of scope.
+              [(BLam body) nothing]
+              [(BSig dom cod) nothing]
+              [(BPair a b) nothing]
+              [(BFst p) nothing]
+              [(BSnd p) nothing])])])))
+
+; ── Entry points ─────────────────────────────────────────────────────────────────────────────────────
+; Seed the fuel with 3×(size e + size ty) — ample for the structural traversal plus one check→infer
+; mode switch per node (fuel only bounds termination; it never changes a verdict when this generous).
+(deftotal dep-fuel (Pi ((e BTerm) (ty BTerm)) Nat)
+  (lam (e ty) (let ((s (plus (bsize e) (bsize ty)))) (plus s (plus s s)))))
+
+(deftotal binfer (Pi ((g BCtx) (e BTerm)) (Maybe BTerm))
+  (lam (g e) (dc (dep-fuel e e) g e nothing)))
+
+(deftotal bcheck-dep (Pi ((g BCtx) (e BTerm) (ty BTerm)) Bool)
+  (lam (g e ty) (match (dc (dep-fuel e ty) g e (just ty)) [(nothing) false] [(just t) true])))
+
+; ── Demos: the kernel certifies the checker's verdicts by definitional computation ───────────────────
+; The polymorphic identity's TYPE: `Π(A:Type0). Π(x:A). A`, as a raw de-Bruijn `BTerm`.
+(define ty-poly-id BTerm
+  (BPi Gw (BUniv Zero) (BPi Gw (BVar Zero) (BVar (Succ Zero)))))
+
+; That type is itself well-formed, living at universe 1 — `binfer` computes exactly `BUniv 1`.
+(define-by dep-poly-id-ty-univ1
+  (Path (Maybe BTerm) (binfer BNil ty-poly-id) (just (BUniv (Succ Zero)))) refl)
+
+; The polymorphic identity FUNCTION `λA. λx. x` (= `BLam (BLam (BVar Zero))`) CHECKS against that type
+; — the dependent binder `x:A` and the returned `A` all line up under de-Bruijn shifting.
+(define-by dep-poly-id-checks
+  (Path Bool (bcheck-dep BNil (BLam (BLam (BVar Zero))) ty-poly-id) true) refl)
+
+; THE dependent step, live: in a context holding `f : Π(x:Type1). x` (a function whose result type
+; IS its argument), `binfer` on `(f Type0)` computes exactly `Type0` — the codomain `x` with the
+; argument `Type0` substituted in (`bsubst cod 0 arg`). The result type genuinely depends on the value
+; applied; this is what makes the checker dependent rather than simply-typed.
+(define ctx-dep-f BCtx (BSnoc BNil (BPi Gw (BUniv (Succ Zero)) (BVar Zero))))
+(define-by dep-app-substitutes-arg
+  (Path (Maybe BTerm) (binfer ctx-dep-f (BApp (BVar Zero) (BUniv Zero))) (just (BUniv Zero))) refl)
+
+; Ill-typed #1: an unbound variable in the empty context is rejected.
+(define-by dep-unbound-var-rejected
+  (Path Bool (bcheck-dep BNil (BVar Zero) (BUniv Zero)) false) refl)
+
+; Ill-typed #2: applying a universe (not a function) is rejected — `(Type0 Type0)`.
+(define-by dep-apply-nonfunction-rejected
+  (Path Bool (bcheck-dep BNil (BApp (BUniv Zero) (BUniv Zero)) (BUniv Zero)) false) refl)
+
+; Ill-typed #3: a lambda checked against a non-Pi (`Type0`) is rejected.
+(define-by dep-lam-vs-nonpi-rejected
+  (Path Bool (bcheck-dep BNil (BLam (BVar Zero)) (BUniv Zero)) false) refl)
