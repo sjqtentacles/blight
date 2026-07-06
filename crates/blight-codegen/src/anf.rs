@@ -1430,13 +1430,17 @@ mod tests {
             c2 >= 2 * c1 - 10 && c2 <= 2 * c1 + 10,
             "let count must scale linearly with depth: {c1} → {c2}"
         );
-        // Wall-time scaling guard (loose, to avoid CI flakiness): 8× the depth must cost far less
-        // than the ~64× a quadratic pass would. We compare 30 vs 240 and require < 30× (a true
-        // O(n²) is ≥ 64×; linear is ~8×; 30× leaves generous slack for noise and constant factors).
-        let (t_small, _) = time_depth(30);
-        let (t_big, _) = time_depth(240);
+        // Wall-time scaling guard: an 8× depth increase must cost far less than the ~64× a quadratic
+        // pass would. Microsecond-scale timings are noisy on a shared CI runner — a single scheduler
+        // or GC hiccup can double a 20µs sample — so take the MIN of several runs per depth (the
+        // least-perturbed sample, the truest algorithmic time) and keep a generous bound. A true
+        // O(n²) still shows ≥64× even at its best; linear is ~8×. (A single-shot 30× bound flaked at
+        // 33× on CI; the deterministic let-count guard above is the primary invariant regardless.)
+        let best_us = |n: usize| (0..5).map(|_| time_depth(n).0).min().unwrap();
+        let t_small = best_us(30);
+        let t_big = best_us(240);
         assert!(
-            t_big < t_small * 30,
+            t_big < t_small * 40,
             "deep-let normalization must be sub-quadratic: 30 took {t_small}µs, 240 took \
              {t_big}µs (ratio {:.1}×; quadratic would be ~64×)",
             t_big as f64 / t_small as f64
