@@ -221,6 +221,18 @@ BlValue bl_nat_pred(BlValue a) {
   uint64_t x = bl_nat_of_value_w(a);
   return bl_nat_from_u64(x == 0 ? 0 : x - 1);
 }
+/* Zero-allocation Nat peel (M25; mirrors numeric.c `bl_nat_is_succ`/`bl_nat_pred_value`). The
+ * peel-by-default codegen destructures a fast-`Nat` loop driver by reading/decrementing the machine
+ * word directly instead of materializing a `Succ` box each step (`bl_nat_to_con`). Word-based like
+ * every other Nat helper here, so it is O(1) on a fast Nat and observationally identical to the
+ * `bl_nat_to_con` + tag/field path for the returned value: is-succ iff the count is > 0; the
+ * predecessor is that count minus one as a fresh fast Nat. Without these two, the peel's calls stay
+ * unresolved `env` imports and the module fails to instantiate. */
+uint64_t bl_nat_is_succ(BlValue v) { return bl_nat_of_value_w(v) != 0 ? 1u : 0u; }
+BlValue bl_nat_pred_value(BlValue v) {
+  uint64_t x = bl_nat_of_value_w(v);
+  return bl_nat_from_u64(x == 0 ? 0 : x - 1);
+}
 /* Materialize one inductive layer for a generic destructuring reader (codegen `emit_case`), boxing
  * the result so the reader can read a real header. Identity on a non-Nat boxed value. */
 BlValue bl_nat_to_con(BlValue v) {
