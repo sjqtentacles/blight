@@ -363,9 +363,9 @@ fn differential_indexed_vec_eliminators_agree() {
         // motive: λ n. λ (_ : Vec Nat n). Nat ; methods compute the length.
         let motive = Term::Lam(Rc::new(Term::Lam(Rc::new(nat()))));
         let m_vnil = zero();
-        let m_vcons = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(
-            Term::Lam(Rc::new(succ(Term::Var(0)))),
-        ))))));
+        let m_vcons = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(
+            Rc::new(succ(Term::Var(0))),
+        )))))));
         let elim = Term::Elim {
             data: DataName("Vec".into()),
             motive: Rc::new(motive),

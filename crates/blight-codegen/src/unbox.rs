@@ -158,7 +158,11 @@ fn all_uses_destructure(c: &Cir, k: usize) -> bool {
             all_uses_destructure(lhs, k) && all_uses_destructure(rhs, k)
         }
         // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-        Cir::IfZero { scrut, then_, else_ } => {
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => {
             all_uses_destructure(scrut, k)
                 && all_uses_destructure(then_, k)
                 && all_uses_destructure(else_, k)
@@ -341,7 +345,11 @@ fn subst(c: &Cir, sigma: &[Cir], depth: usize) -> Cir {
             rhs: Box::new(subst(rhs, sigma, depth)),
         },
         // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-        Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => Cir::IfZero {
             scrut: Box::new(subst(scrut, sigma, depth)),
             then_: Box::new(subst(then_, sigma, depth)),
             else_: Box::new(subst(else_, sigma, depth)),
@@ -466,7 +474,11 @@ fn shift_cir(c: &Cir, by: usize) -> Cir {
                 rhs: Box::new(go(rhs, by, cutoff)),
             },
             // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-            Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+            Cir::IfZero {
+                scrut,
+                then_,
+                else_,
+            } => Cir::IfZero {
                 scrut: Box::new(go(scrut, by, cutoff)),
                 then_: Box::new(go(then_, by, cutoff)),
                 else_: Box::new(go(else_, by, cutoff)),
@@ -572,7 +584,11 @@ fn map_children(c: &Cir, f: fn(&Cir) -> Cir) -> Cir {
             rhs: Box::new(f(rhs)),
         },
         // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-        Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => Cir::IfZero {
             scrut: Box::new(f(scrut)),
             then_: Box::new(f(then_)),
             else_: Box::new(f(else_)),

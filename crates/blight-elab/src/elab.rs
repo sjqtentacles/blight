@@ -262,7 +262,7 @@ impl ElabEnv {
             Err(e) => {
                 return Err(ElabError::BadForm(format!(
                     "kernel rejected level-polymorphic definition `{name}` at its declared type: {e}"
-                )))
+                )));
             }
         }
         self.define_global(name.to_string(), body_core, Some(ty_core));
@@ -1087,8 +1087,7 @@ fn parse_list(items: &[Sexpr]) -> Result<Surface, ElabError> {
                     |acc, (i, step)| {
                         let (name, e) = match step {
                             Sexpr::List(p)
-                                if p.len() == 3
-                                    && matches!(&p[0], Sexpr::Atom(a) if a == "<-") =>
+                                if p.len() == 3 && matches!(&p[0], Sexpr::Atom(a) if a == "<-") =>
                             {
                                 (sym(&p[1])?, parse_surface(&p[2])?)
                             }
@@ -1947,10 +1946,7 @@ fn try_elab_row_polymorphic_handle(
     let mut row_vars = RowVarScope::new();
     let resolved = row_vars.unify(&pattern, &result_row)?;
     let ty_resolved = Term::EffTy(resolved, Rc::new(a_c));
-    Ok(Some(Term::Ann(
-        Rc::new(handle_term),
-        Rc::new(ty_resolved),
-    )))
+    Ok(Some(Term::Ann(Rc::new(handle_term), Rc::new(ty_resolved))))
 }
 
 /// Levenshtein edit distance, for "did you mean" suggestions (E7). Small inputs only (names).
@@ -2688,7 +2684,9 @@ fn subst_term_levels(t: &Term, subst: &[blight_kernel::Level]) -> Term {
     let vec = |xs: &[Term]| xs.iter().map(|x| subst_term_levels(x, subst)).collect();
     match t {
         Term::Univ(l) => Term::Univ(subst_level(l, subst)),
-        Term::Var(_) | Term::IntTy | Term::IntLit(_) | Term::Erased | Term::Interval(_) => t.clone(),
+        Term::Var(_) | Term::IntTy | Term::IntLit(_) | Term::Erased | Term::Interval(_) => {
+            t.clone()
+        }
         Term::Pi(g, a, b) => Term::Pi(*g, rc(a), rc(b)),
         Term::Lam(b) => Term::Lam(rc(b)),
         Term::App(f, a) => Term::App(rc(f), rc(a)),
@@ -2827,7 +2825,11 @@ fn subst_term_levels(t: &Term, subst: &[blight_kernel::Level]) -> Term {
             lhs: rc(lhs),
             rhs: rc(rhs),
         },
-        Term::IfZero { scrut, then_, else_ } => Term::IfZero {
+        Term::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => Term::IfZero {
             scrut: rc(scrut),
             then_: rc(then_),
             else_: rc(else_),
@@ -4268,11 +4270,9 @@ fn strengthen(t: &Term, d: usize) -> Term {
             Term::Delay(b) => Term::Delay(Rc::new(go(b, depth, d))),
             Term::Force(b) => Term::Force(Rc::new(go(b, depth, d))),
             Term::PLam(b) => Term::PLam(Rc::new(go(b, depth + 1, d))),
-            Term::Pi(gr, a, b) => Term::Pi(
-                *gr,
-                Rc::new(go(a, depth, d)),
-                Rc::new(go(b, depth + 1, d)),
-            ),
+            Term::Pi(gr, a, b) => {
+                Term::Pi(*gr, Rc::new(go(a, depth, d)), Rc::new(go(b, depth + 1, d)))
+            }
             Term::Sigma(a, b) => {
                 Term::Sigma(Rc::new(go(a, depth, d)), Rc::new(go(b, depth + 1, d)))
             }
@@ -5034,7 +5034,11 @@ fn abstract_vars(term: &Term, targets: &[usize]) -> Term {
                 rhs: Rc::new(r(rhs)),
             },
             // `if-zero` binds no term variable — all three subterms stay at the same depth.
-            T::IfZero { scrut, then_, else_ } => T::IfZero {
+            T::IfZero {
+                scrut,
+                then_,
+                else_,
+            } => T::IfZero {
                 scrut: Rc::new(r(scrut)),
                 then_: Rc::new(r(then_)),
                 else_: Rc::new(r(else_)),
@@ -5102,7 +5106,11 @@ fn subst0_closed(t: &Term, c: &Term) -> Term {
             T::Later(a) => T::Later(Rc::new(go(a, j, c))),
             // `if-zero` binds no term variable; substitute into all three subterms (an Int-typed
             // codomain computed by `if-zero` is an ordinary codomain that M3 may instantiate).
-            T::IfZero { scrut, then_, else_ } => T::IfZero {
+            T::IfZero {
+                scrut,
+                then_,
+                else_,
+            } => T::IfZero {
                 scrut: Rc::new(go(scrut, j, c)),
                 then_: Rc::new(go(then_, j, c)),
                 else_: Rc::new(go(else_, j, c)),
@@ -5176,7 +5184,11 @@ fn subst_field_params(t: &Term, i: usize, params: &[Term]) -> Term {
             T::Now(a) => T::Now(Rc::new(r(a))),
             T::Later(a) => T::Later(Rc::new(r(a))),
             T::Force(a) => T::Force(Rc::new(r(a))),
-            T::IfZero { scrut, then_, else_ } => T::IfZero {
+            T::IfZero {
+                scrut,
+                then_,
+                else_,
+            } => T::IfZero {
                 scrut: Rc::new(r(scrut)),
                 then_: Rc::new(r(then_)),
                 else_: Rc::new(r(else_)),
@@ -5312,7 +5324,11 @@ fn abstract_var_at(term: &Term, k: usize, depth: usize) -> Term {
             scrutinee: Rc::new(r(scrutinee)),
         },
         // `if-zero` binds no term variable — all three subterms stay at the same depth.
-        T::IfZero { scrut, then_, else_ } => T::IfZero {
+        T::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => T::IfZero {
             scrut: Rc::new(r(scrut)),
             then_: Rc::new(r(then_)),
             else_: Rc::new(r(else_)),
@@ -5447,7 +5463,7 @@ mod tests {
     fn subst_term_levels_is_identity_on_non_univ_nodes() {
         use blight_kernel::Level;
         let subst = [Level::Suc(Box::new(Level::Zero))]; // Var(0) := 1
-        // No `Univ` node ⟹ identity.
+                                                         // No `Univ` node ⟹ identity.
         let no_univ = Term::Lam(Rc::new(Term::App(
             Rc::new(Term::Var(0)),
             Rc::new(Term::IntLit(7)),

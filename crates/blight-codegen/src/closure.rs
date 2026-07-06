@@ -121,7 +121,11 @@ impl Converter {
                 rhs: Box::new(self.go(rhs)),
             },
             // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-            Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+            Cir::IfZero {
+                scrut,
+                then_,
+                else_,
+            } => Cir::IfZero {
                 scrut: Box::new(self.go(scrut)),
                 then_: Box::new(self.go(then_)),
                 else_: Box::new(self.go(else_)),
@@ -257,7 +261,11 @@ fn collect_free_norm(c: &Cir, start: usize, depth: usize, out: &mut Vec<usize>) 
             rec!(rhs, depth);
         }
         // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-        Cir::IfZero { scrut, then_, else_ } => {
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => {
             rec!(scrut, depth);
             rec!(then_, depth);
             rec!(else_, depth);
@@ -347,7 +355,11 @@ fn rebind(c: &Cir, fvs: &[usize]) -> Cir {
                 rhs: Box::new(go(rhs, fvs, depth)),
             },
             // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-            Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+            Cir::IfZero {
+                scrut,
+                then_,
+                else_,
+            } => Cir::IfZero {
                 scrut: Box::new(go(scrut, fvs, depth)),
                 then_: Box::new(go(then_, fvs, depth)),
                 else_: Box::new(go(else_, fvs, depth)),
@@ -477,7 +489,11 @@ fn rebind_recursive(c: &Cir, fvs: &[usize], name: &str, captures: &[Cir]) -> Cir
                 rhs: Box::new(go(rhs, fvs, depth, selfc)),
             },
             // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-            Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+            Cir::IfZero {
+                scrut,
+                then_,
+                else_,
+            } => Cir::IfZero {
                 scrut: Box::new(go(scrut, fvs, depth, selfc)),
                 then_: Box::new(go(then_, fvs, depth, selfc)),
                 else_: Box::new(go(else_, fvs, depth, selfc)),
@@ -568,9 +584,11 @@ pub fn has_free_lambdas(c: &Cir) -> bool {
         }
         Cir::IntPrim { lhs, rhs, .. } => has_free_lambdas(lhs) || has_free_lambdas(rhs),
         // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-        Cir::IfZero { scrut, then_, else_ } => {
-            has_free_lambdas(scrut) || has_free_lambdas(then_) || has_free_lambdas(else_)
-        }
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => has_free_lambdas(scrut) || has_free_lambdas(then_) || has_free_lambdas(else_),
         Cir::NatPrim { lhs, rhs, .. } => {
             has_free_lambdas(lhs) || rhs.as_ref().map(|r| has_free_lambdas(r)).unwrap_or(false)
         }

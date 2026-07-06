@@ -21,9 +21,8 @@ use support::prelude_resolver;
 /// `nat-eq k k` to `true` inside the kernel's conversion check. Returns the kernel IH count for
 /// exactly that check (counter reset before, read after).
 fn kernel_ih_count(k: u64) -> u64 {
-    let src = format!(
-        "(load \"std/order.bl\")\n(the (Path Bool (nat-eq {k} {k}) true) (plam (i) true))"
-    );
+    let src =
+        format!("(load \"std/order.bl\")\n(the (Path Bool (nat-eq {k} {k}) true) (plam (i) true))");
     std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
         .spawn(move || {

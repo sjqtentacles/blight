@@ -88,13 +88,22 @@ pub fn conv(sig: &Signature, lvl: usize, dlvl: usize, a: &RValue, b: &RValue) ->
             n1 == n2
                 && p1.len() == p2.len()
                 && i1.len() == i2.len()
-                && p1.iter().zip(p2.iter()).all(|(x, y)| conv(sig, lvl, dlvl, x, y))
-                && i1.iter().zip(i2.iter()).all(|(x, y)| conv(sig, lvl, dlvl, x, y))
+                && p1
+                    .iter()
+                    .zip(p2.iter())
+                    .all(|(x, y)| conv(sig, lvl, dlvl, x, y))
+                && i1
+                    .iter()
+                    .zip(i2.iter())
+                    .all(|(x, y)| conv(sig, lvl, dlvl, x, y))
         }
         (RValue::Con(n1, a1), RValue::Con(n2, a2)) => {
             n1 == n2
                 && a1.len() == a2.len()
-                && a1.iter().zip(a2.iter()).all(|(x, y)| conv(sig, lvl, dlvl, x, y))
+                && a1
+                    .iter()
+                    .zip(a2.iter())
+                    .all(|(x, y)| conv(sig, lvl, dlvl, x, y))
         }
         (RValue::Neutral(n1), RValue::Neutral(n2)) => {
             quote(sig, lvl, dlvl, &RValue::Neutral(n1.clone()))
@@ -230,8 +239,8 @@ mod tests {
     use crate::normalize::{eval, reflect};
     use crate::term::{RGrade, RTerm};
     use crate::value::{Env, RValue};
-    use std::rc::Rc;
     use blight_kernel::{ConName, DataName, Signature};
+    use std::rc::Rc;
 
     fn sig() -> Signature {
         Signature::new()
@@ -255,8 +264,20 @@ mod tests {
     #[test]
     fn univ_conv_is_level_exact() {
         let s = sig();
-        assert!(conv(&s, 0, 0, &RValue::Univ(crate::term::rlevel_of_nat(0)), &RValue::Univ(crate::term::rlevel_of_nat(0))));
-        assert!(!conv(&s, 0, 0, &RValue::Univ(crate::term::rlevel_of_nat(0)), &RValue::Univ(crate::term::rlevel_of_nat(1))));
+        assert!(conv(
+            &s,
+            0,
+            0,
+            &RValue::Univ(crate::term::rlevel_of_nat(0)),
+            &RValue::Univ(crate::term::rlevel_of_nat(0))
+        ));
+        assert!(!conv(
+            &s,
+            0,
+            0,
+            &RValue::Univ(crate::term::rlevel_of_nat(0)),
+            &RValue::Univ(crate::term::rlevel_of_nat(1))
+        ));
     }
 
     #[test]
@@ -469,11 +490,29 @@ mod tests {
     #[test]
     fn subtype_adds_universe_cumulativity() {
         let s = sig();
-        assert!(subtype(&s, 0, 0, &RValue::Univ(crate::term::rlevel_of_nat(0)), &RValue::Univ(crate::term::rlevel_of_nat(1)))); // 0 ≤ 1
-        assert!(!subtype(&s, 0, 0, &RValue::Univ(crate::term::rlevel_of_nat(1)), &RValue::Univ(crate::term::rlevel_of_nat(0)))); // 1 ≰ 0
-                                                                         // Otherwise it falls back to conv.
+        assert!(subtype(
+            &s,
+            0,
+            0,
+            &RValue::Univ(crate::term::rlevel_of_nat(0)),
+            &RValue::Univ(crate::term::rlevel_of_nat(1))
+        )); // 0 ≤ 1
+        assert!(!subtype(
+            &s,
+            0,
+            0,
+            &RValue::Univ(crate::term::rlevel_of_nat(1)),
+            &RValue::Univ(crate::term::rlevel_of_nat(0))
+        )); // 1 ≰ 0
+            // Otherwise it falls back to conv.
         assert!(subtype(&s, 0, 0, &RValue::IntTy, &RValue::IntTy));
-        assert!(!subtype(&s, 0, 0, &RValue::IntTy, &RValue::Univ(crate::term::rlevel_of_nat(0))));
+        assert!(!subtype(
+            &s,
+            0,
+            0,
+            &RValue::IntTy,
+            &RValue::Univ(crate::term::rlevel_of_nat(0))
+        ));
     }
 
     /// T3.1 parity: the re-checker's `subtype` lifts cumulativity through `Π`/`Σ` codomains exactly
@@ -483,21 +522,53 @@ mod tests {
         let s = sig();
         let pi = |g, a: RTerm, b: RTerm| ev(&s, RTerm::Pi(g, Box::new(a), Box::new(b)));
         // Π codomain covariant: Π(ω, Int, Univ 0) ≤ Π(ω, Int, Univ 1), not the reverse.
-        let lo = pi(RGrade::Omega, RTerm::IntTy, RTerm::Univ(crate::term::rlevel_of_nat(0)));
-        let hi = pi(RGrade::Omega, RTerm::IntTy, RTerm::Univ(crate::term::rlevel_of_nat(1)));
+        let lo = pi(
+            RGrade::Omega,
+            RTerm::IntTy,
+            RTerm::Univ(crate::term::rlevel_of_nat(0)),
+        );
+        let hi = pi(
+            RGrade::Omega,
+            RTerm::IntTy,
+            RTerm::Univ(crate::term::rlevel_of_nat(1)),
+        );
         assert!(subtype(&s, 0, 0, &lo, &hi));
         assert!(!subtype(&s, 0, 0, &hi, &lo));
         // Grade laundering rejected: Π(ω,Int,Univ 0) ⊄ Π(1,Int,Univ 1) despite codomain lift.
-        let one_hi = pi(RGrade::One, RTerm::IntTy, RTerm::Univ(crate::term::rlevel_of_nat(1)));
+        let one_hi = pi(
+            RGrade::One,
+            RTerm::IntTy,
+            RTerm::Univ(crate::term::rlevel_of_nat(1)),
+        );
         assert!(!subtype(&s, 0, 0, &lo, &one_hi));
         // Domain invariant: Π(ω,Univ 0,Int) vs Π(ω,Univ 1,Int) rejected both ways.
-        let da = pi(RGrade::Omega, RTerm::Univ(crate::term::rlevel_of_nat(0)), RTerm::IntTy);
-        let db = pi(RGrade::Omega, RTerm::Univ(crate::term::rlevel_of_nat(1)), RTerm::IntTy);
+        let da = pi(
+            RGrade::Omega,
+            RTerm::Univ(crate::term::rlevel_of_nat(0)),
+            RTerm::IntTy,
+        );
+        let db = pi(
+            RGrade::Omega,
+            RTerm::Univ(crate::term::rlevel_of_nat(1)),
+            RTerm::IntTy,
+        );
         assert!(!subtype(&s, 0, 0, &da, &db));
         assert!(!subtype(&s, 0, 0, &db, &da));
         // Σ second component covariant.
-        let slo = ev(&s, RTerm::Sigma(Box::new(RTerm::IntTy), Box::new(RTerm::Univ(crate::term::rlevel_of_nat(0)))));
-        let shi = ev(&s, RTerm::Sigma(Box::new(RTerm::IntTy), Box::new(RTerm::Univ(crate::term::rlevel_of_nat(1)))));
+        let slo = ev(
+            &s,
+            RTerm::Sigma(
+                Box::new(RTerm::IntTy),
+                Box::new(RTerm::Univ(crate::term::rlevel_of_nat(0))),
+            ),
+        );
+        let shi = ev(
+            &s,
+            RTerm::Sigma(
+                Box::new(RTerm::IntTy),
+                Box::new(RTerm::Univ(crate::term::rlevel_of_nat(1))),
+            ),
+        );
         assert!(subtype(&s, 0, 0, &slo, &shi));
         assert!(!subtype(&s, 0, 0, &shi, &slo));
     }

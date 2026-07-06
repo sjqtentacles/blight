@@ -3149,9 +3149,12 @@ mod tests {
         // accepted payload must survive the trusted kernel's re-check.
         let expected_accept = [
             true, true, true, true, false, false, false, // c0–c6 (STLC over Base)
-            true, true, true, false, // c7–c10 (S4a: Nat identity / literal 2 / successor fn / succ-of-fn)
-            true, true, false, // c11–c13 (S4b Bool: literal / negation / branch-type mismatch)
-            true, true, true, false, // c14–c17 (S4b Sum: inl / inr / case-project / case-mismatch)
+            true, true, true,
+            false, // c7–c10 (S4a: Nat identity / literal 2 / successor fn / succ-of-fn)
+            true, true,
+            false, // c11–c13 (S4b Bool: literal / negation / branch-type mismatch)
+            true, true, true,
+            false, // c14–c17 (S4b Sum: inl / inr / case-project / case-mismatch)
         ];
         let mut seen_accept = false;
         let mut seen_reject = false;

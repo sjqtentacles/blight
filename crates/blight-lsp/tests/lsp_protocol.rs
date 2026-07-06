@@ -403,10 +403,7 @@ fn formatting_and_completion_work_over_the_wire() {
     }));
     let completion = server.recv();
     let items = completion["result"].as_array().unwrap();
-    let labels: Vec<&str> = items
-        .iter()
-        .filter_map(|i| i["label"].as_str())
-        .collect();
+    let labels: Vec<&str> = items.iter().filter_map(|i| i["label"].as_str()).collect();
     for expected in ["one", "Succ", "define"] {
         assert!(
             labels.contains(&expected),

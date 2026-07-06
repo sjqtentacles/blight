@@ -285,7 +285,11 @@ fn uses_only_drill_to_leaf(c: &Cir, k: usize, layout: &[FlatField]) -> bool {
             uses_only_drill_to_leaf(lhs, k, layout) && uses_only_drill_to_leaf(rhs, k, layout)
         }
         // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-        Cir::IfZero { scrut, then_, else_ } => {
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => {
             uses_only_drill_to_leaf(scrut, k, layout)
                 && uses_only_drill_to_leaf(then_, k, layout)
                 && uses_only_drill_to_leaf(else_, k, layout)
@@ -417,7 +421,11 @@ fn rewrite_projections(c: &Cir, k: usize, layout: &[FlatField]) -> Cir {
             rhs: Box::new(rewrite_projections(rhs, k, layout)),
         },
         // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-        Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => Cir::IfZero {
             scrut: Box::new(rewrite_projections(scrut, k, layout)),
             then_: Box::new(rewrite_projections(then_, k, layout)),
             else_: Box::new(rewrite_projections(else_, k, layout)),
@@ -522,7 +530,11 @@ fn map_children(c: &Cir, f: fn(&Cir) -> Cir) -> Cir {
             rhs: Box::new(f(rhs)),
         },
         // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-        Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => Cir::IfZero {
             scrut: Box::new(f(scrut)),
             then_: Box::new(f(then_)),
             else_: Box::new(f(else_)),

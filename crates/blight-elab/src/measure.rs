@@ -208,10 +208,9 @@ fn subst_params(s: &Sexpr, map: &[(String, Sexpr)]) -> Sexpr {
                             Sexpr::List(bs) => list(
                                 bs.iter()
                                     .map(|b| match b {
-                                        Sexpr::List(pair) if pair.len() == 2 => list(vec![
-                                            pair[0].clone(),
-                                            subst_params(&pair[1], map),
-                                        ]),
+                                        Sexpr::List(pair) if pair.len() == 2 => {
+                                            list(vec![pair[0].clone(), subst_params(&pair[1], map)])
+                                        }
                                         other => other.clone(),
                                     })
                                     .collect(),
@@ -493,13 +492,20 @@ fn rewrite_self_calls_lex(
                         .iter()
                         .map(|a| {
                             rewrite_self_calls_lex(
-                                a, f, inner, cmp, arity, param_names, e1, e2, e_d,
+                                a,
+                                f,
+                                inner,
+                                cmp,
+                                arity,
+                                param_names,
+                                e1,
+                                e2,
+                                e_d,
                             )
                         })
                         .collect::<Result<_, _>>()?;
                     // Bind the arguments once (`msr_x{i}`), then the callee's measures over them.
-                    let xs: Vec<String> =
-                        (0..arity).map(|i| format!("msr_x{i}")).collect();
+                    let xs: Vec<String> = (0..arity).map(|i| format!("msr_x{i}")).collect();
                     let subst_map: Vec<(String, Sexpr)> = param_names
                         .iter()
                         .cloned()
@@ -526,11 +532,7 @@ fn rewrite_self_calls_lex(
                         list(c)
                     };
                     let k = |body: Sexpr, binder: &str| {
-                        list(vec![
-                            atom("lam"),
-                            list(vec![atom(binder)]),
-                            body,
-                        ])
+                        list(vec![atom("lam"), list(vec![atom(binder)]), body])
                     };
                     let inner_cmp = list(vec![
                         atom(cmp),
@@ -572,9 +574,7 @@ fn rewrite_self_calls_lex(
                 items
                     .iter()
                     .map(|i| {
-                        rewrite_self_calls_lex(
-                            i, f, inner, cmp, arity, param_names, e1, e2, e_d,
-                        )
+                        rewrite_self_calls_lex(i, f, inner, cmp, arity, param_names, e1, e2, e_d)
                     })
                     .collect::<Result<_, _>>()?,
             ))
@@ -664,10 +664,7 @@ fn desugar_lex_measured(
                     atom("match"),
                     atom("b"),
                     list(vec![list(vec![atom("Zero")]), kge_zero.clone()]),
-                    list(vec![
-                        list(vec![atom("Succ"), atom("bb")]),
-                        klt_zero,
-                    ]),
+                    list(vec![list(vec![atom("Succ"), atom("bb")]), klt_zero]),
                 ]),
             ]),
             list(vec![
@@ -702,11 +699,7 @@ fn desugar_lex_measured(
     };
 
     // The step continuation's type: `Π(binders…) R`.
-    let step_ty = list(vec![
-        atom("Pi"),
-        list(binders.to_vec()),
-        result.clone(),
-    ]);
+    let step_ty = list(vec![atom("Pi"), list(binders.to_vec()), result.clone()]);
 
     // 2. The inner loop, structural on `msr_f2`.
     let inner_form = {
@@ -730,17 +723,13 @@ fn desugar_lex_measured(
             c.extend(param_names.iter().map(|p| atom(p.clone())));
             list(c)
         };
-        let body_prime = rewrite_self_calls_lex(
-            body, name, &inner, &cmp, arity, param_names, e1, e2, e_d,
-        )?;
+        let body_prime =
+            rewrite_self_calls_lex(body, name, &inner, &cmp, arity, param_names, e1, e2, e_d)?;
         let match_form = list(vec![
             atom("match"),
             atom("msr_f2"),
             list(vec![list(vec![atom("Zero")]), step_fallback]),
-            list(vec![
-                list(vec![atom("Succ"), atom("msr_j")]),
-                body_prime,
-            ]),
+            list(vec![list(vec![atom("Succ"), atom("msr_j")]), body_prime]),
         ]);
         list(vec![
             atom("deftotal"),
@@ -773,10 +762,7 @@ fn desugar_lex_measured(
             atom("match"),
             atom("msr_f1"),
             list(vec![list(vec![atom("Zero")]), e_d.clone()]),
-            list(vec![
-                list(vec![atom("Succ"), atom("msr_k1")]),
-                seed_inner,
-            ]),
+            list(vec![list(vec![atom("Succ"), atom("msr_k1")]), seed_inner]),
         ]);
         list(vec![
             atom("deftotal"),
@@ -794,11 +780,7 @@ fn desugar_lex_measured(
             atom("deftotal"),
             atom(name.to_string()),
             ty.clone(),
-            list(vec![
-                atom("lam"),
-                list(params.to_vec()),
-                list(seed_call),
-            ]),
+            list(vec![atom("lam"), list(params.to_vec()), list(seed_call)]),
         ])
     };
 
@@ -904,7 +886,9 @@ mod lex_tests {
 
     fn desugar(src: &str) -> Result<Vec<Sexpr>, ElabError> {
         let forms = read_all(src).expect("reads");
-        let Sexpr::List(items) = &forms[0] else { panic!() };
+        let Sexpr::List(items) = &forms[0] else {
+            panic!()
+        };
         desugar_measured(items)
     }
 
@@ -938,9 +922,18 @@ mod lex_tests {
             ["msr_cmp_ack", "msr_inner_ack", "msr_outer_ack", "ack"]
         );
         let inner = format!("{:?}", out[1]);
-        assert!(inner.contains("msr_step"), "inner threads the step continuation");
-        assert!(inner.contains("msr_cmp_ack"), "self-calls dispatch through the comparator");
-        assert!(inner.contains("msr_j"), "inner burns thread the smaller fuel");
+        assert!(
+            inner.contains("msr_step"),
+            "inner threads the step continuation"
+        );
+        assert!(
+            inner.contains("msr_cmp_ack"),
+            "self-calls dispatch through the comparator"
+        );
+        assert!(
+            inner.contains("msr_j"),
+            "inner burns thread the smaller fuel"
+        );
         let outer = format!("{:?}", out[2]);
         assert!(
             outer.contains("msr_outer_ack\"), Atom(\"msr_k1"),

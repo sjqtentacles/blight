@@ -211,7 +211,10 @@ pub fn do_handle(handler: &std::rc::Rc<crate::value::HandlerVal>, comp: Value) -
                     cont,
                     handler: handler.clone(),
                 };
-                let clause_env = handler.env.extend(crate::value::unshare_value(arg)).extend(k);
+                let clause_env = handler
+                    .env
+                    .extend(crate::value::unshare_value(arg))
+                    .extend(k);
                 eval(&clause_env, clause)
             } else {
                 // Unhandled: bubble the OpNode past this handler unchanged.
@@ -289,9 +292,10 @@ pub fn eval(env: &Env, term: &Term) -> Value {
             Rc::new(params.iter().map(|t| eval(env, t)).collect()),
             Rc::new(indices.iter().map(|t| eval(env, t)).collect()),
         ),
-        Term::Con(name, args) => {
-            Value::Con(name.clone(), Rc::new(args.iter().map(|t| eval(env, t)).collect()))
-        }
+        Term::Con(name, args) => Value::Con(
+            name.clone(),
+            Rc::new(args.iter().map(|t| eval(env, t)).collect()),
+        ),
         // Path constructor (spec §2.7, Wave 7/E4): at an interval endpoint this is *definitionally*
         // the declared `lhs`/`rhs` boundary (looked up unconditionally, unlike `Con` above, which
         // never consults the signature at `eval` time — `PCon` must, to decide whether `dim` has
@@ -512,7 +516,11 @@ pub fn eval(env: &Env, term: &Term) -> Value {
         // closed term has no free variable to get stuck on) we stay stuck as a `Neutral::IfZero`,
         // evaluating both branches so `quote` can read the normal form back. This mirrors
         // [`int_prim`]'s "non-literal operand ⇒ stuck neutral" discipline exactly.
-        Term::IfZero { scrut, then_, else_ } => match eval(env, scrut) {
+        Term::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => match eval(env, scrut) {
             Value::IntLit(0) => eval(env, then_),
             Value::IntLit(_) => eval(env, else_),
             other => Value::Neutral(Neutral::IfZero {
@@ -822,11 +830,7 @@ fn resolve_interval(env: &Env, r: &Interval) -> Interval {
 pub(crate) fn uses_binder(t: &Term, depth: usize) -> bool {
     match t {
         Term::Var(i) => *i == depth,
-        Term::Univ(_)
-        | Term::Interval(_)
-        | Term::Erased
-        | Term::IntTy
-        | Term::IntLit(_) => false,
+        Term::Univ(_) | Term::Interval(_) | Term::Erased | Term::IntTy | Term::IntLit(_) => false,
         Term::System(_) => true, // conservative; see the doc-comment
         Term::Pi(_, a, b) => uses_binder(a, depth) || uses_binder(b, depth + 1),
         Term::Lam(b) => uses_binder(b, depth + 1),
@@ -840,9 +844,7 @@ pub(crate) fn uses_binder(t: &Term, depth: usize) -> bool {
         Term::Data(_, ps, is) => {
             ps.iter().any(|t| uses_binder(t, depth)) || is.iter().any(|t| uses_binder(t, depth))
         }
-        Term::Con(_, args) | Term::PCon { args, .. } => {
-            args.iter().any(|t| uses_binder(t, depth))
-        }
+        Term::Con(_, args) | Term::PCon { args, .. } => args.iter().any(|t| uses_binder(t, depth)),
         Term::Elim {
             motive,
             methods,
@@ -856,17 +858,12 @@ pub(crate) fn uses_binder(t: &Term, depth: usize) -> bool {
         Term::PathP { family, lhs, rhs } => {
             uses_binder(family, depth) || uses_binder(lhs, depth) || uses_binder(rhs, depth)
         }
-        Term::Transp { family, base, .. } => {
-            uses_binder(family, depth) || uses_binder(base, depth)
+        Term::Transp { family, base, .. } => uses_binder(family, depth) || uses_binder(base, depth),
+        Term::HComp { ty, tube, base, .. } => {
+            uses_binder(ty, depth) || uses_binder(tube, depth) || uses_binder(base, depth)
         }
-        Term::HComp {
-            ty, tube, base, ..
-        } => uses_binder(ty, depth) || uses_binder(tube, depth) || uses_binder(base, depth),
         Term::Comp {
-            family,
-            tube,
-            base,
-            ..
+            family, tube, base, ..
         } => uses_binder(family, depth) || uses_binder(tube, depth) || uses_binder(base, depth),
         Term::Glue {
             base, ty, equiv, ..
@@ -895,9 +892,11 @@ pub(crate) fn uses_binder(t: &Term, depth: usize) -> bool {
         | Term::Foreign { ty: a, .. } => uses_binder(a, depth),
         Term::IntPrim { lhs, rhs, .. } => uses_binder(lhs, depth) || uses_binder(rhs, depth),
         // `if-zero` binds no term variable in any subterm — all three are at the same depth.
-        Term::IfZero { scrut, then_, else_ } => {
-            uses_binder(scrut, depth) || uses_binder(then_, depth) || uses_binder(else_, depth)
-        }
+        Term::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => uses_binder(scrut, depth) || uses_binder(then_, depth) || uses_binder(else_, depth),
     }
 }
 
@@ -952,8 +951,7 @@ fn do_elim(env: &Env, data: &DataName, motive: Value, methods: Vec<Value>, scrut
                         );
                     } else {
                         IH_COMPUTED.set(IH_COMPUTED.get() + 1);
-                        let ih =
-                            do_elim(env, data, motive.clone(), methods.clone(), arg.clone());
+                        let ih = do_elim(env, data, motive.clone(), methods.clone(), arg.clone());
                         result = apply(result, ih);
                     }
                 }
@@ -1259,7 +1257,11 @@ fn quote_neutral(lvl: usize, dlvl: usize, n: &Neutral) -> Term {
             lhs: Rc::new(quote_at(lvl, dlvl, lhs)),
             rhs: Rc::new(quote_at(lvl, dlvl, rhs)),
         },
-        Neutral::IfZero { scrut, then_, else_ } => Term::IfZero {
+        Neutral::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => Term::IfZero {
             scrut: Rc::new(quote_at(lvl, dlvl, scrut)),
             then_: Rc::new(quote_at(lvl, dlvl, then_)),
             else_: Rc::new(quote_at(lvl, dlvl, else_)),
@@ -1348,13 +1350,22 @@ fn conv_at(lvl: usize, dlvl: usize, a: &Value, b: &Value) -> bool {
             n1 == n2
                 && p1.len() == p2.len()
                 && i1.len() == i2.len()
-                && p1.iter().zip(p2.iter()).all(|(a, b)| conv_at(lvl, dlvl, a, b))
-                && i1.iter().zip(i2.iter()).all(|(a, b)| conv_at(lvl, dlvl, a, b))
+                && p1
+                    .iter()
+                    .zip(p2.iter())
+                    .all(|(a, b)| conv_at(lvl, dlvl, a, b))
+                && i1
+                    .iter()
+                    .zip(i2.iter())
+                    .all(|(a, b)| conv_at(lvl, dlvl, a, b))
         }
         (Value::Con(n1, a1), Value::Con(n2, a2)) => {
             n1 == n2
                 && a1.len() == a2.len()
-                && a1.iter().zip(a2.iter()).all(|(a, b)| conv_at(lvl, dlvl, a, b))
+                && a1
+                    .iter()
+                    .zip(a2.iter())
+                    .all(|(a, b)| conv_at(lvl, dlvl, a, b))
         }
         (
             Value::PCon {
@@ -1373,7 +1384,10 @@ fn conv_at(lvl: usize, dlvl: usize, a: &Value, b: &Value) -> bool {
             d1 == d2
                 && n1 == n2
                 && a1.len() == a2.len()
-                && a1.iter().zip(a2.iter()).all(|(a, b)| conv_at(lvl, dlvl, a, b))
+                && a1
+                    .iter()
+                    .zip(a2.iter())
+                    .all(|(a, b)| conv_at(lvl, dlvl, a, b))
                 && quote_interval(dlvl, r1) == quote_interval(dlvl, r2)
         }
         (Value::Neutral(n1), Value::Neutral(n2)) => {
@@ -1639,11 +1653,7 @@ mod tests {
     #[test]
     fn eval_quote_roundtrip_pi() {
         // Pi (x :^ω Univ 0). Univ 0
-        let pi = Term::Pi(
-            crate::semiring::Grade::Omega,
-            Rc::new(u0()),
-            Rc::new(u0()),
-        );
+        let pi = Term::Pi(crate::semiring::Grade::Omega, Rc::new(u0()), Rc::new(u0()));
         let v = eval(&Env::empty(), &pi);
         assert_eq!(quote(0, &v), pi);
     }
@@ -2153,7 +2163,10 @@ mod tests {
             uses_binder(&Term::Pi(Grade::Omega, v(1), z()), d),
             "Pi dom unshifted"
         );
-        assert!(uses_binder(&Term::Sigma(v(1), z()), d), "Sigma fst unshifted");
+        assert!(
+            uses_binder(&Term::Sigma(v(1), z()), d),
+            "Sigma fst unshifted"
+        );
 
         // Handle: return clause +1, op clauses +2, body unshifted — one probe per field.
         let handle = |body: Rc<Term>, ret: Rc<Term>, cl: Rc<Term>| Term::Handle {
@@ -2161,9 +2174,15 @@ mod tests {
             return_clause: ret,
             op_clauses: vec![("op".to_string(), cl)],
         };
-        assert!(uses_binder(&handle(v(1), z(), z()), d), "Handle body unshifted");
+        assert!(
+            uses_binder(&handle(v(1), z(), z()), d),
+            "Handle body unshifted"
+        );
         assert!(uses_binder(&handle(z(), v(2), z()), d), "Handle return +1");
-        assert!(uses_binder(&handle(z(), z(), v(3)), d), "Handle op clause +2");
+        assert!(
+            uses_binder(&handle(z(), z(), v(3)), d),
+            "Handle op clause +2"
+        );
         assert!(
             !uses_binder(&handle(z(), v(1), z()), d),
             "Handle return: Var(d) under one binder is a different variable"
@@ -2195,8 +2214,14 @@ mod tests {
             ("PApp", Term::PApp(v(1), Interval::I0)),
             ("Partial", Term::Partial(Cofib::Top, v(1))),
             ("Unglue", Term::Unglue(v(1))),
-            ("Data params", Term::Data(dn.clone(), vec![Term::Var(1)], vec![])),
-            ("Data indices", Term::Data(dn.clone(), vec![], vec![Term::Var(1)])),
+            (
+                "Data params",
+                Term::Data(dn.clone(), vec![Term::Var(1)], vec![]),
+            ),
+            (
+                "Data indices",
+                Term::Data(dn.clone(), vec![], vec![Term::Var(1)]),
+            ),
             ("Con args", Term::Con(cn.clone(), vec![Term::Var(1)])),
             (
                 "PCon args",
@@ -2234,60 +2259,142 @@ mod tests {
                     scrutinee: v(1),
                 },
             ),
-            ("PathP family", Term::PathP { family: v(1), lhs: z(), rhs: z() }),
-            ("PathP lhs", Term::PathP { family: z(), lhs: v(1), rhs: z() }),
-            ("PathP rhs", Term::PathP { family: z(), lhs: z(), rhs: v(1) }),
+            (
+                "PathP family",
+                Term::PathP {
+                    family: v(1),
+                    lhs: z(),
+                    rhs: z(),
+                },
+            ),
+            (
+                "PathP lhs",
+                Term::PathP {
+                    family: z(),
+                    lhs: v(1),
+                    rhs: z(),
+                },
+            ),
+            (
+                "PathP rhs",
+                Term::PathP {
+                    family: z(),
+                    lhs: z(),
+                    rhs: v(1),
+                },
+            ),
             (
                 "Transp family",
-                Term::Transp { family: v(1), cofib: Cofib::Top, base: z() },
+                Term::Transp {
+                    family: v(1),
+                    cofib: Cofib::Top,
+                    base: z(),
+                },
             ),
             (
                 "Transp base",
-                Term::Transp { family: z(), cofib: Cofib::Top, base: v(1) },
+                Term::Transp {
+                    family: z(),
+                    cofib: Cofib::Top,
+                    base: v(1),
+                },
             ),
             (
                 "HComp ty",
-                Term::HComp { ty: v(1), cofib: Cofib::Top, tube: z(), base: z() },
+                Term::HComp {
+                    ty: v(1),
+                    cofib: Cofib::Top,
+                    tube: z(),
+                    base: z(),
+                },
             ),
             (
                 "HComp tube",
-                Term::HComp { ty: z(), cofib: Cofib::Top, tube: v(1), base: z() },
+                Term::HComp {
+                    ty: z(),
+                    cofib: Cofib::Top,
+                    tube: v(1),
+                    base: z(),
+                },
             ),
             (
                 "HComp base",
-                Term::HComp { ty: z(), cofib: Cofib::Top, tube: z(), base: v(1) },
+                Term::HComp {
+                    ty: z(),
+                    cofib: Cofib::Top,
+                    tube: z(),
+                    base: v(1),
+                },
             ),
             (
                 "Comp family",
-                Term::Comp { family: v(1), cofib: Cofib::Top, tube: z(), base: z() },
+                Term::Comp {
+                    family: v(1),
+                    cofib: Cofib::Top,
+                    tube: z(),
+                    base: z(),
+                },
             ),
             (
                 "Comp tube",
-                Term::Comp { family: z(), cofib: Cofib::Top, tube: v(1), base: z() },
+                Term::Comp {
+                    family: z(),
+                    cofib: Cofib::Top,
+                    tube: v(1),
+                    base: z(),
+                },
             ),
             (
                 "Comp base",
-                Term::Comp { family: z(), cofib: Cofib::Top, tube: z(), base: v(1) },
+                Term::Comp {
+                    family: z(),
+                    cofib: Cofib::Top,
+                    tube: z(),
+                    base: v(1),
+                },
             ),
             (
                 "Glue base",
-                Term::Glue { base: v(1), cofib: Cofib::Top, ty: z(), equiv: z() },
+                Term::Glue {
+                    base: v(1),
+                    cofib: Cofib::Top,
+                    ty: z(),
+                    equiv: z(),
+                },
             ),
             (
                 "Glue ty",
-                Term::Glue { base: z(), cofib: Cofib::Top, ty: v(1), equiv: z() },
+                Term::Glue {
+                    base: z(),
+                    cofib: Cofib::Top,
+                    ty: v(1),
+                    equiv: z(),
+                },
             ),
             (
                 "Glue equiv",
-                Term::Glue { base: z(), cofib: Cofib::Top, ty: z(), equiv: v(1) },
+                Term::Glue {
+                    base: z(),
+                    cofib: Cofib::Top,
+                    ty: z(),
+                    equiv: v(1),
+                },
             ),
             (
                 "GlueTerm partial",
-                Term::GlueTerm { cofib: Cofib::Top, partial: v(1), base: z() },
+                Term::GlueTerm {
+                    cofib: Cofib::Top,
+                    partial: v(1),
+                    base: z(),
+                },
             ),
             (
                 "GlueTerm base",
-                Term::GlueTerm { cofib: Cofib::Top, partial: z(), base: v(1) },
+                Term::GlueTerm {
+                    cofib: Cofib::Top,
+                    partial: z(),
+                    base: v(1),
+                },
             ),
             (
                 "Op type_args",
@@ -2312,30 +2419,59 @@ mod tests {
             ("Now", Term::Now(v(1))),
             ("Later", Term::Later(v(1))),
             ("Force", Term::Force(v(1))),
-            ("Foreign ty", Term::Foreign { symbol: "s".into(), ty: v(1) }),
+            (
+                "Foreign ty",
+                Term::Foreign {
+                    symbol: "s".into(),
+                    ty: v(1),
+                },
+            ),
             (
                 "IntPrim lhs",
-                Term::IntPrim { op: IntPrimOp::Add, lhs: v(1), rhs: z() },
+                Term::IntPrim {
+                    op: IntPrimOp::Add,
+                    lhs: v(1),
+                    rhs: z(),
+                },
             ),
             (
                 "IntPrim rhs",
-                Term::IntPrim { op: IntPrimOp::Add, lhs: z(), rhs: v(1) },
+                Term::IntPrim {
+                    op: IntPrimOp::Add,
+                    lhs: z(),
+                    rhs: v(1),
+                },
             ),
             (
                 "IfZero scrut",
-                Term::IfZero { scrut: v(1), then_: z(), else_: z() },
+                Term::IfZero {
+                    scrut: v(1),
+                    then_: z(),
+                    else_: z(),
+                },
             ),
             (
                 "IfZero then_",
-                Term::IfZero { scrut: z(), then_: v(1), else_: z() },
+                Term::IfZero {
+                    scrut: z(),
+                    then_: v(1),
+                    else_: z(),
+                },
             ),
             (
                 "IfZero else_",
-                Term::IfZero { scrut: z(), then_: z(), else_: v(1) },
+                Term::IfZero {
+                    scrut: z(),
+                    then_: z(),
+                    else_: v(1),
+                },
             ),
         ];
         for (label, t) in &probes {
-            assert!(uses_binder(t, d), "{label}: the single using field must be found");
+            assert!(
+                uses_binder(t, d),
+                "{label}: the single using field must be found"
+            );
         }
         // Inert leaves and the conservative System arm.
         assert!(!uses_binder(&Term::Univ(Level::Zero), d));

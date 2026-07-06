@@ -21,16 +21,11 @@ use std::rc::Rc;
 /// A random symbolic [`Level`] of bounded depth over `Var(0)`/`Var(1)` (well-formed under
 /// `n_levels = 2`).
 fn arb_level() -> impl Strategy<Value = Level> {
-    let leaf = prop_oneof![
-        Just(Level::Zero),
-        Just(Level::Var(0)),
-        Just(Level::Var(1)),
-    ];
+    let leaf = prop_oneof![Just(Level::Zero), Just(Level::Var(0)), Just(Level::Var(1)),];
     leaf.prop_recursive(3, 24, 2, |inner| {
         prop_oneof![
             inner.clone().prop_map(|l| Level::Suc(Box::new(l))),
-            (inner.clone(), inner)
-                .prop_map(|(a, b)| Level::Max(Box::new(a), Box::new(b))),
+            (inner.clone(), inner).prop_map(|(a, b)| Level::Max(Box::new(a), Box::new(b))),
         ]
     })
 }

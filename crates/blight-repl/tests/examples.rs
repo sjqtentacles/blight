@@ -651,7 +651,8 @@ fn recheck_nested_pair_match() {
     let mut env = ElabEnv::new();
     {
         let mut prog = Program::with_resolver(&mut env, prelude_resolver);
-        prog.run(src).expect("elaboration succeeds (ground-value main skips the kernel door)");
+        prog.run(src)
+            .expect("elaboration succeeds (ground-value main skips the kernel door)");
     }
     let ty = env.global_type("main").expect("main type").clone();
     let term = env.global_term("main").expect("main term").clone();
@@ -715,8 +716,9 @@ fn higher_order_parametric_field_kernel_checks() {
     let mut env = ElabEnv::new();
     {
         let mut prog = Program::with_resolver(&mut env, prelude_resolver);
-        prog.run(src)
-            .expect("kernel accepts a match binding a Pi-typed (higher-order) field and applying it");
+        prog.run(src).expect(
+            "kernel accepts a match binding a Pi-typed (higher-order) field and applying it",
+        );
     }
     let ty = env.global_type("apply-fn").expect("type").clone();
     let term = env.global_term("apply-fn").expect("term").clone();
@@ -750,8 +752,9 @@ fn higher_order_field_as_nested_trailing_binder() {
     let mut env = ElabEnv::new();
     {
         let mut prog = Program::with_resolver(&mut env, prelude_resolver);
-        prog.run(src)
-            .expect("kernel accepts a Pi-typed field generalized as a nested-match trailing binder");
+        prog.run(src).expect(
+            "kernel accepts a Pi-typed field generalized as a nested-match trailing binder",
+        );
     }
     let ty = env.global_type("apply-under").expect("type").clone();
     let term = env.global_term("apply-under").expect("term").clone();

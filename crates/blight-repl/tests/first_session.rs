@@ -101,7 +101,10 @@ fn hole_reports_expected_type_and_context() {
             let err = r.expect_err("a hole is not a completed program");
             let m = err.to_string();
             assert!(m.contains("hole `?goal`"), "names the hole: {m}");
-            assert!(m.contains("expected type: `Nat`"), "shows the goal type: {m}");
+            assert!(
+                m.contains("expected type: `Nat`"),
+                "shows the goal type: {m}"
+            );
             assert!(m.contains("n : Nat"), "shows the local context: {m}");
         },
     );

@@ -943,7 +943,7 @@ mod tests {
         // is-equiv witness whose fibre centre is always `zero`, so `invEq e _ = zero`.
         let fiber_for_any_y = Value::Pair(
             Rc::new(Value::Pair(Rc::new(zero()), Rc::new(zero()))), // centre = (zero, <path>)
-            Rc::new(zero()),                                          // <contraction>, unused
+            Rc::new(zero()),                                        // <contraction>, unused
         );
         let is_equiv_proof = Value::Lam(Closure {
             env: Env::empty(),

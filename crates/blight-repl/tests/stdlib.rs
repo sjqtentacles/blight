@@ -707,7 +707,14 @@ fn std_int_loads_in_isolation() {
         ] {
             assert!(env.global_term(f).is_some(), "std/int defines `{f}`");
         }
-        for f in ["int-add", "int-mul", "int-double", "int-succ", "int-mod", "int-abs"] {
+        for f in [
+            "int-add",
+            "int-mul",
+            "int-double",
+            "int-succ",
+            "int-mod",
+            "int-abs",
+        ] {
             let ty = env.global_type(f).expect("int member type").clone();
             let term = env.global_term(f).expect("int member term").clone();
             match blight_recheck::recheck_judgement(
@@ -823,7 +830,9 @@ fn std_f64_loads_in_isolation() {
                         "decline reason for `{f}` should name the foreign postulate, got: {msg}"
                     );
                 }
-                other => panic!("re-checker must DECLINE std/f64 `{f}` (foreign F64), got: {other:?}"),
+                other => {
+                    panic!("re-checker must DECLINE std/f64 `{f}` (foreign F64), got: {other:?}")
+                }
             }
         }
     });

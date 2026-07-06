@@ -169,7 +169,11 @@ fn walk(c: &Cir, escaping: bool) -> Cir {
             rhs: Box::new(walk(rhs, false)),
         },
         // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-        Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => Cir::IfZero {
             scrut: Box::new(walk(scrut, false)),
             then_: Box::new(walk(then_, false)),
             else_: Box::new(walk(else_, false)),
@@ -232,9 +236,11 @@ fn var_reaches_escaping(c: &Cir, v: usize) -> bool {
             Cir::App(f, a) | Cir::CallClosure(f, a) => go(f, v, true) || go(a, v, true),
             Cir::IntPrim { lhs, rhs, .. } => go(lhs, v, false) || go(rhs, v, false),
             // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-            Cir::IfZero { scrut, then_, else_ } => {
-                go(scrut, v, false) || go(then_, v, false) || go(else_, v, false)
-            }
+            Cir::IfZero {
+                scrut,
+                then_,
+                else_,
+            } => go(scrut, v, false) || go(then_, v, false) || go(else_, v, false),
             Cir::NatPrim { lhs, rhs, .. } => {
                 go(lhs, v, false) || rhs.as_ref().map(|r| go(r, v, false)).unwrap_or(false)
             }
@@ -296,7 +302,11 @@ fn map_children(c: &Cir, f: fn(&Cir) -> Cir) -> Cir {
             rhs: Box::new(f(rhs)),
         },
         // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-        Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => Cir::IfZero {
             scrut: Box::new(f(scrut)),
             then_: Box::new(f(then_)),
             else_: Box::new(f(else_)),

@@ -821,8 +821,7 @@ fn handle_request(
     let req = match cast_request::<Formatting>(req) {
         Ok((id, params)) => {
             let uri = &params.text_document.uri;
-            let result: Option<Vec<TextEdit>> =
-                docs.get(uri.as_str()).and_then(formatting_edits);
+            let result: Option<Vec<TextEdit>> = docs.get(uri.as_str()).and_then(formatting_edits);
             connection
                 .sender
                 .send(Message::Response(Response::new_ok(id, result)))?;
@@ -836,8 +835,7 @@ fn handle_request(
         Ok((id, params)) => {
             let uri = &params.text_document_position.text_document.uri;
             let result: Option<CompletionResponse> = docs.get(uri.as_str()).map(|doc| {
-                let offset =
-                    position_to_offset(&doc.text, params.text_document_position.position);
+                let offset = position_to_offset(&doc.text, params.text_document_position.position);
                 CompletionResponse::Array(completions_at(doc, offset))
             });
             connection
@@ -981,8 +979,7 @@ mod tests {
         let messy = "(  define a   1 )\n(define b 2)\n";
         let doc = analyze(messy, Path::new("."));
         let edits = formatting_edits(&doc).expect("a lexically well-formed buffer formats");
-        let expected =
-            blight_elab::format_source(messy).expect("the formatter accepts the buffer");
+        let expected = blight_elab::format_source(messy).expect("the formatter accepts the buffer");
         assert_eq!(edits.len(), 1, "one whole-document edit: {edits:?}");
         assert_eq!(edits[0].new_text, expected);
         assert_eq!(edits[0].range.start, Position::new(0, 0));

@@ -592,7 +592,11 @@ impl<'a> Anfer<'a> {
                     .collect();
                 wrap(binds, Tail::Case(satom, arms2))
             }
-            Cir::IfZero { scrut, then_, else_ } => {
+            Cir::IfZero {
+                scrut,
+                then_,
+                else_,
+            } => {
                 // Evaluate the scrutinee (emitting `binds` as `pushed` slots), then branch. The
                 // branches bind NO variables (unlike a `Case` arm), so — exactly like `Case` with
                 // `arm.binders == 0` — their bodies must skip the `pushed` scrutinee slots that sit
@@ -610,7 +614,10 @@ impl<'a> Anfer<'a> {
                     let mut inner = Anfer::new(self.self_name, self.is_rec, self.fuse);
                     inner.tail(else_, &branch_shift)
                 };
-                wrap(binds, Tail::IfZero(satom, Box::new(then_t), Box::new(else_t)))
+                wrap(
+                    binds,
+                    Tail::IfZero(satom, Box::new(then_t), Box::new(else_t)),
+                )
             }
             Cir::Handle {
                 body,

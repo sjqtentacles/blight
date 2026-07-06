@@ -114,7 +114,10 @@ mod tests {
     fn every_enumerated_module_resolves() {
         assert!(module_names().len() >= 40);
         for name in module_names() {
-            assert!(embedded(name).is_some(), "{name} enumerated but not embedded");
+            assert!(
+                embedded(name).is_some(),
+                "{name} enumerated but not embedded"
+            );
         }
     }
 }

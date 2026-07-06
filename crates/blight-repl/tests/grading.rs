@@ -6,11 +6,11 @@
 //! the M3 tower), so the `Vec`/erasure cases drive the *kernel* public API directly — still a
 //! black-box test of the trusted base, just one layer in from the parser.
 
-use std::rc::Rc;
 use blight_kernel::{
     check_top_with, erase::erase, Arg, ConName, Constructor, DataDecl, DataName, Grade, Level,
     Signature, Term, TypeError,
 };
+use std::rc::Rc;
 
 // ----------------------------------------------------------------------------------------------
 // Shared kernel fixtures (a `Nat` and an indexed `Vec a n`), mirroring the kernel unit fixtures.

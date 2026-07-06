@@ -480,7 +480,12 @@ mod tests {
     #[test]
     fn transp_constant_family_is_identity() {
         let s = sig();
-        let out = transp(&s, &const_line(RTerm::Univ(crate::term::rlevel_of_nat(0))), &RCofib::Top, &univ(0));
+        let out = transp(
+            &s,
+            &const_line(RTerm::Univ(crate::term::rlevel_of_nat(0))),
+            &RCofib::Top,
+            &univ(0),
+        );
         assert!(veq(&s, &out, &univ(0)));
     }
 
@@ -715,7 +720,11 @@ mod tests {
         let partial = RCofib::Eq0(RInterval::Dim(3));
         assert!(!is_total(&partial) && !is_empty_face(&partial));
         let sigma_ty = RValue::Sigma(
-            Rc::new(RValue::Data(DataName("Nat".into()), Rc::new(vec![]), Rc::new(vec![]))),
+            Rc::new(RValue::Data(
+                DataName("Nat".into()),
+                Rc::new(vec![]),
+                Rc::new(vec![]),
+            )),
             Closure {
                 env: Env::new(),
                 body: Rc::new(RTerm::PathP {
@@ -767,7 +776,11 @@ mod tests {
         let partial = RCofib::Eq0(RInterval::Dim(1));
         let pi_ty = RValue::Pi(
             RGrade::Omega,
-            Rc::new(RValue::Data(DataName("Nat".into()), Rc::new(vec![]), Rc::new(vec![]))),
+            Rc::new(RValue::Data(
+                DataName("Nat".into()),
+                Rc::new(vec![]),
+                Rc::new(vec![]),
+            )),
             Closure {
                 env: Env::new(),
                 body: Rc::new(nat_t()),
@@ -806,7 +819,11 @@ mod tests {
         let partial = RCofib::Eq0(RInterval::Dim(3));
         let pi_ty = RValue::Pi(
             RGrade::Omega,
-            Rc::new(RValue::Data(DataName("Nat".into()), Rc::new(vec![]), Rc::new(vec![]))),
+            Rc::new(RValue::Data(
+                DataName("Nat".into()),
+                Rc::new(vec![]),
+                Rc::new(vec![]),
+            )),
             Closure {
                 env: Env::new(),
                 body: Rc::new(RTerm::PathP {

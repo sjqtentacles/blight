@@ -26,10 +26,7 @@ fn examples_dir() -> PathBuf {
 
 /// Absolute path to `crates/blight-prelude/`.
 fn prelude_dir() -> PathBuf {
-    PathBuf::from(format!(
-        "{}/../blight-prelude",
-        env!("CARGO_MANIFEST_DIR")
-    ))
+    PathBuf::from(format!("{}/../blight-prelude", env!("CARGO_MANIFEST_DIR")))
 }
 
 /// Sorted `*.bl` file names directly under `dir` (no recursion).
@@ -79,7 +76,11 @@ fn all_example_sources() -> Vec<String> {
 /// `Rc<Term>` is `!Send`, and this harness must run unchanged on both sides of that change).
 type VerdictCache = std::sync::Mutex<std::collections::HashMap<(String, u64), &'static str>>;
 
-fn judgement_key(name: &str, term: &blight_kernel::Term, ty: &blight_kernel::Term) -> (String, u64) {
+fn judgement_key(
+    name: &str,
+    term: &blight_kernel::Term,
+    ty: &blight_kernel::Term,
+) -> (String, u64) {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     format!("{term:?}\x00{ty:?}").hash(&mut h);
@@ -157,8 +158,14 @@ fn verdict_block(label: &str, source: &str, cache: &VerdictCache) -> String {
             return report;
         }
         Ok(outcomes) => {
-            let declared = outcomes.iter().filter(|o| matches!(o, Outcome::Declared)).count();
-            let checked = outcomes.iter().filter(|o| matches!(o, Outcome::Checked(_))).count();
+            let declared = outcomes
+                .iter()
+                .filter(|o| matches!(o, Outcome::Declared))
+                .count();
+            let checked = outcomes
+                .iter()
+                .filter(|o| matches!(o, Outcome::Checked(_)))
+                .count();
             report.push_str(&format!(
                 "FILE {label} forms={} declared={declared} checked={checked}\n",
                 outcomes.len()
@@ -168,8 +175,7 @@ fn verdict_block(label: &str, source: &str, cache: &VerdictCache) -> String {
     let sig = env.signature();
     // `BL_VERDICT_NOSKIP=1` re-checks even the skip-listed units — for re-measuring the cliff
     // (with `BL_VERDICT_ONLY`/`BL_VERDICT_DISCOVER`), never for the golden.
-    let skip =
-        RECHECK_SKIP.contains(&label) && std::env::var("BL_VERDICT_NOSKIP").is_err();
+    let skip = RECHECK_SKIP.contains(&label) && std::env::var("BL_VERDICT_NOSKIP").is_err();
     for (name, term, ty) in env.typed_globals() {
         // The cache key deliberately omits the signature: a structurally identical (name, term,
         // ty) triple in this corpus always originates from the same module loaded the same way,
@@ -311,7 +317,11 @@ fn verdict_differential_matches_golden() {
     if std::env::var("BL_BLESS").is_ok() {
         std::fs::create_dir_all(path.parent().unwrap()).expect("create goldens dir");
         std::fs::write(&path, &report).unwrap_or_else(|e| panic!("write golden {path:?}: {e}"));
-        eprintln!("blessed {} ({} lines)", path.display(), report.lines().count());
+        eprintln!(
+            "blessed {} ({} lines)",
+            path.display(),
+            report.lines().count()
+        );
         return;
     }
     let golden = std::fs::read_to_string(&path).unwrap_or_else(|e| {

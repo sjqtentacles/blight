@@ -282,7 +282,11 @@ fn go(term: &Term, ty: &Term, env: &mut Vec<bool>) -> Term {
         },
         // `if-zero`: scrutinee and both branches are runtime-relevant (the scrutinee selects, the
         // branches are the results), so all three are renumbered like an `IntPrim`'s operands.
-        Term::IfZero { scrut, then_, else_ } => Term::IfZero {
+        Term::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => Term::IfZero {
             scrut: Rc::new(go(scrut, &Term::Erased, env)),
             then_: Rc::new(go(then_, &Term::Erased, env)),
             else_: Rc::new(go(else_, &Term::Erased, env)),
@@ -323,7 +327,10 @@ pub fn occurs(i: usize, term: &Term) -> bool {
             Term::IntTy | Term::IntLit(_) => false,
             Term::IntPrim { lhs, rhs, .. } => go(i, lhs) || go(i, rhs),
             Term::IfZero {
-                scrut, then_, else_, ..
+                scrut,
+                then_,
+                else_,
+                ..
             } => go(i, scrut) || go(i, then_) || go(i, else_),
             Term::Pi(_, a, b) | Term::Sigma(a, b) => go(i, a) || go(i + 1, b),
             Term::Lam(b) => go(i + 1, b),

@@ -287,9 +287,7 @@ fn mentions_data(term: &Term, name: &DataName) -> bool {
         | Term::Later(b)
         | Term::Force(b)
         | Term::Foreign { ty: b, .. } => mentions_data(b, name),
-        Term::Con(_, args) | Term::PCon { args, .. } => {
-            args.iter().any(|t| mentions_data(t, name))
-        }
+        Term::Con(_, args) | Term::PCon { args, .. } => args.iter().any(|t| mentions_data(t, name)),
         Term::Elim {
             motive,
             methods,
@@ -307,14 +305,12 @@ fn mentions_data(term: &Term, name: &DataName) -> bool {
         Term::Transp { family, base, .. } => {
             mentions_data(family, name) || mentions_data(base, name)
         }
-        Term::HComp {
-            ty, tube, base, ..
-        } => mentions_data(ty, name) || mentions_data(tube, name) || mentions_data(base, name),
+        Term::HComp { ty, tube, base, .. } => {
+            mentions_data(ty, name) || mentions_data(tube, name) || mentions_data(base, name)
+        }
         Term::Comp {
             family, tube, base, ..
-        } => {
-            mentions_data(family, name) || mentions_data(tube, name) || mentions_data(base, name)
-        }
+        } => mentions_data(family, name) || mentions_data(tube, name) || mentions_data(base, name),
         Term::Glue {
             base, ty, equiv, ..
         } => mentions_data(base, name) || mentions_data(ty, name) || mentions_data(equiv, name),
@@ -333,16 +329,13 @@ fn mentions_data(term: &Term, name: &DataName) -> bool {
                 || mentions_data(return_clause, name)
                 || op_clauses.iter().any(|(_, e)| mentions_data(e, name))
         }
-        Term::IntPrim { lhs, rhs, .. } => {
-            mentions_data(lhs, name) || mentions_data(rhs, name)
-        }
+        Term::IntPrim { lhs, rhs, .. } => mentions_data(lhs, name) || mentions_data(rhs, name),
         Term::IfZero {
-            scrut, then_, else_, ..
-        } => {
-            mentions_data(scrut, name)
-                || mentions_data(then_, name)
-                || mentions_data(else_, name)
-        }
+            scrut,
+            then_,
+            else_,
+            ..
+        } => mentions_data(scrut, name) || mentions_data(then_, name) || mentions_data(else_, name),
         // Leaves with no `Term` child: cannot mention a data type.
         Term::Var(_)
         | Term::Univ(_)
@@ -784,7 +777,10 @@ mod tests {
             ),
         ];
         for (label, t) in &probes {
-            assert!(mentions_data(t, &d), "{label}: the single occurrence of D must be found");
+            assert!(
+                mentions_data(t, &d),
+                "{label}: the single occurrence of D must be found"
+            );
         }
 
         // Leaves carry no `Term` child, so they mention no data type.
@@ -797,11 +793,17 @@ mod tests {
             ("Erased", Term::Erased),
         ];
         for (label, t) in &leaves {
-            assert!(!mentions_data(t, &d), "{label}: a leaf mentions no data type");
+            assert!(
+                !mentions_data(t, &d),
+                "{label}: a leaf mentions no data type"
+            );
         }
         // A different data name under a former is not a match (guards the `d == name` check).
         assert!(
-            !mentions_data(&Term::Delay(Rc::new(Term::Data(other(), vec![], vec![]))), &d),
+            !mentions_data(
+                &Term::Delay(Rc::new(Term::Data(other(), vec![], vec![]))),
+                &d
+            ),
             "a *different* data type is not a mention of D"
         );
     }

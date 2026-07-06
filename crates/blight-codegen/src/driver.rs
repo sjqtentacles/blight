@@ -1349,7 +1349,6 @@ pub mod bench_support {
         s
     }
 
-
     /// `main : Nat` = `seed · 2^doublings`, computed by a *shallow* structurally-recursive driver
     /// `double-n` that repeatedly does `(plus acc acc)`. The SOURCE stays tiny (the counter literal
     /// is only `doublings`-deep, so it elaborates instantly), but at RUNTIME the result grows
@@ -1519,9 +1518,7 @@ pub mod bench_support {
                 Tail::Case(scrut, arms) => {
                     atom(scrut) + arms.iter().map(|a| in_tail(&a.body)).sum::<usize>()
                 }
-                Tail::IfZero(scrut, then_, else_) => {
-                    atom(scrut) + in_tail(then_) + in_tail(else_)
-                }
+                Tail::IfZero(scrut, then_, else_) => atom(scrut) + in_tail(then_) + in_tail(else_),
                 Tail::Region(b) => in_tail(b),
                 Tail::Handle {
                     body,

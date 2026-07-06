@@ -75,7 +75,11 @@ fn defrecord_declares_type_ctor_and_projections() {
             let ctors = env
                 .data_constructors("Point")
                 .expect("Point is a registered datatype");
-            assert_eq!(ctors, vec!["mk-Point".to_string()], "single constructor mk-Point");
+            assert_eq!(
+                ctors,
+                vec!["mk-Point".to_string()],
+                "single constructor mk-Point"
+            );
             for g in ["Point-x", "Point-y"] {
                 assert!(env.global_term(g).is_some(), "projection `{g}` is a global");
             }
@@ -164,10 +168,7 @@ fn record_in_dependent_position_checks() {
 fn defrecord_rejects_malformed_shape() {
     for (label, src) in [
         ("wrong arity (2 items)", "(defrecord Point)"),
-        (
-            "wrong arity (4 items)",
-            "(defrecord Point ((x Nat)) extra)",
-        ),
+        ("wrong arity (4 items)", "(defrecord Point ((x Nat)) extra)"),
         ("non-binder field entry", "(defrecord Point (x))"),
         (
             "duplicate field names",

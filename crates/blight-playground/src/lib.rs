@@ -69,8 +69,9 @@ pub unsafe extern "C" fn bp_check(ptr: *const u8, len: usize) -> *mut u8 {
 /// than aborting the wasm instance.
 pub fn check_source(src: &str) -> String {
     let src_owned = src.to_string();
-    std::panic::catch_unwind(move || check_source_inner(&src_owned))
-        .unwrap_or_else(|_| "internal error: the checker panicked (please report this program)".into())
+    std::panic::catch_unwind(move || check_source_inner(&src_owned)).unwrap_or_else(|_| {
+        "internal error: the checker panicked (please report this program)".into()
+    })
 }
 
 fn check_source_inner(src: &str) -> String {
@@ -102,10 +103,7 @@ fn check_source_inner(src: &str) -> String {
         outcomes.len()
     ));
     if let Some(ty) = env.global_type("main") {
-        report.push_str(&format!(
-            "main : {}\n",
-            blight_elab::pretty_term(ty)
-        ));
+        report.push_str(&format!("main : {}\n", blight_elab::pretty_term(ty)));
     }
     // The independent re-checker's verdict over every typed global — agree or honestly decline;
     // a rejection is a soundness alarm and is surfaced first.

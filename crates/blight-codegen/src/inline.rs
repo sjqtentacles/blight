@@ -315,7 +315,11 @@ fn map_children(c: &Cir, f: &mut impl FnMut(&Cir) -> Cir) -> Cir {
             rhs: Box::new(f(rhs)),
         },
         // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-        Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => Cir::IfZero {
             scrut: Box::new(f(scrut)),
             then_: Box::new(f(then_)),
             else_: Box::new(f(else_)),
@@ -453,7 +457,11 @@ fn visit_children(c: &Cir, f: &mut impl FnMut(&Cir)) {
             f(rhs);
         }
         // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-        Cir::IfZero { scrut, then_, else_ } => {
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => {
             f(scrut);
             f(then_);
             f(else_);

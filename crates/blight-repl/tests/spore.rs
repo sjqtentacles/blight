@@ -823,7 +823,14 @@ fn dep_checker_self_host_loads() {
             "every spore_dep form is kernel-accepted: {outcomes:?}"
         );
         // The checker and its supporting functions are all present.
-        for fnsym in ["bcheck-dep", "binfer", "dc", "bterm-eq", "bctx-lookup", "nat-max"] {
+        for fnsym in [
+            "bcheck-dep",
+            "binfer",
+            "dc",
+            "bterm-eq",
+            "bctx-lookup",
+            "nat-max",
+        ] {
             assert!(
                 env.global_term(fnsym).is_some(),
                 "dependent checker defines fn `{fnsym}`"
@@ -933,28 +940,28 @@ fn bridge_printer_output_checks_for_demo_id() {
     std::thread::Builder::new()
         .stack_size(64 * 1024 * 1024)
         .spawn(|| {
-        let mut env = ElabEnv::new();
-        let outcomes = {
-            let mut prog = Program::with_resolver(&mut env, prelude_resolver);
-            prog.run(
-                "(load \"spore_print.bl\")\n\
+            let mut env = ElabEnv::new();
+            let outcomes = {
+                let mut prog = Program::with_resolver(&mut env, prelude_resolver);
+                prog.run(
+                    "(load \"spore_print.bl\")\n\
                  (define-by bridge-demo-refl\n\
                    (Path String (bridge-line Zero demo-id)\n\
                      \"BRIDGE 0 ACCEPT (the (Pi ((v Base)) Base) (lam (v0) v0))\")\n\
                    refl)",
-            )
-            .expect("the bridge line for demo-id computes to its expected text by refl")
-        };
-        assert!(
-            outcomes
-                .iter()
-                .all(|o| matches!(o, Outcome::Declared | Outcome::Checked(_))),
-            "the refl goal kernel-checks: {outcomes:?}"
-        );
-        assert!(
-            env.global_term("bridge-demo-refl").is_some(),
-            "the refl-at-scale pin is a named, kernel-checked global"
-        );
+                )
+                .expect("the bridge line for demo-id computes to its expected text by refl")
+            };
+            assert!(
+                outcomes
+                    .iter()
+                    .all(|o| matches!(o, Outcome::Declared | Outcome::Checked(_))),
+                "the refl goal kernel-checks: {outcomes:?}"
+            );
+            assert!(
+                env.global_term("bridge-demo-refl").is_some(),
+                "the refl-at-scale pin is a named, kernel-checked global"
+            );
         })
         .expect("spawn bridge-refl thread")
         .join()

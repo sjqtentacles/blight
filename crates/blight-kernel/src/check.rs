@@ -744,8 +744,10 @@ impl Checker {
                     arg_env = arg_env.extend(eval(&self.env_for(ctx), arg));
                 }
                 // Result indices are computed from the same threaded (param + args) environment.
-                let result_indices: Vec<Value> =
-                    result_index_terms.iter().map(|t| eval(&arg_env, t)).collect();
+                let result_indices: Vec<Value> = result_index_terms
+                    .iter()
+                    .map(|t| eval(&arg_env, t))
+                    .collect();
                 let data_ty = Value::Data(decl_name, Rc::new(vec![]), Rc::new(result_indices));
                 Ok((data_ty, row, usage))
             }
@@ -1044,7 +1046,11 @@ impl Checker {
             // subject reduction is trivial. Usage is the *sum* of scrutinee + both branches and row
             // their union — verbatim `infer_elim`'s multi-branch `.add`/`.union` accounting, so a
             // linear resource spent across both branches is `1+1 = ω ⊄ 1` and correctly rejected.
-            Term::IfZero { scrut, then_, else_ } => {
+            Term::IfZero {
+                scrut,
+                then_,
+                else_,
+            } => {
                 let (row_s, usage_s) = self.check_g(ctx, scrut, &Value::IntTy, sigma)?;
                 let (then_ty, row_t, usage_t) = self.infer_g(ctx, then_, sigma)?;
                 let (row_e, usage_e) = self.check_g(ctx, else_, &then_ty, sigma)?;
@@ -1238,7 +1244,11 @@ impl Checker {
 
         // The fully-applied family value `D params indices` used for the recursive occurrences and the
         // motive's domain. For an indexed family the indices are abstracted in the motive instead.
-        let data_ty = Value::Data(decl.name.clone(), Rc::new(params.clone()), Rc::new(scrut_indices.clone()));
+        let data_ty = Value::Data(
+            decl.name.clone(),
+            Rc::new(params.clone()),
+            Rc::new(scrut_indices.clone()),
+        );
 
         // Motive must denote `(i1:Idx1) → … → (im:Idxm) → D params i1..im → Univ ℓ`. The
         // surface/elaborator passes it as nested `Lam`s (not inferable on its own), so we type its
@@ -1271,7 +1281,11 @@ impl Checker {
                         }
                     }
                 }
-                let dty = Value::Data(decl.name.clone(), Rc::new(params.clone()), Rc::new(idx_vars.clone()));
+                let dty = Value::Data(
+                    decl.name.clone(),
+                    Rc::new(params.clone()),
+                    Rc::new(idx_vars.clone()),
+                );
                 let ctx_id = ctx_acc.extend(quote(ctx_acc.len(), &dty), Grade::Omega);
                 match body {
                     Term::Lam(inner) => self.infer_universe(&ctx_id, inner)?,
@@ -1831,7 +1845,11 @@ impl Checker {
                 if n1 != n2 || p1.len() != p2.len() || i1.len() != i2.len() {
                     return Unify::Clash;
                 }
-                self.unify_seq(lvl, p1.iter().zip(p2.iter()).chain(i1.iter().zip(i2.iter())), sol)
+                self.unify_seq(
+                    lvl,
+                    p1.iter().zip(p2.iter()).chain(i1.iter().zip(i2.iter())),
+                    sol,
+                )
             }
             // Same constructor head: decompose arguments. Different heads are a genuine CLASH — the
             // branch is unreachable for this scrutinee.
@@ -2223,8 +2241,11 @@ impl Checker {
                             // terms range over the parameter and preceding arguments.
                             let rec_index_vals: Vec<Value> =
                                 rec_indices.iter().map(|t| eval(&arg_env, t)).collect();
-                            let rec_ty =
-                                Value::Data(decl.name.clone(), param_vals.clone(), Rc::new(rec_index_vals));
+                            let rec_ty = Value::Data(
+                                decl.name.clone(),
+                                param_vals.clone(),
+                                Rc::new(rec_index_vals),
+                            );
                             self.check_g(ctx, arg, &rec_ty, sigma)?
                         }
                         Arg::NonRec(ty) => {
@@ -2427,7 +2448,14 @@ impl Checker {
             // expected type to elaborate — an empty container, an ambiguous numeric literal — type
             // checks. Scrutinee at `Int`; usage = sum of scrutinee + branches, row = union (same
             // multi-branch accounting as the inference rule, so grade-laundering stays rejected).
-            (Term::IfZero { scrut, then_, else_ }, _) => {
+            (
+                Term::IfZero {
+                    scrut,
+                    then_,
+                    else_,
+                },
+                _,
+            ) => {
                 let (row_s, usage_s) = self.check_g(ctx, scrut, &Value::IntTy, sigma)?;
                 let (row_t, usage_t) = self.check_g(ctx, then_, expected, sigma)?;
                 let (row_e, usage_e) = self.check_g(ctx, else_, expected, sigma)?;
@@ -2596,8 +2624,8 @@ fn equiv_type(a: &Term, b: &Term) -> Term {
             Rc::new(t_s.clone()),
             Rc::new(Term::Pi(
                 Grade::Omega,
-                Rc::new(shift(t_s, 1)),                                    // z : T  (under c)
-                Rc::new(path(shift(t_s, 2), Term::Var(1), Term::Var(0))),  // Path T c z
+                Rc::new(shift(t_s, 1)), // z : T  (under c)
+                Rc::new(path(shift(t_s, 2), Term::Var(1), Term::Var(0))), // Path T c z
             )),
         )
     }
@@ -2610,7 +2638,11 @@ fn equiv_type(a: &Term, b: &Term) -> Term {
     };
     // `Equiv A B = Σ (f : A → B). is-equiv A B f`. `A → B` = `Pi(ω, A, ↑B)`.
     Term::Sigma(
-        Rc::new(Term::Pi(Grade::Omega, Rc::new(a.clone()), Rc::new(shift(b, 1)))),
+        Rc::new(Term::Pi(
+            Grade::Omega,
+            Rc::new(a.clone()),
+            Rc::new(shift(b, 1)),
+        )),
         Rc::new(is_equiv_body),
     )
 }
@@ -2626,11 +2658,9 @@ fn shift(term: &Term, n: usize) -> Term {
                 }
             }
             Term::Univ(_) => term.clone(),
-            Term::Pi(g, a, b) => Term::Pi(
-                *g,
-                Rc::new(go(a, n, cutoff)),
-                Rc::new(go(b, n, cutoff + 1)),
-            ),
+            Term::Pi(g, a, b) => {
+                Term::Pi(*g, Rc::new(go(a, n, cutoff)), Rc::new(go(b, n, cutoff + 1)))
+            }
             Term::Lam(b) => Term::Lam(Rc::new(go(b, n, cutoff + 1))),
             Term::App(f, a) => Term::App(Rc::new(go(f, n, cutoff)), Rc::new(go(a, n, cutoff))),
             Term::Sigma(a, b) => {
@@ -2783,7 +2813,11 @@ fn shift(term: &Term, n: usize) -> Term {
                 rhs: Rc::new(go(rhs, n, cutoff)),
             },
             // `if-zero` binds no term variable — all three subterms shift at the same cutoff.
-            Term::IfZero { scrut, then_, else_ } => Term::IfZero {
+            Term::IfZero {
+                scrut,
+                then_,
+                else_,
+            } => Term::IfZero {
                 scrut: Rc::new(go(scrut, n, cutoff)),
                 then_: Rc::new(go(then_, n, cutoff)),
                 else_: Rc::new(go(else_, n, cutoff)),
@@ -2817,7 +2851,11 @@ fn subst_var(term: &Term, j: usize, replacement: &Term) -> Term {
                 rhs: Rc::new(go(rhs, j, repl)),
             },
             // `if-zero` binds no term variable — all three subterms substitute at the same index.
-            Term::IfZero { scrut, then_, else_ } => Term::IfZero {
+            Term::IfZero {
+                scrut,
+                then_,
+                else_,
+            } => Term::IfZero {
                 scrut: Rc::new(go(scrut, j, repl)),
                 then_: Rc::new(go(then_, j, repl)),
                 else_: Rc::new(go(else_, j, repl)),
@@ -3281,7 +3319,10 @@ mod tests {
         let t = if_zero(scrut, Term::IntLit(10), Term::IntLit(20));
         assert_eq!(quote(0, &eval(&Env::empty(), &t)), Term::IntLit(10));
         assert!(conv(0, &eval(&Env::empty(), &t), &Value::IntLit(10)));
-        assert!(check_top(t, Term::IntTy).is_ok(), "if-zero (2-2) 10 20 : Int");
+        assert!(
+            check_top(t, Term::IntTy).is_ok(),
+            "if-zero (2-2) 10 20 : Int"
+        );
     }
 
     /// A neutral scrutinee keeps the whole `if-zero` stuck and it quotes back unchanged.
@@ -3311,8 +3352,13 @@ mod tests {
         let checker = Checker::new(std::rc::Rc::new(Signature::empty()));
         let ctx = Context::empty();
         let t = if_zero(Term::IntLit(0), Term::IntLit(1), Term::IntLit(2));
-        let (ty, row, _u) = checker.infer_g(&ctx, &t, Grade::One).expect("if-zero infers");
-        assert!(conv(0, &ty, &Value::IntTy), "if-zero over Int branches infers Int");
+        let (ty, row, _u) = checker
+            .infer_g(&ctx, &t, Grade::One)
+            .expect("if-zero infers");
+        assert!(
+            conv(0, &ty, &Value::IntTy),
+            "if-zero over Int branches infers Int"
+        );
         assert!(row.is_empty(), "pure if-zero has the empty effect row");
     }
 
@@ -3402,8 +3448,14 @@ mod tests {
     fn cumulativity_pi_domain_not_covariant() {
         let a = ev(pi(Grade::Omega, u(0), Term::IntTy));
         let b = ev(pi(Grade::Omega, u(1), Term::IntTy));
-        assert!(!subtype(0, &a, &b), "Π domain must not lift covariantly (unsound)");
-        assert!(!subtype(0, &b, &a), "nor contravariantly (kept invariant, conservative)");
+        assert!(
+            !subtype(0, &a, &b),
+            "Π domain must not lift covariantly (unsound)"
+        );
+        assert!(
+            !subtype(0, &b, &a),
+            "nor contravariantly (kept invariant, conservative)"
+        );
     }
 
     /// Twin negative (the M7 laundering class): the codomain *would* lift, but the declared grades
@@ -3434,7 +3486,7 @@ mod tests {
         let dom_lo = || pi(Grade::Omega, Term::IntTy, u(0)); // Int → Univ 0
         let dom_hi = || pi(Grade::Omega, Term::IntTy, u(1)); // Int → Univ 1
         let idf = || Term::Lam(Rc::new(Term::Var(0))); // λ f. f
-        // (Int→Univ 0) →^ω (Int→Univ 1): OK by codomain cumulativity.
+                                                       // (Int→Univ 0) →^ω (Int→Univ 1): OK by codomain cumulativity.
         assert!(
             check_top(idf(), pi(Grade::Omega, dom_lo(), dom_hi())).is_ok(),
             "λ f. f : (Int→Univ0) → (Int→Univ1) via cumulativity"
@@ -3513,9 +3565,16 @@ mod tests {
         // Direct: `Univ u : Univ (suc u)` under one level var; ill-formed under none.
         let checker = Checker::new(std::rc::Rc::new(Signature::empty()));
         let (uty, _, _) = checker
-            .infer_g(&Context::empty().extend_level(), &Term::Univ(Level::Var(0)), Grade::Zero)
+            .infer_g(
+                &Context::empty().extend_level(),
+                &Term::Univ(Level::Var(0)),
+                Grade::Zero,
+            )
             .expect("Univ u types");
-        assert!(matches!(uty, Value::Univ(Level::Suc(_))), "Univ u : Univ (suc u)");
+        assert!(
+            matches!(uty, Value::Univ(Level::Suc(_))),
+            "Univ u : Univ (suc u)"
+        );
         assert!(
             matches!(
                 checker.infer_g(&Context::empty(), &Term::Univ(Level::Var(0)), Grade::Zero),
@@ -4464,7 +4523,11 @@ mod tests {
         let mkbox = Term::Con(ConName("mkbox".into()), vec![nat_ty(), zero()]);
         assert_eq!(
             checker.infer(&ctx, &mkbox),
-            Ok(Value::Data(DataName("Box".into()), Rc::new(vec![]), Rc::new(vec![]))),
+            Ok(Value::Data(
+                DataName("Box".into()),
+                Rc::new(vec![]),
+                Rc::new(vec![])
+            )),
             "mkbox Nat zero : Box (dependent arg type A must resolve to Nat, not panic)"
         );
     }
@@ -4607,7 +4670,10 @@ mod tests {
         let neg = || Term::Pi(Grade::Omega, Rc::new(bad()), Rc::new(bad())); // Bad → Bad
         let sig = Signature::empty();
         let probes = [
-            ("EffTy", Term::EffTy(crate::row::Row::empty(), Rc::new(neg()))),
+            (
+                "EffTy",
+                Term::EffTy(crate::row::Row::empty(), Rc::new(neg())),
+            ),
             ("Delay", Term::Delay(Rc::new(neg()))),
             (
                 "PathP",
@@ -5103,9 +5169,9 @@ mod tests {
                 )),
             )),
         );
-        let term = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(
-            Term::Var(0),
-        ))))));
+        let term = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Var(
+            0,
+        )))))));
         assert!(
             check_top(term, ty).is_ok(),
             "dropping a linear var is allowed under the affine M1 reading"
@@ -5188,12 +5254,10 @@ mod tests {
         );
         let _ = ty;
         // λ A. λ f. λ x. (f x, x)
-        let body = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(
-            Term::Pair(
-                Rc::new(Term::App(Rc::new(Term::Var(1)), Rc::new(Term::Var(0)))),
-                Rc::new(Term::Var(0)),
-            ),
-        ))))));
+        let body = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Pair(
+            Rc::new(Term::App(Rc::new(Term::Var(1)), Rc::new(Term::Var(0)))),
+            Rc::new(Term::Var(0)),
+        )))))));
         match check_top(body, ty2) {
             Err(TypeError::GradeViolation(_)) => {}
             other => {
@@ -5315,9 +5379,9 @@ mod tests {
         // method vnil : Nat = zero
         let m_vnil = zero();
         // method vcons : (n:Nat)→(x:Nat)→(xs:Vec Nat n)→(ih:Nat)→Nat = λ.λ.λ.λ. succ ih
-        let m_vcons = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(
-            Term::Lam(Rc::new(succ(Term::Var(0)))),
-        ))))));
+        let m_vcons = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(
+            Rc::new(succ(Term::Var(0))),
+        )))))));
         let elim = Term::Elim {
             data: vec_name(),
             motive: Rc::new(motive),
@@ -5856,11 +5920,7 @@ mod tests {
         // twice. `pi_a_a(k)` builds `Pi(1, A, A)` correctly for any context depth `k` where `A`
         // sits (before that Pi's own domain binder is pushed).
         fn pi_a_a(k: usize) -> Term {
-            Term::Pi(
-                Grade::One,
-                Rc::new(Term::Var(k)),
-                Rc::new(Term::Var(k + 1)),
-            )
+            Term::Pi(Grade::One, Rc::new(Term::Var(k)), Rc::new(Term::Var(k + 1)))
         }
         // `pi1_a_a_outer` is `f`'s *domain* (only `A` in scope there, at index 0); `pi1_a_a_inner`
         // is both `ty`'s final *codomain* (`A` is now at index 1, since `f`'s own binder is also
@@ -5897,11 +5957,7 @@ mod tests {
     #[test]
     fn comp_base_and_tube_over_graded_pi_line_omega_accepted() {
         fn pi_a_a(k: usize) -> Term {
-            Term::Pi(
-                Grade::One,
-                Rc::new(Term::Var(k)),
-                Rc::new(Term::Var(k + 1)),
-            )
+            Term::Pi(Grade::One, Rc::new(Term::Var(k)), Rc::new(Term::Var(k + 1)))
         }
         let pi1_a_a_outer = pi_a_a(0);
         let pi1_a_a_inner = pi_a_a(1);
@@ -6054,8 +6110,8 @@ mod tests {
         //        (lam fib. plam i. pair ((snd fib) @ ~i)
         //                                (plam j. (snd fib) @ (imax ~i j)))
         let centre = Term::Pair(
-            Rc::new(Term::Var(0)),                       // y
-            Rc::new(Term::PLam(Rc::new(Term::Var(0)))),  // refl: plam i. y  (y is a term var, unshifted by the dim binder)
+            Rc::new(Term::Var(0)),                      // y
+            Rc::new(Term::PLam(Rc::new(Term::Var(0)))), // refl: plam i. y  (y is a term var, unshifted by the dim binder)
         );
         let contraction = Term::Lam(Rc::new(
             // lam fib.  (fib = Var 0)
@@ -6191,7 +6247,7 @@ mod tests {
             rhs: Rc::new(sigma_ty),
         };
         let ctx = Context::empty().extend(q_ty, Grade::Omega); // q = Var 0
-        // family `i. Π(x:IntTy). q @ i` — a Pi-headed open line whose codomain genuinely varies.
+                                                               // family `i. Π(x:IntTy). q @ i` — a Pi-headed open line whose codomain genuinely varies.
         let family = Term::Pi(
             Grade::Omega,
             Rc::new(Term::IntTy),

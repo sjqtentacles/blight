@@ -394,7 +394,11 @@ pub fn from_kernel(t: &Term) -> Result<RTerm, RecheckError> {
             lhs: Box::new(from_kernel(lhs)?),
             rhs: Box::new(from_kernel(rhs)?),
         },
-        Term::IfZero { scrut, then_, else_ } => RTerm::IfZero {
+        Term::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => RTerm::IfZero {
             scrut: Box::new(from_kernel(scrut)?),
             then_: Box::new(from_kernel(then_)?),
             else_: Box::new(from_kernel(else_)?),
@@ -674,26 +678,45 @@ mod level_tests {
     fn rlevel_leq_known_incompleteness_is_false() {
         let l = suc(max(v(0), v(1)));
         let r = max(suc(v(0)), suc(v(1)));
-        assert!(!rlevel_leq(&l, &r), "structural order stays incomplete here (kernel parity)");
+        assert!(
+            !rlevel_leq(&l, &r),
+            "structural order stays incomplete here (kernel parity)"
+        );
         // The reverse direction IS decided (max-left splits, each summand descends).
-        assert!(rlevel_leq(&r, &l), "max(suc u, suc v) ≤ suc (max u v) is decided");
+        assert!(
+            rlevel_leq(&r, &l),
+            "max(suc u, suc v) ≤ suc (max u v) is decided"
+        );
     }
 
     /// `rlevel_max` canonical form: dominated summands are dropped (concrete pairs return the
     /// larger chain; `max(l, 0)` returns `l`), and only incomparable pairs build a `Max` node.
     #[test]
     fn rlevel_max_canonical() {
-        assert_eq!(rlevel_max(&rlevel_of_nat(1), &rlevel_of_nat(3)), rlevel_of_nat(3));
-        assert_eq!(rlevel_max(&rlevel_of_nat(3), &rlevel_of_nat(1)), rlevel_of_nat(3));
+        assert_eq!(
+            rlevel_max(&rlevel_of_nat(1), &rlevel_of_nat(3)),
+            rlevel_of_nat(3)
+        );
+        assert_eq!(
+            rlevel_max(&rlevel_of_nat(3), &rlevel_of_nat(1)),
+            rlevel_of_nat(3)
+        );
         assert_eq!(rlevel_max(&v(0), &RLevel::Zero), v(0));
         assert_eq!(rlevel_max(&v(0), &suc(v(0))), suc(v(0)));
-        assert_eq!(rlevel_max(&v(0), &v(1)), max(v(0), v(1)), "incomparable ⟹ residual Max");
+        assert_eq!(
+            rlevel_max(&v(0), &v(1)),
+            max(v(0), v(1)),
+            "incomparable ⟹ residual Max"
+        );
     }
 
     /// `rlevel_wf`: the gate is exactly `u < n_levels`, recursively through `Suc`/`Max`.
     #[test]
     fn rlevel_wf_gate() {
-        assert!(rlevel_wf(&rlevel_of_nat(7), 0), "closed levels need no context");
+        assert!(
+            rlevel_wf(&rlevel_of_nat(7), 0),
+            "closed levels need no context"
+        );
         assert!(rlevel_wf(&v(0), 1));
         assert!(!rlevel_wf(&v(1), 1));
         assert!(!rlevel_wf(&suc(v(1)), 1), "wf recurses under suc");

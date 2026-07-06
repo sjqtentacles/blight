@@ -16,8 +16,8 @@
 use blight_kernel::semiring::Grade;
 use blight_kernel::signature::{Arg, Constructor, DataDecl};
 use blight_kernel::term::{Level, Term};
-use std::rc::Rc;
 use blight_kernel::{ConName, DataName, Signature};
+use std::rc::Rc;
 
 fn nat_sig() -> Signature {
     let mut sig = Signature::new();
@@ -75,7 +75,7 @@ fn main_with_phantom() -> (Term, Term) {
     // outer : (idx :^0 Nat) -> Nat   =   λ idx. (λ ignore. Succ Zero) idx
     let inner = Term::App(
         Rc::new(Term::Lam(Rc::new(succ_zero()))), // λ ignore. Succ Zero  (ignores its arg)
-        Rc::new(Term::Var(0)),                     // applied to idx (the grade-0 binder)
+        Rc::new(Term::Var(0)),                    // applied to idx (the grade-0 binder)
     );
     let term = Term::App(
         Rc::new(Term::Lam(Rc::new(inner))),

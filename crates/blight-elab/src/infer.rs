@@ -43,7 +43,8 @@ pub fn eval_value_str(env: &ElabEnv, expr_src: &str) -> Result<String, String> {
         .map_err(|e| format!("cannot infer a type: {e}"))?;
     let sig = std::rc::Rc::new(env.signature().clone());
     let nf = blight_kernel::normalize::run_metered(crate::stepper::DEFAULT_STEP_BUDGET, || {
-        let value = blight_kernel::normalize::eval(&blight_kernel::value::Env::with_sig(sig), &term);
+        let value =
+            blight_kernel::normalize::eval(&blight_kernel::value::Env::with_sig(sig), &term);
         blight_kernel::normalize::quote(0, &value)
     })
     .map_err(|_| "evaluation exceeded the step budget (possibly divergent)".to_string())?;

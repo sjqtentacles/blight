@@ -170,10 +170,10 @@ pub fn recheck_proof(sig: &Signature, proof: &Proof) -> RecheckResult {
 // =================================================================================================
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
     use super::*;
     use blight_kernel::term::{Cofib, SystemBranch};
     use blight_kernel::{Arg, ConName, Constructor, DataDecl, DataName, Interval, Level, Term};
+    use std::rc::Rc;
 
     fn nat_sig() -> Signature {
         let mut sig = Signature::new();
@@ -243,10 +243,7 @@ mod tests {
             "the independent re-checker agrees under u : Level"
         );
         assert!(
-            matches!(
-                recheck_judgement(&sig, &j),
-                Err(RecheckError::Rejected(_))
-            ),
+            matches!(recheck_judgement(&sig, &j), Err(RecheckError::Rejected(_))),
             "with no level context the same judgement is Rejected (gate is real)"
         );
     }
@@ -348,10 +345,7 @@ mod tests {
         };
         let sig = Signature::empty();
         assert!(
-            matches!(
-                recheck_judgement(&sig, &j),
-                Err(RecheckError::Rejected(_))
-            ),
+            matches!(recheck_judgement(&sig, &j), Err(RecheckError::Rejected(_))),
             "an out-of-scope level variable is Rejected through the unleveled door"
         );
         assert_eq!(

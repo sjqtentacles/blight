@@ -128,7 +128,11 @@ fn collect_closure_names(c: &Cir, out: &mut Vec<String>) {
             collect_closure_names(rhs, out);
         }
         // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-        Cir::IfZero { scrut, then_, else_ } => {
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => {
             collect_closure_names(scrut, out);
             collect_closure_names(then_, out);
             collect_closure_names(else_, out);
@@ -313,7 +317,11 @@ fn effectful_funcs(funcs: &HashMap<String, Func>) -> std::collections::HashSet<S
                 scan(rhs, direct, calls);
             }
             // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-            Cir::IfZero { scrut, then_, else_ } => {
+            Cir::IfZero {
+                scrut,
+                then_,
+                else_,
+            } => {
                 scan(scrut, direct, calls);
                 scan(then_, direct, calls);
                 scan(else_, direct, calls);
@@ -424,9 +432,11 @@ fn arg_may_effect(c: &Cir, eff: &std::collections::HashSet<String>) -> bool {
         }
         Cir::IntPrim { lhs, rhs, .. } => arg_may_effect(lhs, eff) || arg_may_effect(rhs, eff),
         // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-        Cir::IfZero { scrut, then_, else_ } => {
-            arg_may_effect(scrut, eff) || arg_may_effect(then_, eff) || arg_may_effect(else_, eff)
-        }
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => arg_may_effect(scrut, eff) || arg_may_effect(then_, eff) || arg_may_effect(else_, eff),
         Cir::NatPrim { lhs, rhs, .. } | Cir::FloatPrim { lhs, rhs, .. } => {
             arg_may_effect(lhs, eff)
                 || rhs
@@ -488,7 +498,11 @@ fn count_param_uses(body: &Cir) -> usize {
                 cap(go(lhs, depth, suspended) + go(rhs, depth, suspended))
             }
             // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-            Cir::IfZero { scrut, then_, else_ } => cap(go(scrut, depth, suspended)
+            Cir::IfZero {
+                scrut,
+                then_,
+                else_,
+            } => cap(go(scrut, depth, suspended)
                 + go(then_, depth, suspended)
                 + go(else_, depth, suspended)),
             Cir::NatPrim { lhs, rhs, .. } | Cir::FloatPrim { lhs, rhs, .. } => {
@@ -571,7 +585,11 @@ fn instantiate(body: &Cir, arg: &Cir, env: &[Cir]) -> Cir {
                 rhs: Box::new(go(rhs, depth, arg, env)),
             },
             // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-            Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+            Cir::IfZero {
+                scrut,
+                then_,
+                else_,
+            } => Cir::IfZero {
                 scrut: Box::new(go(scrut, depth, arg, env)),
                 then_: Box::new(go(then_, depth, arg, env)),
                 else_: Box::new(go(else_, depth, arg, env)),
@@ -676,7 +694,11 @@ fn shift(c: &Cir, by: usize) -> Cir {
                 rhs: Box::new(go(rhs, by, depth)),
             },
             // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-            Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+            Cir::IfZero {
+                scrut,
+                then_,
+                else_,
+            } => Cir::IfZero {
                 scrut: Box::new(go(scrut, by, depth)),
                 then_: Box::new(go(then_, by, depth)),
                 else_: Box::new(go(else_, by, depth)),
@@ -783,7 +805,11 @@ fn reduce_children(
             rhs: Box::new(reduce(rhs, funcs, eff)),
         },
         // if-zero: a non-binding branch — recurse into all three subterms like IntPrim.
-        Cir::IfZero { scrut, then_, else_ } => Cir::IfZero {
+        Cir::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => Cir::IfZero {
             scrut: Box::new(reduce(scrut, funcs, eff)),
             then_: Box::new(reduce(then_, funcs, eff)),
             else_: Box::new(reduce(else_, funcs, eff)),

@@ -248,14 +248,14 @@ fn fetch_bytes(location: &str) -> Result<Vec<u8>, ElabError> {
         )));
         #[cfg(feature = "net")]
         {
-        let mut response = ureq::get(location).call().map_err(|e| {
-            ElabError::BadForm(format!("registry: cannot fetch tarball {location:?}: {e}"))
-        })?;
-        return response.body_mut().read_to_vec().map_err(|e| {
-            ElabError::BadForm(format!(
-                "registry: cannot read tarball body from {location:?}: {e}"
-            ))
-        });
+            let mut response = ureq::get(location).call().map_err(|e| {
+                ElabError::BadForm(format!("registry: cannot fetch tarball {location:?}: {e}"))
+            })?;
+            return response.body_mut().read_to_vec().map_err(|e| {
+                ElabError::BadForm(format!(
+                    "registry: cannot read tarball body from {location:?}: {e}"
+                ))
+            });
         }
     }
     let path = location.strip_prefix("file://").unwrap_or(location);
@@ -346,15 +346,15 @@ pub fn load_index(location: &str) -> Result<RegistryIndex, ElabError> {
         )));
         #[cfg(feature = "net")]
         {
-        let mut response = ureq::get(location).call().map_err(|e| {
-            ElabError::BadForm(format!("registry index: cannot fetch {location:?}: {e}"))
-        })?;
-        let src = response.body_mut().read_to_string().map_err(|e| {
-            ElabError::BadForm(format!(
-                "registry index: cannot read body from {location:?}: {e}"
-            ))
-        })?;
-        return RegistryIndex::parse(&src);
+            let mut response = ureq::get(location).call().map_err(|e| {
+                ElabError::BadForm(format!("registry index: cannot fetch {location:?}: {e}"))
+            })?;
+            let src = response.body_mut().read_to_string().map_err(|e| {
+                ElabError::BadForm(format!(
+                    "registry index: cannot read body from {location:?}: {e}"
+                ))
+            })?;
+            return RegistryIndex::parse(&src);
         }
     }
     let path = location.strip_prefix("file://").unwrap_or(location);

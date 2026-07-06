@@ -610,15 +610,15 @@ impl<'a> Recheck<'a> {
             // `if-zero` (T1a): scrutinee at `Int`; result type inferred from the then-branch and the
             // else-branch checked against it. Usage = sum of scrutinee + branches (so a linear var
             // spent in both branches is `1+1 = ω`, rejected), row = union — mirroring the kernel.
-            RTerm::IfZero { scrut, then_, else_ } => {
+            RTerm::IfZero {
+                scrut,
+                then_,
+                else_,
+            } => {
                 let (rs, us) = self.check(ctx, scrut, &RValue::IntTy, sigma)?;
                 let (then_ty, rt, ut) = self.infer(ctx, then_, sigma)?;
                 let (re, ue) = self.check(ctx, else_, &then_ty, sigma)?;
-                Ok((
-                    then_ty,
-                    rs.union(&rt).union(&re),
-                    us.add(&ut).add(&ue),
-                ))
+                Ok((then_ty, rs.union(&rt).union(&re), us.add(&ut).add(&ue)))
             }
         }
     }
@@ -855,21 +855,22 @@ impl<'a> Recheck<'a> {
                 },
                 _,
             ) => {
-                let (_c, row, usage) = self.infer_handle(
-                    ctx,
-                    body,
-                    return_clause,
-                    op_clauses,
-                    Some(expected),
-                    sigma,
-                )?;
+                let (_c, row, usage) =
+                    self.infer_handle(ctx, body, return_clause, op_clauses, Some(expected), sigma)?;
                 Ok((row, usage))
             }
             // `if-zero` in checking mode (T1a): check both branches against the *expected* type
             // directly, so a branch that needs it — e.g. the prelude's `int-eq?` branching to the
             // bare `Bool` constructors `true`/`false` — checks without an ascription. Mirrors the
             // kernel's `check_g` `IfZero` arm (usage = scrutinee + branch-sum, row = union).
-            (RTerm::IfZero { scrut, then_, else_ }, _) => {
+            (
+                RTerm::IfZero {
+                    scrut,
+                    then_,
+                    else_,
+                },
+                _,
+            ) => {
                 let (rs, us) = self.check(ctx, scrut, &RValue::IntTy, sigma)?;
                 let (rt, ut) = self.check(ctx, then_, expected, sigma)?;
                 let (re, ue) = self.check(ctx, else_, expected, sigma)?;
@@ -964,7 +965,11 @@ impl<'a> Recheck<'a> {
                 Ok::<RValue, RecheckError>(eval(self.sig, &env, &rt))
             })
             .collect::<RResult<_>>()?;
-        Ok((RValue::Data(decl.name, Rc::new(vec![]), Rc::new(result_indices)), row, usage))
+        Ok((
+            RValue::Data(decl.name, Rc::new(vec![]), Rc::new(result_indices)),
+            row,
+            usage,
+        ))
     }
 
     /// Check a constructor application against an expected `Data` family (spec §2.7).
@@ -1015,7 +1020,11 @@ impl<'a> Recheck<'a> {
                             Ok::<RValue, RecheckError>(eval(self.sig, &env, &rt))
                         })
                         .collect::<RResult<_>>()?;
-                    let rec_ty = RValue::Data(decl.name.clone(), Rc::new(params.to_vec()), Rc::new(rec_index_vals));
+                    let rec_ty = RValue::Data(
+                        decl.name.clone(),
+                        Rc::new(params.to_vec()),
+                        Rc::new(rec_index_vals),
+                    );
                     let (r, u) = self.check(ctx, arg, &rec_ty, sigma)?;
                     row = row.union(&r);
                     usage = usage.add(&u);
@@ -1107,7 +1116,11 @@ impl<'a> Recheck<'a> {
                         }
                     }
                 }
-                let dty = RValue::Data(decl.name.clone(), eparams.clone(), Rc::new(idx_vars.clone()));
+                let dty = RValue::Data(
+                    decl.name.clone(),
+                    eparams.clone(),
+                    Rc::new(idx_vars.clone()),
+                );
                 let ctx_id = ctx_acc.extend(self.sig, dty, RGrade::Omega);
                 match body {
                     RTerm::Lam(inner) => {
@@ -1614,7 +1627,11 @@ impl<'a> Recheck<'a> {
                 if n1 != n2 || p1.len() != p2.len() || i1.len() != i2.len() {
                     return Ok(Unify::Clash);
                 }
-                self.unify_seq(ctx, p1.iter().zip(p2.iter()).chain(i1.iter().zip(i2.iter())), sol)
+                self.unify_seq(
+                    ctx,
+                    p1.iter().zip(p2.iter()).chain(i1.iter().zip(i2.iter())),
+                    sol,
+                )
             }
             // Same constructor head: decompose arguments. Different heads are a genuine CLASH — the
             // branch is unreachable for this scrutinee.
@@ -2012,7 +2029,11 @@ fn translate_go(t: &RTerm, depth_in: usize, m: usize, repls: &[RTerm]) -> RTerm 
             rhs: Box::new(translate_go(rhs, depth_in, m, repls)),
         },
         // `if-zero` binds no term variable — all three subterms at the same depth.
-        RTerm::IfZero { scrut, then_, else_ } => RTerm::IfZero {
+        RTerm::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => RTerm::IfZero {
             scrut: Box::new(translate_go(scrut, depth_in, m, repls)),
             then_: Box::new(translate_go(then_, depth_in, m, repls)),
             else_: Box::new(translate_go(else_, depth_in, m, repls)),
@@ -2155,7 +2176,11 @@ fn shift_free_cut(t: &RTerm, d: usize, cut: usize) -> RTerm {
             lhs: Box::new(shift_free_cut(lhs, d, cut)),
             rhs: Box::new(shift_free_cut(rhs, d, cut)),
         },
-        RTerm::IfZero { scrut, then_, else_ } => RTerm::IfZero {
+        RTerm::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => RTerm::IfZero {
             scrut: Box::new(shift_free_cut(scrut, d, cut)),
             then_: Box::new(shift_free_cut(then_, d, cut)),
             else_: Box::new(shift_free_cut(else_, d, cut)),
@@ -2433,7 +2458,11 @@ mod tests {
         let sig = nat_vec_sig();
         let rc = Recheck::new(&sig);
         // Nat takes 0 params; supplying one is an arity error.
-        let bad = RTerm::Data(DataName("Nat".into()), vec![RTerm::Univ(crate::term::rlevel_of_nat(0))], vec![]);
+        let bad = RTerm::Data(
+            DataName("Nat".into()),
+            vec![RTerm::Univ(crate::term::rlevel_of_nat(0))],
+            vec![],
+        );
         assert!(rc.infer(&Ctx::empty(), &bad, RGrade::Zero).is_err());
         // Vec needs 1 param + 1 index; supplying none is an arity error.
         let bad2 = RTerm::Data(DataName("Vec".into()), vec![], vec![]);

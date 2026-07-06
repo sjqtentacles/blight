@@ -523,9 +523,9 @@ fn recheck_agrees_on_multi_param_and_multi_index() {
     let elim2 = Term::Elim {
         data: DataName("Square".into()),
         // λ m. λ n. λ (_:Square m n). Nat
-        motive: Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(
-            Rc::new(nat()),
-        )))))),
+        motive: Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(
+            nat(),
+        ))))))),
         methods: vec![zero()],
         scrutinee: Rc::new(Term::Ann(
             Rc::new(Term::Con(ConName("corner".into()), vec![])),
@@ -611,9 +611,9 @@ fn recheck_agrees_on_indexed_elim() {
     let motive = Term::Lam(Rc::new(Term::Lam(Rc::new(nat()))));
     // methods: vnil ↦ Zero ;  vcons ↦ λ n. λ x. λ xs. λ ih. Succ ih   (computes the length).
     let m_vnil = zero();
-    let m_vcons = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(
-        Term::Lam(Rc::new(succ(Term::Var(0)))),
-    ))))));
+    let m_vcons = Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Lam(
+        Rc::new(succ(Term::Var(0))),
+    )))))));
     // scrutinee: vcons Zero Zero vnil : Vec Nat (Succ Zero). The constructor of a parameterized
     // family needs a type ascription to be inferable (the kernel cannot recover `A` otherwise).
     let vec_nat = |len: Term| Term::Data(DataName("Vec".into()), vec![nat()], vec![len]);
@@ -1380,11 +1380,7 @@ fn deep_plus_zero_proof(depth: u32) -> (Signature, Term) {
     let plus_ty = Term::Pi(
         Grade::Omega,
         Rc::new(nat_ty()),
-        Rc::new(Term::Pi(
-            Grade::Omega,
-            Rc::new(nat_ty()),
-            Rc::new(nat_ty()),
-        )),
+        Rc::new(Term::Pi(Grade::Omega, Rc::new(nat_ty()), Rc::new(nat_ty()))),
     );
     let plus = Term::Ann(
         Rc::new(Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Elim {
@@ -1439,8 +1435,12 @@ fn deep_plus_zero_conv_kernel_and_recheck_agree_in_bounded_time() {
         };
 
         let start = std::time::Instant::now();
-        let proof = check_top_with(sig.clone(), blight_kernel::unshare(term), blight_kernel::unshare(ty.clone()))
-            .expect("kernel accepts the deep plus-zero proof");
+        let proof = check_top_with(
+            sig.clone(),
+            blight_kernel::unshare(term),
+            blight_kernel::unshare(ty.clone()),
+        )
+        .expect("kernel accepts the deep plus-zero proof");
         let recheck_result = blight_recheck::recheck_proof(&sig, &proof);
         let elapsed = start.elapsed();
 

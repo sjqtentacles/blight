@@ -53,9 +53,7 @@ fn uses_binder(t: &RTerm, depth: usize) -> bool {
         RTerm::App(f, a) | RTerm::Pair(f, a) | RTerm::Ann(f, a) => {
             uses_binder(f, depth) || uses_binder(a, depth)
         }
-        RTerm::Fst(p) | RTerm::Snd(p) | RTerm::PLam(p) | RTerm::PApp(p, _) => {
-            uses_binder(p, depth)
-        }
+        RTerm::Fst(p) | RTerm::Snd(p) | RTerm::PLam(p) | RTerm::PApp(p, _) => uses_binder(p, depth),
         RTerm::Data(_, ps, is) => {
             ps.iter().any(|t| uses_binder(t, depth)) || is.iter().any(|t| uses_binder(t, depth))
         }
@@ -99,7 +97,10 @@ fn uses_binder(t: &RTerm, depth: usize) -> bool {
         }
         RTerm::IntPrim { lhs, rhs, .. } => uses_binder(lhs, depth) || uses_binder(rhs, depth),
         RTerm::IfZero {
-            scrut, then_, else_, ..
+            scrut,
+            then_,
+            else_,
+            ..
         } => uses_binder(scrut, depth) || uses_binder(then_, depth) || uses_binder(else_, depth),
     }
 }
@@ -263,7 +264,11 @@ pub fn eval(sig: &Signature, env: &Env, t: &RTerm) -> RValue {
         RTerm::IntPrim { op, lhs, rhs } => int_prim(*op, eval(sig, env, lhs), eval(sig, env, rhs)),
         // `if-zero` (T1a): fold on a literal scrutinee (evaluating only the taken branch), else stay
         // stuck as a `Neutral::IfZero` — independently mirroring the kernel's `eval`.
-        RTerm::IfZero { scrut, then_, else_ } => match eval(sig, env, scrut) {
+        RTerm::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => match eval(sig, env, scrut) {
             RValue::IntLit(0) => eval(sig, env, then_),
             RValue::IntLit(_) => eval(sig, env, else_),
             other => RValue::Neutral(Neutral::IfZero {
@@ -369,11 +374,7 @@ pub fn apply(sig: &Signature, f: RValue, a: RValue) -> RValue {
         RValue::Lam(clos) => clos.apply(sig, a),
         RValue::ReflectedFun { neutral, cod } => {
             let result_ty = cod.apply(sig, a.clone());
-            reflect(
-                sig,
-                Neutral::App(Rc::new(neutral), Rc::new(a)),
-                &result_ty,
-            )
+            reflect(sig, Neutral::App(Rc::new(neutral), Rc::new(a)), &result_ty)
         }
         RValue::Neutral(n) => RValue::Neutral(Neutral::App(Rc::new(n), Rc::new(a))),
         other => panic!("apply: not a function: {other:?}"),
@@ -451,8 +452,7 @@ pub fn do_elim(
                         result = apply(sig, result, RValue::Neutral(Neutral::Var(usize::MAX)));
                     } else {
                         IH_COMPUTED.set(IH_COMPUTED.get() + 1);
-                        let ih =
-                            do_elim(sig, data, motive.clone(), methods.clone(), arg.clone());
+                        let ih = do_elim(sig, data, motive.clone(), methods.clone(), arg.clone());
                         result = apply(sig, result, ih);
                     }
                 }
@@ -653,7 +653,11 @@ fn quote_neutral(sig: &Signature, lvl: usize, dlvl: usize, n: &Neutral) -> RTerm
             lhs: Box::new(quote(sig, lvl, dlvl, lhs)),
             rhs: Box::new(quote(sig, lvl, dlvl, rhs)),
         },
-        Neutral::IfZero { scrut, then_, else_ } => RTerm::IfZero {
+        Neutral::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => RTerm::IfZero {
             scrut: Box::new(quote(sig, lvl, dlvl, scrut)),
             then_: Box::new(quote(sig, lvl, dlvl, then_)),
             else_: Box::new(quote(sig, lvl, dlvl, else_)),
@@ -729,7 +733,9 @@ mod rp3_tests {
             Box::new(RTerm::Ann(Box::new(RTerm::Var(0)), Box::new(path_ty))),
             RInterval::I1,
         );
-        assert!(matches!(eval(&sig, &env, &term), RValue::Univ(ref l) if *l == crate::term::rlevel_of_nat(7)));
+        assert!(
+            matches!(eval(&sig, &env, &term), RValue::Univ(ref l) if *l == crate::term::rlevel_of_nat(7))
+        );
     }
 }
 
@@ -783,26 +789,57 @@ mod n5_tests {
                 RTerm::Pi(RGrade::Omega, z(), v(1)),
             ),
             ("Lam body", RTerm::Lam(v(2)), RTerm::Lam(v(1))),
-            ("Sigma snd", RTerm::Sigma(z(), v(2)), RTerm::Sigma(z(), v(1))),
+            (
+                "Sigma snd",
+                RTerm::Sigma(z(), v(2)),
+                RTerm::Sigma(z(), v(1)),
+            ),
         ] {
-            assert!(uses_binder(&shifted_uses, d), "{label}: Var(d+1) under the binder");
-            assert!(!uses_binder(&shifted_not, d), "{label}: Var(d) under the binder differs");
+            assert!(
+                uses_binder(&shifted_uses, d),
+                "{label}: Var(d+1) under the binder"
+            );
+            assert!(
+                !uses_binder(&shifted_not, d),
+                "{label}: Var(d) under the binder differs"
+            );
         }
-        assert!(uses_binder(&RTerm::Pi(RGrade::Omega, v(1), z()), d), "Pi dom unshifted");
-        assert!(uses_binder(&RTerm::Sigma(v(1), z()), d), "Sigma fst unshifted");
+        assert!(
+            uses_binder(&RTerm::Pi(RGrade::Omega, v(1), z()), d),
+            "Pi dom unshifted"
+        );
+        assert!(
+            uses_binder(&RTerm::Sigma(v(1), z()), d),
+            "Sigma fst unshifted"
+        );
 
         let handle = |body: Box<RTerm>, ret: Box<RTerm>, cl: Box<RTerm>| RTerm::Handle {
             body,
             return_clause: ret,
             op_clauses: vec![("op".to_string(), cl)],
         };
-        assert!(uses_binder(&handle(v(1), z(), z()), d), "Handle body unshifted");
+        assert!(
+            uses_binder(&handle(v(1), z(), z()), d),
+            "Handle body unshifted"
+        );
         assert!(uses_binder(&handle(z(), v(2), z()), d), "Handle return +1");
-        assert!(uses_binder(&handle(z(), z(), v(3)), d), "Handle op clause +2");
-        assert!(!uses_binder(&handle(z(), v(1), z()), d), "Handle return: Var(d) differs");
-        assert!(!uses_binder(&handle(z(), z(), v(2)), d), "Handle clause: Var(d+1) differs");
+        assert!(
+            uses_binder(&handle(z(), z(), v(3)), d),
+            "Handle op clause +2"
+        );
+        assert!(
+            !uses_binder(&handle(z(), v(1), z()), d),
+            "Handle return: Var(d) differs"
+        );
+        assert!(
+            !uses_binder(&handle(z(), z(), v(2)), d),
+            "Handle clause: Var(d+1) differs"
+        );
 
-        assert!(uses_binder(&RTerm::PLam(v(1)), d), "PLam binds a dimension, not a term var");
+        assert!(
+            uses_binder(&RTerm::PLam(v(1)), d),
+            "PLam binds a dimension, not a term var"
+        );
 
         let probes: Vec<(&str, RTerm)> = vec![
             ("App lhs", RTerm::App(v(1), z())),
@@ -816,16 +853,32 @@ mod n5_tests {
             ("PApp", RTerm::PApp(v(1), RInterval::I0)),
             (
                 "Data params",
-                RTerm::Data(blight_kernel::DataName("D".to_string()), vec![RTerm::Var(1)], vec![]),
+                RTerm::Data(
+                    blight_kernel::DataName("D".to_string()),
+                    vec![RTerm::Var(1)],
+                    vec![],
+                ),
             ),
             (
                 "Data indices",
-                RTerm::Data(blight_kernel::DataName("D".to_string()), vec![], vec![RTerm::Var(1)]),
+                RTerm::Data(
+                    blight_kernel::DataName("D".to_string()),
+                    vec![],
+                    vec![RTerm::Var(1)],
+                ),
             ),
-            ("Con args", RTerm::Con(blight_kernel::ConName("c".to_string()), vec![RTerm::Var(1)])),
+            (
+                "Con args",
+                RTerm::Con(blight_kernel::ConName("c".to_string()), vec![RTerm::Var(1)]),
+            ),
             (
                 "Elim motive",
-                RTerm::Elim { data: blight_kernel::DataName("D".to_string()), motive: v(1), methods: vec![], scrutinee: z() },
+                RTerm::Elim {
+                    data: blight_kernel::DataName("D".to_string()),
+                    motive: v(1),
+                    methods: vec![],
+                    scrutinee: z(),
+                },
             ),
             (
                 "Elim methods",
@@ -838,42 +891,106 @@ mod n5_tests {
             ),
             (
                 "Elim scrutinee",
-                RTerm::Elim { data: blight_kernel::DataName("D".to_string()), motive: z(), methods: vec![], scrutinee: v(1) },
+                RTerm::Elim {
+                    data: blight_kernel::DataName("D".to_string()),
+                    motive: z(),
+                    methods: vec![],
+                    scrutinee: v(1),
+                },
             ),
-            ("PathP family", RTerm::PathP { family: v(1), lhs: z(), rhs: z() }),
-            ("PathP lhs", RTerm::PathP { family: z(), lhs: v(1), rhs: z() }),
-            ("PathP rhs", RTerm::PathP { family: z(), lhs: z(), rhs: v(1) }),
+            (
+                "PathP family",
+                RTerm::PathP {
+                    family: v(1),
+                    lhs: z(),
+                    rhs: z(),
+                },
+            ),
+            (
+                "PathP lhs",
+                RTerm::PathP {
+                    family: z(),
+                    lhs: v(1),
+                    rhs: z(),
+                },
+            ),
+            (
+                "PathP rhs",
+                RTerm::PathP {
+                    family: z(),
+                    lhs: z(),
+                    rhs: v(1),
+                },
+            ),
             (
                 "Transp family",
-                RTerm::Transp { family: v(1), cofib: RCofib::Top, base: z() },
+                RTerm::Transp {
+                    family: v(1),
+                    cofib: RCofib::Top,
+                    base: z(),
+                },
             ),
             (
                 "Transp base",
-                RTerm::Transp { family: z(), cofib: RCofib::Top, base: v(1) },
+                RTerm::Transp {
+                    family: z(),
+                    cofib: RCofib::Top,
+                    base: v(1),
+                },
             ),
             (
                 "HComp ty",
-                RTerm::HComp { ty: v(1), cofib: RCofib::Top, tube: z(), base: z() },
+                RTerm::HComp {
+                    ty: v(1),
+                    cofib: RCofib::Top,
+                    tube: z(),
+                    base: z(),
+                },
             ),
             (
                 "HComp tube",
-                RTerm::HComp { ty: z(), cofib: RCofib::Top, tube: v(1), base: z() },
+                RTerm::HComp {
+                    ty: z(),
+                    cofib: RCofib::Top,
+                    tube: v(1),
+                    base: z(),
+                },
             ),
             (
                 "HComp base",
-                RTerm::HComp { ty: z(), cofib: RCofib::Top, tube: z(), base: v(1) },
+                RTerm::HComp {
+                    ty: z(),
+                    cofib: RCofib::Top,
+                    tube: z(),
+                    base: v(1),
+                },
             ),
             (
                 "Comp family",
-                RTerm::Comp { family: v(1), cofib: RCofib::Top, tube: z(), base: z() },
+                RTerm::Comp {
+                    family: v(1),
+                    cofib: RCofib::Top,
+                    tube: z(),
+                    base: z(),
+                },
             ),
             (
                 "Comp tube",
-                RTerm::Comp { family: z(), cofib: RCofib::Top, tube: v(1), base: z() },
+                RTerm::Comp {
+                    family: z(),
+                    cofib: RCofib::Top,
+                    tube: v(1),
+                    base: z(),
+                },
             ),
             (
                 "Comp base",
-                RTerm::Comp { family: z(), cofib: RCofib::Top, tube: z(), base: v(1) },
+                RTerm::Comp {
+                    family: z(),
+                    cofib: RCofib::Top,
+                    tube: z(),
+                    base: v(1),
+                },
             ),
             (
                 "Op type_args",
@@ -900,27 +1017,50 @@ mod n5_tests {
             ("Force", RTerm::Force(v(1))),
             (
                 "IntPrim lhs",
-                RTerm::IntPrim { op: blight_kernel::IntPrimOp::Add, lhs: v(1), rhs: z() },
+                RTerm::IntPrim {
+                    op: blight_kernel::IntPrimOp::Add,
+                    lhs: v(1),
+                    rhs: z(),
+                },
             ),
             (
                 "IntPrim rhs",
-                RTerm::IntPrim { op: blight_kernel::IntPrimOp::Add, lhs: z(), rhs: v(1) },
+                RTerm::IntPrim {
+                    op: blight_kernel::IntPrimOp::Add,
+                    lhs: z(),
+                    rhs: v(1),
+                },
             ),
             (
                 "IfZero scrut",
-                RTerm::IfZero { scrut: v(1), then_: z(), else_: z() },
+                RTerm::IfZero {
+                    scrut: v(1),
+                    then_: z(),
+                    else_: z(),
+                },
             ),
             (
                 "IfZero then_",
-                RTerm::IfZero { scrut: z(), then_: v(1), else_: z() },
+                RTerm::IfZero {
+                    scrut: z(),
+                    then_: v(1),
+                    else_: z(),
+                },
             ),
             (
                 "IfZero else_",
-                RTerm::IfZero { scrut: z(), then_: z(), else_: v(1) },
+                RTerm::IfZero {
+                    scrut: z(),
+                    then_: z(),
+                    else_: v(1),
+                },
             ),
         ];
         for (label, t) in &probes {
-            assert!(uses_binder(t, d), "{label}: the single using field must be found");
+            assert!(
+                uses_binder(t, d),
+                "{label}: the single using field must be found"
+            );
         }
         assert!(!uses_binder(&RTerm::Univ(crate::term::rlevel_of_nat(0)), d));
         assert!(!uses_binder(&RTerm::IntTy, d));

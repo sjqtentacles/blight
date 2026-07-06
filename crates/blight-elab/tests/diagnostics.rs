@@ -42,9 +42,7 @@ fn unbound_var_typo_suggests_nearest_name() {
 /// A lambda binding more parameters than its declared `Pi` type has binders names both counts.
 #[test]
 fn lam_arity_error_names_both_counts() {
-    let m = err_of(&format!(
-        "{NAT}(define f (Pi ((a Nat)) Nat) (lam (a b) a))"
-    ));
+    let m = err_of(&format!("{NAT}(define f (Pi ((a Nat)) Nat) (lam (a b) a))"));
     assert!(
         m.contains("lambda binds 2 parameters") && m.contains("has 1"),
         "names the lambda's and the type's binder counts: {m}"

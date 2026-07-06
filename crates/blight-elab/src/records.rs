@@ -183,7 +183,9 @@ pub struct RecordInfo {
 
 impl RecordEnv {
     pub fn register(&mut self, decl: &RecordDecl) {
-        let projectable = (0..decl.fields.len()).map(|i| decl.projectable(i)).collect();
+        let projectable = (0..decl.fields.len())
+            .map(|i| decl.projectable(i))
+            .collect();
         self.records.insert(
             decl.name.clone(),
             RecordInfo {
@@ -241,7 +243,9 @@ pub fn rewrite_updates(form: &Sexpr, records: &RecordEnv) -> Result<Sexpr, ElabE
                     )));
                 };
                 let fname = atom(f).ok_or_else(|| {
-                    bad(format!("{head}: update field names must be symbols, got `{f:?}`"))
+                    bad(format!(
+                        "{head}: update field names must be symbols, got `{f:?}`"
+                    ))
                 })?;
                 let Some(idx) = info.fields.iter().position(|x| x == fname) else {
                     return Err(bad(format!(

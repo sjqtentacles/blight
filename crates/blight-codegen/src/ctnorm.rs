@@ -156,7 +156,10 @@ fn is_closed(t: &Term) -> bool {
             Term::Delay(a) | Term::Now(a) | Term::Later(a) | Term::Force(a) => go(a, depth),
             Term::IntPrim { lhs, rhs, .. } => go(lhs, depth) && go(rhs, depth),
             Term::IfZero {
-                scrut, then_, else_, ..
+                scrut,
+                then_,
+                else_,
+                ..
             } => go(scrut, depth) && go(then_, depth) && go(else_, depth),
         }
     }
@@ -250,7 +253,10 @@ fn contains_elim(t: &Term) -> bool {
         Term::IntPrim { lhs, rhs, .. } => contains_elim(lhs) || contains_elim(rhs),
         // `if-zero` is not itself an eliminator, but a branch containing one blocks folding.
         Term::IfZero {
-            scrut, then_, else_, ..
+            scrut,
+            then_,
+            else_,
+            ..
         } => contains_elim(scrut) || contains_elim(then_) || contains_elim(else_),
         Term::Data(_, ps, is) => ps.iter().any(contains_elim) || is.iter().any(contains_elim),
         Term::Con(_, args) => args.iter().any(contains_elim),
@@ -312,7 +318,10 @@ fn size(t: &Term) -> usize {
         | Term::Ann(a, b) => size(a) + size(b),
         Term::IntPrim { lhs, rhs, .. } => size(lhs) + size(rhs),
         Term::IfZero {
-            scrut, then_, else_, ..
+            scrut,
+            then_,
+            else_,
+            ..
         } => size(scrut) + size(then_) + size(else_),
         Term::Data(_, ps, is) => {
             ps.iter().map(size).sum::<usize>() + is.iter().map(size).sum::<usize>()
@@ -488,7 +497,11 @@ fn map_children(t: &Term, f: impl Fn(&Term) -> Term) -> Term {
             lhs: b(lhs),
             rhs: b(rhs),
         },
-        Term::IfZero { scrut, then_, else_ } => Term::IfZero {
+        Term::IfZero {
+            scrut,
+            then_,
+            else_,
+        } => Term::IfZero {
             scrut: b(scrut),
             then_: b(then_),
             else_: b(else_),
@@ -580,10 +593,7 @@ mod tests {
         // Elim Nat (λ_. Nat) [ Zero ; λk.λih. Succ ih ] (Succ (Succ Zero))  — a "double"-ish fold.
         let t = Term::Elim {
             data: DataName("Nat".into()),
-            motive: Rc::new(Term::Lam(Rc::new(Term::Con(
-                ConName("Nat".into()),
-                vec![],
-            )))),
+            motive: Rc::new(Term::Lam(Rc::new(Term::Con(ConName("Nat".into()), vec![])))),
             methods: vec![
                 Term::Con(ConName("Zero".into()), vec![]),
                 Term::Lam(Rc::new(Term::Lam(Rc::new(Term::Con(

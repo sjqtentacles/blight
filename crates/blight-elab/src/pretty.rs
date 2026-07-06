@@ -281,7 +281,11 @@ impl Printer {
                 };
                 format!("({head} {} {})", self.term(lhs), self.term(rhs))
             }
-            Term::IfZero { scrut, then_, else_ } => format!(
+            Term::IfZero {
+                scrut,
+                then_,
+                else_,
+            } => format!(
                 "(if-zero {} {} {})",
                 self.term(scrut),
                 self.term(then_),
@@ -294,8 +298,8 @@ impl Printer {
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
     use super::*;
+    use std::rc::Rc;
 
     #[test]
     fn prints_identity_lambda() {

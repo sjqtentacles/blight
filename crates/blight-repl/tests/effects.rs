@@ -126,11 +126,7 @@ fn counter() -> Term {
     Term::App(
         Rc::new(Term::Ann(
             Rc::new(Term::Lam(Rc::new(inner))), // λ n. inner
-            Rc::new(Term::Pi(
-                Grade::Omega,
-                Rc::new(nat_ty()),
-                Rc::new(nat_ty()),
-            )),
+            Rc::new(Term::Pi(Grade::Omega, Rc::new(nat_ty()), Rc::new(nat_ty()))),
         )),
         Rc::new(perform("get", tt())), // perform get tt
     )
