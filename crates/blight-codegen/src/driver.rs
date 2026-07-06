@@ -1740,9 +1740,18 @@ int main(void) {{
         assert!(st.success(), "link {name}");
 
         let out = Command::new(&bin).output().expect("run benchmark binary");
+        // Surface the exit code AND the killing signal (unix): a raw `signal: Some(11)` (SIGSEGV) is a
+        // native miscompile crash, while a `code: Some(n)` is a clean non-zero exit / abort — very
+        // different diagnoses when a benchmark binary fails to exit 0.
+        #[cfg(unix)]
+        let signal = std::os::unix::process::ExitStatusExt::signal(&out.status);
+        #[cfg(not(unix))]
+        let signal: Option<i32> = None;
         assert!(
             out.status.success(),
-            "benchmark binary {name} exits 0; stderr: {}",
+            "benchmark binary {name} exits 0 (code {:?}, signal {:?}); stderr: {}",
+            out.status.code(),
+            signal,
             String::from_utf8_lossy(&out.stderr)
         );
         String::from_utf8_lossy(&out.stdout).into_owned()

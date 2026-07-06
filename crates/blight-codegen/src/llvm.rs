@@ -1832,8 +1832,6 @@ impl<'ctx> Codegen<'ctx> {
             Target::Wasm32 => {
                 LlvmTarget::initialize_webassembly(&InitializationConfig::default());
                 let triple = TargetTriple::create("wasm32-unknown-unknown");
-                // The module's data layout/triple must match the target machine for wasm.
-                self.module.set_triple(&triple);
                 (triple, String::new(), String::new(), RelocMode::Static)
             }
         };
@@ -1848,10 +1846,14 @@ impl<'ctx> Codegen<'ctx> {
                 CodeModel::Default,
             )
             .ok_or("could not create target machine")?;
-        if matches!(target, Target::Wasm32) {
-            self.module
-                .set_data_layout(&machine.get_target_data().get_data_layout());
-        }
+        // The module must carry the target machine's triple + data layout before any target-aware IR
+        // pass or emission runs — for EVERY target, not just wasm. With an empty/default layout the
+        // optimizer and instruction selector assume the wrong pointer size / alignment / ABI: native
+        // x86_64 was silently miscompiled (it worked by luck on the arm64 dev host, but segfaulted on
+        // Linux x86_64). `machine.get_target_data()` gives the exact layout for the triple we emit with.
+        self.module.set_triple(&triple);
+        self.module
+            .set_data_layout(&machine.get_target_data().get_data_layout());
         // Run the IR-level optimization pipeline (new pass manager) before object emission. The
         // `default<Ox>` pipelines preserve `musttail` markers, so tail-call soundness is unaffected;
         // a verifier pass guards against a malformed module reaching the backend.
@@ -1907,7 +1909,6 @@ impl<'ctx> Codegen<'ctx> {
             Target::Wasm32 => {
                 LlvmTarget::initialize_webassembly(&InitializationConfig::default());
                 let triple = TargetTriple::create("wasm32-unknown-unknown");
-                self.module.set_triple(&triple);
                 (triple, String::new(), String::new(), RelocMode::Static)
             }
         };
@@ -1922,10 +1923,13 @@ impl<'ctx> Codegen<'ctx> {
                 CodeModel::Default,
             )
             .ok_or("could not create target machine")?;
-        if matches!(target, Target::Wasm32) {
-            self.module
-                .set_data_layout(&machine.get_target_data().get_data_layout());
-        }
+        // Same defect/fix as `write_object`: the module must carry the target machine's triple + data
+        // layout for EVERY target before passes/emission run. This is the LTO/bitcode path (the default
+        // `blight build`, `BL_NO_LTO` unset → `build_lto`), so the missing native layout here is what the
+        // segfaulting Linux benches actually went through.
+        self.module.set_triple(&triple);
+        self.module
+            .set_data_layout(&machine.get_target_data().get_data_layout());
         if let Some(pipeline) = opt.pipeline() {
             use inkwell::passes::PassBuilderOptions;
             let options = PassBuilderOptions::create();
