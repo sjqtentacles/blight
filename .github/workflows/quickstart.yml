@@ -1,0 +1,67 @@
+name: Quickstart
+
+# R4 (v0.1 roadmap): the README's own quickstart must succeed on a clean machine, verbatim. A fresh
+# CI runner IS the clean machine — no repo caches primed, only the commands a new user would copy
+# from README.md. Two jobs mirror the README's two paths: the always-available from-source install
+# (§Install: build + `--version`) plus a REPL smoke check, and the `llvm`-gated `blight build` path
+# (§Building a program: compile `examples/hello_nat.bl` and run it). If the README rots, this reddens.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # README §Install — the always-available from-source path (stock Rust toolchain, no LLVM).
+  from-source:
+    name: from-source install (README §Install)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Verbatim from README §Install: build the checker, confirm the version.
+      - name: cargo build --release
+        run: cargo build --release
+      - name: blight --version is 0.1.0
+        run: |
+          set -e
+          got="$(./target/release/blight --version)"
+          echo "got: $got"
+          test "$got" = "blight 0.1.0"
+      # README §Quickstart/REPL: forms read from stdin each print `ok` (declaration) or the checked
+      # conclusion (`(the …)`). Pipe a tiny session in and confirm both shapes appear.
+      - name: REPL smoke (README §Quickstart)
+        run: |
+          set -e
+          out="$(printf '(defdata Nat () (Zero) (Succ (n Nat)))\n(the Nat (Succ Zero))\n' \
+                 | ./target/release/blight)"
+          echo "$out"
+          echo "$out" | grep -q 'ok'
+
+  # README §Building a program — the `llvm`-gated native path (build + run a real program).
+  build-and-run:
+    name: blight build + run (README §Building a program)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install LLVM 18
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 18
+          echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+      # Verbatim from README §Building a program: compile the hello example and run it → prints 7.
+      - name: build + run examples/hello_nat.bl
+        run: |
+          set -e
+          cargo run -p blight-repl --features llvm -- build examples/hello_nat.bl -o hello
+          got="$(./hello)"
+          echo "got: $got"
+          test "$got" = "7"

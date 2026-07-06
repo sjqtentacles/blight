@@ -96,6 +96,29 @@ plus a full soundness-hardening pass over the trusted checkers.
   criterion within ±5 %, cargo-mutants over the new sharing helpers all-killed. The scale-pair
   ratio kill-criterion fired (15.3× vs the <12× target) and the keep/kill call was escalated to
   and made by the user, not assumed.
+- **v0.1 roadmap arc S, milestone S5 (Stage-1 declaration):** the Blight-written front end now
+  checks a curated corpus of 13 real programs inside the grown S4 fragment (`compose`, boolean
+  `and`/`or`/`not`, `bool→nat`, sum `swap`/`is-left`/`project`/`map-left`, higher-order
+  `apply-twice`, …) with 100% kernel agreement via the S2 proposer/disposer bridge — the trusted
+  kernel independently re-checks every accepted embedding. `examples/selfhost_stage1.bl` +
+  `example_selfhost_stage1_declares_stage1` (asserts ≥10 accepts all agree, the corpus also
+  exercising REJECT). This is the machine-checked go/no-go gate for a future Stage-2 (the
+  self-hosted checker as the primary front end). Zero kernel changes.
+- **v0.1 roadmap arc S, milestone S4 (grow the self-hosted fragment):** the object language the
+  self-hosted pipeline checks grew from a toy STLC to a real fragment, each sub-milestone keeping
+  the paired Rust/`.bl` differential (now 26 cases, kernel-`refl`-certified) green. **S4a** — `Nat`
+  (`zero`/`succ` + numeric-literal reader sugar; the reader decides digit-hood with `nat-eq` only,
+  never `nat-lt` on a codepoint, which would re-trigger the `do_elim` discarded-IH exponential N5
+  fixed). **S4b** — `Bool` (`true`/`false`/`if`) and the sum `Sum l r` (`inl`/`inr` + a
+  variable-binding `case`, its branch-binder types recovered from the scrutinee via a `split-sum`
+  view + `bty-coerce`); the reader's head dispatch was refactored to a flat `classify-head`.
+  **S4c** — dependent Pi, checked *extrinsically* (`crates/blight-prelude/spore_dep.bl`) because an
+  intrinsically-typed dependent core is inductive-inductive (contexts-contain-types,
+  types-indexed-by-contexts), which the no-mutual-datatype kernel forbids (verified). The checker
+  `dc` is one fuel-recursive bidirectional pass over `spore.bl`'s raw `BTerm` (+ its proven
+  `bsubst`); its `BApp` rule substitutes the argument into the codomain, so a result type depends on
+  the value applied (conversion-free fragment; syntactic conversion). Kernel-certified by six
+  `-refl` verdict demos + `dep_checker_self_host_loads`. Zero kernel changes.
 - **v0.1 roadmap arc S, milestone S3 (kernel `Term` representation: `Box` → `Rc`):** the kernel
   term grammar's 42 recursive fields now hold `Rc<Term>`, so cloning a term (notably `eval`'s
   closure construction) is a shallow per-node refcount bump instead of a deep subtree copy.

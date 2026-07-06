@@ -893,6 +893,17 @@ tag `v0.1.0`.
 - **Exit:** a fresh-clone quickstart (README only) succeeds on a clean machine, scripted in CI
   (`quickstart.yml` running the README commands verbatim).
 
+**Prep DONE (2026-07-05), tag PENDING (maintainer's release call).** Landed toward R4: the docs
+truth pass for the self-hosting arc (`examples/README.md` self-host entries corrected + Stage-1 row;
+README `## Status` gained a v0.1/Stage-1 line; `docs/implementation.md` Stage section updated); the
+CHANGELOG grew S4 + S5 entries; and **`.github/workflows/quickstart.yml`** now scripts the README
+quickstart verbatim on a fresh runner (from-source `cargo build --release` + `blight --version` +
+REPL smoke; `llvm`-gated `blight build examples/hello_nat.bl` → `7`) — the exit-criterion CI, all
+three commands validated locally. Roadmap statuses flipped through S5. **Remaining = the maintainer's
+call:** declare the content freeze (no more features before v0.1) and pull the `v0.1.0` git tag
+(`release.yml`'s matrix build triggers off it); optionally finalize the CHANGELOG `[0.1.0]` date and
+refresh the tutorial for E1/E2.
+
 ---
 
 ## Cross-arc ordering (recommended for a single stream)

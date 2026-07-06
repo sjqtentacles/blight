@@ -383,6 +383,12 @@ All milestones M0-M6 are implemented and green (`cargo test --workspace`, with a
 (share-nothing multicore + distributed runtime), and M20-M24 (a max-performance sweep — fast-`Nat`,
 unboxing, cross-object LTO, untrusted `Float`, distributed-actor addressing — all zero TCB growth).
 
+The [v0.1 roadmap](docs/roadmap-v0.1.md) (ergonomics, self-hosting, proof track, release) is
+essentially landed: **self-hosting Stage-1 is declared** — the Blight-written front end checks a real
+fragment (STLC + `Nat`/`Bool`/`Sum`, plus a dependent-Pi checker) and the trusted kernel independently
+re-checks every term it produces (`examples/selfhost_stage1.bl`). The only open v0.1 item is the R4
+content freeze + `v0.1.0` tag.
+
 | Milestone | Deliverable |
 |---|---|
 | M0 | Stage-0 kernel (full cubical) + reader/elaborator/REPL |
