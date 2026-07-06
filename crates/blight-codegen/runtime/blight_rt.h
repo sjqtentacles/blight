@@ -195,6 +195,27 @@ static inline BlValue bl_obj_field(BlValue v, uint32_t i) {
 #define BL_ALWAYS_INLINE
 #endif
 
+/* Mark an allocation as intentionally immortal so LeakSanitizer does not report it. A few runtime
+ * buffers — notably the program-lifetime codepoint intern pool behind BL_STRING (numeric.c), which
+ * is deliberately never freed and shared by every tail view for the whole run — are immortal by
+ * design; LSan cannot know that and flags them as leaks. `__lsan_ignore_object` is the sanitizer's
+ * own API for exactly this case, so genuine leaks are still caught. Compiles to nothing unless the
+ * translation unit is built under AddressSanitizer (whose LSan component ships the interface header);
+ * an ordinary build takes no dependency on any sanitizer runtime. */
+#if defined(__SANITIZE_ADDRESS__)
+#define BL_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define BL_ASAN 1
+#endif
+#endif
+#ifdef BL_ASAN
+#include <sanitizer/lsan_interface.h>
+#define BL_LSAN_IGNORE(p) __lsan_ignore_object(p)
+#else
+#define BL_LSAN_IGNORE(p) ((void)(p))
+#endif
+
 /* ---- allocation + GC (gc.c) ---- */
 void bl_gc_init(size_t heap_bytes);
 BlValue bl_alloc(BlTag tag, uint32_t nfields, uint64_t aux);
