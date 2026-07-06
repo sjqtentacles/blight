@@ -66,7 +66,7 @@ jobs:
           staging="blight-${{ matrix.name }}"
           mkdir -p "$staging"
           cp "target/${{ matrix.target }}/release/blight" "$staging/"
-          cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE "$staging/"
+          cp README.md CHANGELOG.md LICENSE "$staging/"
           tar czf "$staging.tar.gz" "$staging"
 
       # Always upload as a workflow artifact — this is the dry-run deliverable, available on every

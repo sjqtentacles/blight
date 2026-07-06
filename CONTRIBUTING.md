@@ -78,5 +78,5 @@ cargo test --workspace --features blight-codegen/llvm,blight-repl/llvm
 
 ## License
 
-By contributing, you agree that your contributions are dual-licensed under
-[MIT](LICENSE-MIT) and [Apache-2.0](LICENSE-APACHE), matching the project license.
+By contributing, you agree that your contributions are licensed under the
+[MIT License](LICENSE), matching the project license.

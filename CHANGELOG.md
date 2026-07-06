@@ -192,8 +192,8 @@ a dependent-Pi checker) and the trusted kernel independently re-checks every ter
   position is now `Nat` sugar for `(Succ (Succ (Succ Zero)))` — elaborator-only (`Surface::NatLit`),
   no reader or kernel changes. The pretty-printer re-sugars canonical `Nat` numerals back to
   decimal in REPL/diagnostic output. See [docs/roadmap-v0.1.md](docs/roadmap-v0.1.md).
-- Top-level `README.md`, dual `LICENSE-MIT` / `LICENSE-APACHE`, `CONTRIBUTING.md`, this changelog,
-  and a curated [`examples/`](examples/) tree (including the first checked-in `spore.toml` package).
+- Top-level `README.md`, an MIT `LICENSE`, `CONTRIBUTING.md`, this changelog, and a curated
+  [`examples/`](examples/) tree (including the first checked-in `spore.toml` package).
 - GitHub CI workflow and issue/PR templates.
 - Source spans + caret diagnostics: a span-aware reader, `Diagnostic` renderer, and a kernel
   `TypeError`/`ElabError` `Display`, wired into the REPL and `blight build`.
