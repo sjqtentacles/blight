@@ -809,7 +809,9 @@ both re-checked by the independent checker). The intrinsic encoding the spore us
 is now **realized** in `crates/blight-prelude/spore_intrinsic.bl` and kernel-certified by the
 `spore_intrinsic_loads` test (`crates/blight-repl/tests/spore.rs`):
 
-- `BTy` — object types (`Base`, `Arr`), with a structural `bty-size`.
+- `BTy` — object types, with a structural `bty-size`. Grown by arc S4 from the toy STLC (`Base`,
+  `Arr`) to a real fragment: `NatT` (S4a), `BoolT` and the sum `Sum l r` (S4b), each a closed
+  constructor of the same non-indexed `BTy`.
 - `BTyCtx` — typing contexts as snoc-lists of `BTy`.
 - `BVarIn : (g BTyCtx) (a BTy) → Type` — intrinsic de Bruijn membership (a **two-index** family);
   `VZ`/`VS` make only in-scope variables expressible.
@@ -839,6 +841,29 @@ This is the seed of a Blight-in-Blight pipeline. The Stage-5 plan from here, and
 
 The extrinsic `BTerm`/`bwellscoped` model in `spore.bl` is retained alongside — it is the form the
 existing `spore_meta.bl` metatheorems reason over, and the two encodings are complementary.
+
+**Arc S4 — the fragment grew from toy STLC to a real language.** Each of `BSurf`/`BTy`/`BTm`,
+`belaborate`, the ANF backend, `spore_print`'s ⟦·⟧ embedding, and the string reader was extended,
+and every step kept the differential (`self_host_differential_agrees_with_rust`, now 26 paired
+Rust/`.bl` cases certified by kernel `refl`) green: **S4a** Nat (`zero`/`succ` + numeric literals),
+**S4b** Bool (`true`/`false`/`if`) and the sum `Sum l r` (`inl`/`inr` + a variable-binding `case`).
+**S4c — dependent Pi — took the extrinsic route by necessity.** An intrinsically-typed *dependent*
+core needs `BTy` indexed by its context and `BTyCtx` containing `BTy` — an inductive-inductive pair
+the kernel's directly-recursive, no-mutual-datatype fragment forbids (verified). So dependent Pi is
+checked over `spore.bl`'s raw `BTerm` by `crates/blight-prelude/spore_dep.bl` — a single
+fuel-recursive bidirectional checker (`dc`) whose `BApp` rule substitutes the argument into the
+codomain (`bsubst cod 0 a`), for the conversion-free fragment (syntactic conversion). Kernel-certified
+by `dep_checker_self_host_loads`.
+
+**Stage-1 is DECLARED (arc S5).** The Blight-written front end checks a curated corpus of 13 REAL
+programs inside the S4 fragment — `compose`, boolean `and`/`or`/`not`, `bool→nat`, sum `swap`/
+`is-left`/`project`/`map-left`, higher-order `apply-twice`, … — natively compiled
+(`examples/selfhost_stage1.bl`), each PROPOSED a typing by `belaborate` and printed as real Blight
+surface text, and the trusted kernel independently RE-CHECKS every accepted embedding (the S2
+proposer/disposer bridge). The `example_selfhost_stage1_declares_stage1` test asserts ≥10 accepts all
+agree with the kernel (13 do), the corpus also exercising REJECT. This 100%-agreement over a real
+corpus is Stage-1's exit criterion — the go/no-go gate for a future Stage-2 (the self-hosted checker
+as the primary front end).
 
 ## Performance
 

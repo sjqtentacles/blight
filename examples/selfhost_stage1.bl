@@ -1,0 +1,82 @@
+; selfhost_stage1.bl — S5: the Stage-1 DECLARATION corpus (v0.1 roadmap arc S).
+;
+; Stage-1's exit criterion: the Blight-written front end checks ≥10 REAL programs inside the S4
+; fragment (STLC + Nat + Bool + Sum), with 100% kernel agreement via the S2 proposer/disposer bridge.
+; This file is that corpus — genuine little programs (boolean logic, Nat arithmetic, sum combinators,
+; higher-order functions), not unit-test fixtures — each PROPOSED a typing by the self-hosted
+; elaborator (spore_elab.bl `belaborate`) and printed as ordinary Blight surface text by spore_print.bl
+; (`ACCEPT (the ⟦a⟧ ⟦s⟧)` / `REJECT`). The companion Rust harness
+; (`crates/blight-repl/src/main.rs`, `example_selfhost_stage1_declares_stage1`) then has the REAL
+; kernel independently re-check every `ACCEPT` payload (DISPOSE) — a well-typed embedding must check —
+; and asserts ≥10 accepts all agree. That machine-checked agreement IS the Stage-1 declaration: the
+; go/no-go gate for a future Stage-2 (the self-hosted checker as the primary front end).
+;
+;   cargo run -p blight-repl --features llvm -- build examples/selfhost_stage1.bl -o selfhost_stage1
+;   ./selfhost_stage1
+;   # STAGE1 0 ACCEPT (the (Pi ((v Nat)) (Pi ((v Bool)) Nat)) (lam (v0) (lam (v1) v0)))
+;   # …
+
+(load "spore_print.bl")  ; bridge-line, and transitively belaborate + BSurf/BTy
+(load "std/io.bl")  ; Console (put-str), Unit (tt)
+(load "std/list.bl")  ; List, cons/nil
+
+(define nl String "\n")
+
+; ── The Stage-1 corpus: real programs in the S4 fragment ──────────────────────────────────────────────
+; 0. const : Nat → Bool → Nat            — λx.λy. x
+(define s0 BSurf (su-lam NatT (su-lam BoolT (su-var (Succ Zero)))))
+; 1. compose : (Nat→Bool) → (Bool→Nat) → Nat → Nat   — λf.λg.λx. g (f x)
+(define s1 BSurf
+  (su-lam (Arr NatT BoolT)
+    (su-lam (Arr BoolT NatT)
+      (su-lam NatT (su-app (su-var (Succ Zero)) (su-app (su-var (Succ (Succ Zero))) (su-var Zero)))))))
+; 2. and : Bool → Bool → Bool            — λx.λy. if x y false
+(define s2 BSurf (su-lam BoolT (su-lam BoolT (su-if (su-var (Succ Zero)) (su-var Zero) su-false))))
+; 3. or  : Bool → Bool → Bool            — λx.λy. if x true y
+(define s3 BSurf (su-lam BoolT (su-lam BoolT (su-if (su-var (Succ Zero)) su-true (su-var Zero)))))
+; 4. not : Bool → Bool                   — λb. if b false true
+(define s4 BSurf (su-lam BoolT (su-if (su-var Zero) su-false su-true)))
+; 5. bool->nat : Bool → Nat              — λb. if b 1 0
+(define s5 BSurf (su-lam BoolT (su-if (su-var Zero) (su-succ su-zero) su-zero)))
+; 6. add-two : Nat → Nat                 — λn. succ (succ n)
+(define s6 BSurf (su-lam NatT (su-succ (su-succ (su-var Zero)))))
+; 7. dispatch : Nat → Bool → Nat         — λn.λb. if b n (succ n)
+(define s7 BSurf
+  (su-lam NatT (su-lam BoolT (su-if (su-var Zero) (su-var (Succ Zero)) (su-succ (su-var (Succ Zero)))))))
+; 8. apply-twice : (Bool→Bool) → Bool → Bool   — λf.λb. f (f b)
+(define s8 BSurf
+  (su-lam (Arr BoolT BoolT)
+    (su-lam BoolT (su-app (su-var (Succ Zero)) (su-app (su-var (Succ Zero)) (su-var Zero))))))
+; 9. sum-swap : (Sum Nat Bool) → (Sum Bool Nat)   — case s (x→inr x) (y→inl y)
+(define s9 BSurf
+  (su-lam (Sum NatT BoolT)
+    (su-case (su-var Zero) (su-inr BoolT (su-var Zero)) (su-inl NatT (su-var Zero)))))
+; 10. is-left : (Sum Nat Bool) → Bool    — case s (x→true) (y→false)
+(define s10 BSurf (su-lam (Sum NatT BoolT) (su-case (su-var Zero) su-true su-false)))
+; 11. either-project : (Sum Nat Nat) → Nat   — case s (x→x) (y→y)
+(define s11 BSurf (su-lam (Sum NatT NatT) (su-case (su-var Zero) (su-var Zero) (su-var Zero))))
+; 12. map-left-succ : (Sum Nat Bool) → (Sum Nat Bool)   — case s (x→inl (succ x)) (y→inr y)
+(define s12 BSurf
+  (su-lam (Sum NatT BoolT)
+    (su-case (su-var Zero) (su-inl BoolT (su-succ (su-var Zero))) (su-inr NatT (su-var Zero)))))
+; ── two ill-typed programs the front end must REJECT (the corpus discriminates, not just accepts) ──────
+; 13. REJECT: λx:Bool.λy:Nat. if x y false   — the `if` branches disagree (Nat vs Bool)
+(define s13 BSurf (su-lam BoolT (su-lam NatT (su-if (su-var (Succ Zero)) (su-var Zero) su-false))))
+; 14. REJECT: λn:Nat. case n (x→x) (y→y)     — the scrutinee is a Nat, not a sum
+(define s14 BSurf (su-lam NatT (su-case (su-var Zero) (su-var Zero) (su-var Zero))))
+
+(define corpus (List BSurf)
+  (cons s0 (cons s1 (cons s2 (cons s3 (cons s4 (cons s5 (cons s6 (cons s7 (cons s8 (cons s9
+    (cons s10 (cons s11 (cons s12 (cons s13 (cons s14 nil))))))))))))))))
+
+; ── Emit each verdict as a `BRIDGE <idx> <verdict>` line, sequencing under `Console` ──────────────────
+; (`bridge-line` is spore_print.bl's proposer: it runs `belaborate` on `s` and renders the verdict.)
+(deftotal emit-line (Pi ((idx Nat) (s BSurf)) (! Console Unit))
+  (lam (idx s) (put-str (string-append (bridge-line idx s) nl))))
+
+; The corpus printer: structural on the list (FIRST parameter), the index a TRAILING accumulator.
+(define-rec emit-all (Pi ((xs (List BSurf)) (idx Nat)) (! Console Unit))
+  (lam (xs idx)
+    (match xs [(nil) tt] [(cons x rest) (let ((u (emit-line idx x))) (emit-all rest (Succ idx)))])))
+
+(define main (! Console Unit) (emit-all corpus Zero))

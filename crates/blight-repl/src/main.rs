@@ -3225,6 +3225,96 @@ mod tests {
         }
     }
 
+    /// S5 — the **Stage-1 declaration**. `selfhost_stage1.bl` is a curated corpus of ≥10 REAL programs
+    /// inside the S4 fragment (boolean logic, Nat arithmetic, sum combinators, higher-order functions),
+    /// each checked natively by the Blight-written front end and printed as a `BRIDGE <i> <verdict>`
+    /// line (the S2 proposer). This test has the REAL kernel independently re-check every `ACCEPT`
+    /// payload (the disposer) against the S4 host datatypes, and asserts ≥10 accepts ALL agree, the
+    /// corpus also exercising REJECT. That machine-checked 100%-agreement over a real corpus IS the
+    /// Stage-1 declaration — the go/no-go gate for a future Stage-2 (self-hosted checker as primary).
+    #[cfg(feature = "llvm")]
+    #[test]
+    fn example_selfhost_stage1_declares_stage1() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let example = repo.join("examples").join("selfhost_stage1.bl");
+        let dir =
+            std::env::temp_dir().join(format!("blight_selfhost_stage1_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin = dir.join("out");
+        let build_args = vec![
+            example.to_string_lossy().to_string(),
+            "-o".to_string(),
+            bin.to_string_lossy().to_string(),
+        ];
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || {
+                run_build(&build_args).unwrap_or_else(|e| panic!("selfhost_stage1.bl builds: {e}"));
+            })
+            .expect("spawn build thread")
+            .join()
+            .expect("build thread completes");
+        let run = std::process::Command::new(&bin)
+            .output()
+            .unwrap_or_else(|e| panic!("run selfhost_stage1: {e}"));
+        assert!(run.status.success(), "selfhost_stage1 runs successfully");
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+
+        // The S4 host datatypes the `NatT`/`BoolT`/`Sum` embeddings render to — the disposer declares
+        // them so every accepted embedding can be re-checked by the trusted kernel.
+        let preamble = "(defdata Base () (b0))\n(defdata Nat () (Zero) (Succ (n Nat)))\n\
+                        (defdata Bool () (false) (true))\n\
+                        (defdata Sum ((a (Type 0)) (b (Type 0))) (inl (x a)) (inr (y b)))\n";
+
+        let mut accepts = 0usize;
+        let mut seen_reject = false;
+        for line in stdout.lines() {
+            let rest = line
+                .strip_prefix("BRIDGE ")
+                .unwrap_or_else(|| panic!("unexpected Stage-1 output line: {line:?}"));
+            let (idx_str, verdict) = rest.split_once(' ').expect("BRIDGE <idx> <verdict>");
+            let idx: usize = idx_str.parse().expect("numeric Stage-1 index");
+            if let Some(payload) = verdict.strip_prefix("ACCEPT ") {
+                // Disposer: the trusted kernel independently re-checks the embedded judgement.
+                let src = format!("{preamble}{payload}");
+                let mut env = ElabEnv::new();
+                let mut prog = Program::new(&mut env);
+                let outcomes = prog.run(&src).unwrap_or_else(|e| {
+                    panic!(
+                        "Stage-1: the kernel REJECTED an ACCEPT payload from the Blight front end \
+                         (proposer/disposer disagreement) for corpus {idx}: {e:?}\n  {payload}"
+                    )
+                });
+                assert!(
+                    matches!(outcomes.last(), Some(Outcome::Checked(_))),
+                    "Stage-1 corpus {idx}'s ACCEPT payload did not kernel-check: {payload}"
+                );
+                accepts += 1;
+            } else {
+                assert_eq!(
+                    verdict, "REJECT",
+                    "a non-ACCEPT Stage-1 verdict must be REJECT: {line:?}"
+                );
+                seen_reject = true;
+            }
+        }
+        // The Stage-1 exit criterion: ≥10 real examples checked with 100% kernel agreement, and the
+        // corpus discriminates (some are rejected). Reaching here with these two facts IS the gate.
+        assert!(
+            accepts >= 10,
+            "Stage-1 requires ≥10 real examples checked with kernel agreement; only {accepts} accepted"
+        );
+        assert!(
+            seen_reject,
+            "the Stage-1 corpus must also exercise REJECT (the front end genuinely discriminates)"
+        );
+    }
+
     /// `bytes_scratch.bl` (C2): the smallest `Bytes`-effect program. `main : (! Bytes Nat)` allocates
     /// a 4-byte runtime-backed buffer, writes byte 7 at index 2 via `set-byte`, reads it back with
     /// `get-byte`, and returns it — proving the mutable round-trip through the C-side buffer table

@@ -517,12 +517,20 @@ Each sub-milestone extends BSurf/BTy/BTm + `belaborate` + spore_print + the ⟦�
 keeps everything re-checker-`Ok`. (S4c is the exception — extrinsic, over raw `BTerm`, for the
 inductive-inductive reason above.)
 
-### [ ] S5 — Stage-1 declaration
+### [x] S5 — Stage-1 declaration
 
 **Exit:** the Blight-written front end checks a designated corpus subset (≥10 real examples
 inside the S4 fragment) with 100% kernel agreement via the S2 bridge;
 [implementation.md](implementation.md)'s Stage table updated. This is the go/no-go gate for a
 future Stage-2 (the self-hosted checker as the primary front end).
+
+**DONE (2026-07-05).** `examples/selfhost_stage1.bl` is a curated corpus of **13 real programs** in
+the S4 fragment (compose, boolean `and`/`or`/`not`, `bool→nat`, sum `swap`/`is-left`/`project`/
+`map-left`, higher-order `apply-twice`, dispatch, …), natively compiled; the Rust harness
+`example_selfhost_stage1_declares_stage1` builds+runs it and has the trusted kernel independently
+re-check every `ACCEPT` payload (the S2 disposer), asserting ≥10 accepts all agree (13 do) with the
+corpus also exercising REJECT. Stage table (`implementation.md`) updated. **Stage-1 declared** — the
+go/no-go gate for Stage-2 is green.
 
 ---
 
