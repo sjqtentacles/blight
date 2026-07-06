@@ -59,6 +59,15 @@
 (define c12 BSurf (su-lam BoolT (su-if (su-var Zero) su-false su-true)))
 ; 13. (if true 0 false)               : —  (branches disagree: Nat vs Bool) (ill-typed — REJECT)
 (define c13 BSurf (su-if su-true su-zero su-false))
+; ── S4b: sum types (⟦Sum l r⟧ = a parameterized host `Sum`; inl/inr constructors; case → match) ───────
+; 14. (inl[right=Bool] 0)              : Sum Nat Bool                       (left injection — ACCEPT)
+(define c14 BSurf (su-inl BoolT su-zero))
+; 15. (inr[left=Nat] true)             : Sum Nat Bool                       (right injection — ACCEPT)
+(define c15 BSurf (su-inr NatT su-true))
+; 16. λs:(Sum Nat Nat). case s x→x y→y : (Sum Nat Nat) → Nat               (project payload — ACCEPT)
+(define c16 BSurf (su-lam (Sum NatT NatT) (su-case (su-var Zero) (su-var Zero) (su-var Zero))))
+; 17. λs:(Sum Nat Bool). case s x→x y→y : —  (branches disagree: Nat vs Bool) (ill-typed — REJECT)
+(define c17 BSurf (su-lam (Sum NatT BoolT) (su-case (su-var Zero) (su-var Zero) (su-var Zero))))
 
 ; Print one `BRIDGE <idx> <verdict>` line, then a newline, sequencing under `Console`.
 (deftotal emit (Pi ((idx Nat) (s BSurf)) (! Console Unit))
@@ -77,4 +86,8 @@
                     (let ((u9 (emit 9 c9)))
                       (let ((u10 (emit 10 c10)))
                         (let ((u11 (emit 11 c11)))
-                          (let ((u12 (emit 12 c12))) (emit 13 c13)))))))))))))))
+                          (let ((u12 (emit 12 c12)))
+                            (let ((u13 (emit 13 c13)))
+                              (let ((u14 (emit 14 c14)))
+                                (let ((u15 (emit 15 c15)))
+                                  (let ((u16 (emit 16 c16))) (emit 17 c17)))))))))))))))))))

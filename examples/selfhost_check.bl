@@ -57,6 +57,9 @@
 ; S4b source: the `Bool` type keyword and the `(if cond then else)` form (boolean negation), read
 ; from disk and driven through the same native front end.
 (define bool-not String "(lam (x Bool) (if x false true))")
+; S4b source: the `(Sum L R)` type and the binding `(case SCRUT LNAME LBODY RNAME RBODY)` form —
+; project either payload of a `Sum Nat Nat`. Both branches return their bound variable (a `Nat`).
+(define sum-case String "(lam (s (Sum Nat Nat)) (case s x x y y))")
 
 (define nl String "\n")
 
@@ -70,4 +73,6 @@
               (let ((v-succ (check-source nat-succ)))
                 (let ((u4 (put-str (string-append v-succ nl))))
                   (let ((v-bool (check-source bool-not)))
-                    (put-str (string-append v-bool nl))))))))))))
+                    (let ((u5 (put-str (string-append v-bool nl))))
+                      (let ((v-sum (check-source sum-case)))
+                        (put-str (string-append v-sum nl))))))))))))))

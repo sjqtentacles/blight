@@ -39,6 +39,9 @@
   (c-app (fn BAnf) (arg BAnf))  ; application of two atoms
   (c-suc (arg BAnf))  ; successor of an atom (S4a) — a computation, let-bound like `c-app`
   (c-if (cond BAnf) (thn BAnf) (els BAnf))  ; branch on an atom into two TAILS (S4b)
+  (c-inl (v BAnf))  ; left injection of an atom (S4b) — a computation
+  (c-inr (v BAnf))  ; right injection of an atom (S4b) — a computation
+  (c-case (scrut BAnf) (lf BAnf) (rf BAnf))  ; case on an atom into two binding TAILS (S4b)
   (c-lam (body BAnf))  ; a lambda value whose body is a tail
   (t-ret (a BAnf))  ; return an atom
   (t-let (name Nat) (rhs BAnf) (rest BAnf)))  ; let tmp_name = rhs in rest
@@ -52,6 +55,8 @@
       [(c-app f x) (Succ (plus (banf-size f) (banf-size x)))]
       [(c-suc a) (Succ (banf-size a))]
       [(c-if c t e) (Succ (plus (banf-size c) (plus (banf-size t) (banf-size e))))]
+      [(c-inl v) (Succ (banf-size v))] [(c-inr v) (Succ (banf-size v))]
+      [(c-case s l r) (Succ (plus (banf-size s) (plus (banf-size l) (banf-size r))))]
       [(c-lam body) (Succ (banf-size body))]
       [(t-ret a) (Succ (banf-size a))]
       [(t-let name rhs rest) (Succ (plus (banf-size rhs) (banf-size rest)))])))
@@ -67,7 +72,8 @@
 ; inductive with no dependent-index interaction.
 (defdata UTm () (uvar (i Nat)) (ulam (body UTm)) (uapp (fn UTm) (arg UTm))
   (uzero) (usucc (n UTm))
-  (utrue) (ufalse) (uif (c UTm) (t UTm) (e UTm)))
+  (utrue) (ufalse) (uif (c UTm) (t UTm) (e UTm))
+  (uinl (v UTm)) (uinr (v UTm)) (ucase (s UTm) (lf UTm) (rf UTm)))
 
 (deftotal berase (Pi ((g BTyCtx) (a BTy) (t (BTm g a))) UTm)
   (lam (g a t)
@@ -76,7 +82,10 @@
       [(TApp g a b f x) (uapp (berase g (Arr a b) f) (berase g a x))]
       [(TZero g) uzero] [(TSuc g n) (usucc (berase g NatT n))]
       [(TTrue g) utrue] [(TFalse g) ufalse]
-      [(TIf g c s thn els) (uif (berase g BoolT s) (berase g c thn) (berase g c els))])))
+      [(TIf g c s thn els) (uif (berase g BoolT s) (berase g c thn) (berase g c els))]
+      [(TInl g a b v) (uinl (berase g a v))] [(TInr g a b v) (uinr (berase g b v))]
+      [(TCase g a b c s lf rf)
+        (ucase (berase g (Sum a b) s) (berase (CSnoc g a) c lf) (berase (CSnoc g b) c rf))])))
 
 ; ── The compiler state: a fresh-name counter, a (source-order) list of pending lets, an atom ──────
 (defdata BcOut () (bc-out (counter Nat) (lets (CList (CPair Nat BAnf))) (atom BAnf)))
@@ -142,6 +151,33 @@
                       (cpair ce (c-if atc (bc-lets lst (t-ret att)) (bc-lets lse (t-ret ate)))) cnil))
                   (a-tmp ce))])])])))
 
+; `inl`/`inr` lower exactly like `c-suc` (single operand → a computation bound to a fresh temp).
+(deftotal uanf-inl (Pi ((r BcOut)) BcOut)
+  (lam (r)
+    (match r
+      [(bc-out c ls at)
+        (bc-out (Succ c) (cappend (CPair Nat BAnf) ls (ccons (cpair c (c-inl at)) cnil)) (a-tmp c))])))
+(deftotal uanf-inr (Pi ((r BcOut)) BcOut)
+  (lam (r)
+    (match r
+      [(bc-out c ls at)
+        (bc-out (Succ c) (cappend (CPair Nat BAnf) ls (ccons (cpair c (c-inr at)) cnil)) (a-tmp c))])))
+
+; `case` lowers exactly like `c-if` (scrutinee hoists out; each branch sealed into its own tail).
+(deftotal uanf-case (Pi ((rs BcOut) (rl BcOut) (rr BcOut)) BcOut)
+  (lam (rs rl rr)
+    (match rs
+      [(bc-out cs lss ats)
+        (match rl
+          [(bc-out cl lsl atl)
+            (match rr
+              [(bc-out cr lsr atr)
+                (bc-out (Succ cr)
+                  (cappend (CPair Nat BAnf) lss
+                    (ccons
+                      (cpair cr (c-case ats (bc-lets lsl (t-ret atl)) (bc-lets lsr (t-ret atr)))) cnil))
+                  (a-tmp cr))])])])))
+
 ; The counter `c` is CURRIED (matched `t` first, each arm returns a `Nat -> BcOut`) so deftotal sees
 ; the motive `λt. (Nat -> BcOut)` directly; `UTm` is non-indexed, so this currying is index-safe.
 ; Recursive results are consumed by passing them to the `uanf-lam`/`uanf-app` combinators (the
@@ -168,7 +204,15 @@
       [(uif cc tt ee)
         (lam (cnt)
           (uanf-if (uanf cc cnt) (uanf tt (bcout-counter (uanf cc cnt)))
-            (uanf ee (bcout-counter (uanf tt (bcout-counter (uanf cc cnt)))))))])))
+            (uanf ee (bcout-counter (uanf tt (bcout-counter (uanf cc cnt)))))))]
+      ; inl/inr: single operand → `uanf-inl`/`uanf-inr`. case: scrutinee + two branches, threaded
+      ; left-to-right exactly like `uif`.
+      [(uinl v) (lam (c) (uanf-inl (uanf v c)))]
+      [(uinr v) (lam (c) (uanf-inr (uanf v c)))]
+      [(ucase ss ll rr)
+        (lam (cnt)
+          (uanf-case (uanf ss cnt) (uanf ll (bcout-counter (uanf ss cnt)))
+            (uanf rr (bcout-counter (uanf ll (bcout-counter (uanf ss cnt)))))))])))
 
 ; `bcompile t` : the whole lowering — erase indices, ANF from a fresh counter, then wrap the lets
 ; around a tail that returns the program's atom.

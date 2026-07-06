@@ -38,7 +38,11 @@
 (defdata BSurf () (su-var (i Nat)) (su-lam (dom BTy) (body BSurf)) (su-app (fn BSurf) (arg BSurf))
   (su-zero) (su-succ (n BSurf))
   ; S4b: the `BoolT` introducers `su-true`/`su-false` and the eliminator `su-if` (cond/then/else).
-  (su-true) (su-false) (su-if (cnd BSurf) (thn BSurf) (els BSurf)))
+  (su-true) (su-false) (su-if (cnd BSurf) (thn BSurf) (els BSurf))
+  ; S4b: the `Sum` introducers `su-inl`/`su-inr` (each annotated with the OTHER summand's type, which
+  ; the payload doesn't determine) and the eliminator `su-case` (scrutinee + two binding branches).
+  (su-inl (rty BTy) (v BSurf)) (su-inr (lty BTy) (v BSurf))
+  (su-case (scrut BSurf) (lbody BSurf) (rbody BSurf)))
 
 ; ── Existential outputs: a type packed with a well-typed term/variable at that type, in context g ────
 (defdata BSig
@@ -61,6 +65,12 @@
     (BtyEq (Arr d1 c1) (Arr d2 c2)))
   (lam (d1 d2 c1 c2 ed ec) (match ed [(bty-refl d) (match ec [(bty-refl c) (bty-refl (Arr d c))])])))
 
+; The same congruence through `Sum` (used by the `Sum` row of the decision table below).
+(deftotal sum-cong
+  (Pi ((l1 BTy) (l2 BTy) (r1 BTy) (r2 BTy) (el (BtyEq l1 l2)) (er (BtyEq r1 r2)))
+    (BtyEq (Sum l1 r1) (Sum l2 r2)))
+  (lam (l1 l2 r1 r2 el er) (match el [(bty-refl l) (match er [(bty-refl r) (bty-refl (Sum l r))])])))
+
 ; Transport along an equality: `BTm g a` becomes `BTm g b` given `a = b`. Matching `bty-refl` unifies
 ; the two indices, so the body's `t : BTm g a` checks at the refined result `BTm g b` — the
 ; intrinsic-family `subst`, and the one essential dependent step the whole elaborator leans on.
@@ -76,21 +86,35 @@
     (match md [(nothing) nothing]
       [(just ed) (match mc [(nothing) nothing] [(just ec) (just (arr-cong d1 d2 c1 c2 ed ec))])])))
 
+; The `Sum` analogue of `mk-arr-eq`.
+(deftotal mk-sum-eq
+  (Pi ((l1 BTy) (r1 BTy) (l2 BTy) (r2 BTy) (ml (Maybe (BtyEq l1 l2))) (mr (Maybe (BtyEq r1 r2))))
+    (Maybe (BtyEq (Sum l1 r1) (Sum l2 r2))))
+  (lam (l1 r1 l2 r2 ml mr)
+    (match ml [(nothing) nothing]
+      [(just el) (match mr [(nothing) nothing] [(just er) (just (sum-cong l1 l2 r1 r2 el er))])])))
+
 ; The `Base` row of the decision table (every non-`Base` type is unequal to `Base`).
 (deftotal deceq-base (Pi ((b BTy)) (Maybe (BtyEq Base b)))
-  (lam (b) (match b [(Base) (just (bty-refl Base))] [(NatT) nothing] [(BoolT) nothing] [(Arr d c) nothing])))
+  (lam (b)
+    (match b [(Base) (just (bty-refl Base))] [(NatT) nothing] [(BoolT) nothing] [(Arr d c) nothing]
+      [(Sum l r) nothing])))
 
 ; The `NatT` row of the decision table (every non-`NatT` type is unequal to `NatT`).
 (deftotal deceq-nat (Pi ((b BTy)) (Maybe (BtyEq NatT b)))
-  (lam (b) (match b [(Base) nothing] [(NatT) (just (bty-refl NatT))] [(BoolT) nothing] [(Arr d c) nothing])))
+  (lam (b)
+    (match b [(Base) nothing] [(NatT) (just (bty-refl NatT))] [(BoolT) nothing] [(Arr d c) nothing]
+      [(Sum l r) nothing])))
 
 ; The `BoolT` row of the decision table (every non-`BoolT` type is unequal to `BoolT`).
 (deftotal deceq-bool (Pi ((b BTy)) (Maybe (BtyEq BoolT b)))
-  (lam (b) (match b [(Base) nothing] [(NatT) nothing] [(BoolT) (just (bty-refl BoolT))] [(Arr d c) nothing])))
+  (lam (b)
+    (match b [(Base) nothing] [(NatT) nothing] [(BoolT) (just (bty-refl BoolT))] [(Arr d c) nothing]
+      [(Sum l r) nothing])))
 
 ; Decide `BtyEq a b` structurally. Curried on `a`: the `a`-match returns a function of `b`, so `b` is
-; out of scope during it (discipline 1). The `Arr` row is an ascribed `λb` whose inner `b`-match is in
-; checking mode, with the domain/codomain sub-decisions resolved by recursion (`d1`/`c1` ⊏ `a`).
+; out of scope during it (discipline 1). The `Arr`/`Sum` rows are ascribed `λb`s whose inner `b`-match
+; is in checking mode, with the component sub-decisions resolved by recursion (`d1`/`c1`, `l1`/`r1` ⊏ `a`).
 (define-rec bty-deceq (Pi ((a BTy) (b BTy)) (Maybe (BtyEq a b)))
   (lam (a)
     (match a [(Base) deceq-base] [(NatT) deceq-nat] [(BoolT) deceq-bool]
@@ -98,7 +122,13 @@
         (the (Pi ((b BTy)) (Maybe (BtyEq (Arr d1 c1) b)))
           (lam (b)
             (match b [(Base) nothing] [(NatT) nothing] [(BoolT) nothing]
-              [(Arr d2 c2) (mk-arr-eq d1 c1 d2 c2 (bty-deceq d1 d2) (bty-deceq c1 c2))])))])))
+              [(Arr d2 c2) (mk-arr-eq d1 c1 d2 c2 (bty-deceq d1 d2) (bty-deceq c1 c2))]
+              [(Sum l2 r2) nothing])))]
+      [(Sum l1 r1)
+        (the (Pi ((b BTy)) (Maybe (BtyEq (Sum l1 r1) b)))
+          (lam (b)
+            (match b [(Base) nothing] [(NatT) nothing] [(BoolT) nothing] [(Arr d2 c2) nothing]
+              [(Sum l2 r2) (mk-sum-eq l1 r1 l2 r2 (bty-deceq l1 l2) (bty-deceq r1 r2))])))])))
 
 ; ── Arrow view: read a type as an arrow, carrying the equality witness ───────────────────────────────
 ; `BArrEq a` is `Sigma (dom cod : BTy). BtyEq a (Arr dom cod)` — evidence that `a` is a function type.
@@ -109,7 +139,18 @@
 (deftotal split-arrow (Pi ((a BTy)) (Maybe (BArrEq a)))
   (lam (a)
     (match a [(Base) nothing] [(NatT) nothing] [(BoolT) nothing]
-      [(Arr dom cod) (just (barreq dom cod (bty-refl (Arr dom cod))))])))
+      [(Arr dom cod) (just (barreq dom cod (bty-refl (Arr dom cod))))] [(Sum l r) nothing])))
+
+; ── Sum view: read a type as a sum, carrying the equality witness (the `split-arrow` analogue) ────────
+; `BSumEq a` is `Sigma (l r : BTy). BtyEq a (Sum l r)` — evidence that `a` is a sum type. `su-case`
+; uses it to recover the two summand types `l`/`r` (the branch-binder types) from the scrutinee's
+; runtime-discovered type, then transports the scrutinee to `Sum l r`.
+(defdata BSumEq ((a BTy)) (bsumeq (l BTy) (r BTy) (e (BtyEq a (Sum l r)))))
+
+(deftotal split-sum (Pi ((a BTy)) (Maybe (BSumEq a)))
+  (lam (a)
+    (match a [(Base) nothing] [(NatT) nothing] [(BoolT) nothing] [(Arr d c) nothing]
+      [(Sum l r) (just (bsumeq l r (bty-refl (Sum l r))))])))
 
 ; ── Coerce an inferred term to a *known* arrow type (the function side of application) ────────────────
 ; Given the arrow witness, transport the function term to the arrow type. (One `match` of a variable.)
@@ -206,6 +247,32 @@
   (lam (g tms st se)
     (match st [(bsig c1 tmt) (match se [(bsig c2 tme) (if-of g tms c1 tmt c2 tme (bty-deceq c2 c1))])])))
 
+; `su-inl`/`su-inr` finishers: the payload's inferred type becomes one summand, the annotation the
+; other. (`inl v : Sum a rty` when `v : a`; symmetrically for `inr`.)
+(deftotal mk-inl (Pi ((g BTyCtx) (rty BTy) (s (BSig g))) (BSig g))
+  (lam (g rty s) (match s [(bsig a tmv) (bsig (Sum a rty) (TInl g a rty tmv))])))
+(deftotal mk-inr (Pi ((g BTyCtx) (lty BTy) (s (BSig g))) (BSig g))
+  (lam (g lty s) (match s [(bsig b tmv) (bsig (Sum lty b) (TInr g lty b tmv))])))
+
+; `su-case` finishers: the two branches (already elaborated in the extended contexts `CSnoc g l` /
+; `CSnoc g r`) must share a result type — decide `c2 = c1`, coerce the right branch to the left's
+; type, and assemble `TCase` at that common type. The scrutinee arrives already transported to `Sum l r`.
+(deftotal case-of
+  (Pi
+    ((g BTyCtx) (l BTy) (r BTy) (s (BTm g (Sum l r))) (c1 BTy) (tl (BTm (CSnoc g l) c1)) (c2 BTy)
+      (tr (BTm (CSnoc g r) c2)) (me (Maybe (BtyEq c2 c1))))
+    (Maybe (BSig g)))
+  (lam (g l r s c1 tl c2 tr me)
+    (match me [(nothing) nothing]
+      [(just e) (just (bsig c1 (TCase g l r c1 s tl (bty-coerce (CSnoc g r) c2 c1 e tr))))])))
+(deftotal case-branches
+  (Pi
+    ((g BTyCtx) (l BTy) (r BTy) (s (BTm g (Sum l r))) (sl (BSig (CSnoc g l))) (sr (BSig (CSnoc g r))))
+    (Maybe (BSig g)))
+  (lam (g l r s sl sr)
+    (match sl
+      [(bsig c1 tl) (match sr [(bsig c2 tr) (case-of g l r s c1 tl c2 tr (bty-deceq c2 c1))])])))
+
 ; The headline loop. Curried on the surface term `s` (structural recursion on the leading scrutinee),
 ; returning a function of the context `g`; currying keeps `g` out of scope during `match s` so every
 ; arm stays in checking mode (discipline 1). Each arm threads recursive results through
@@ -252,7 +319,35 @@
                             (lam (st)
                               (maybe-bind (BSig g) (BSig g) (belab-go els g)
                                 (the (Pi ((se (BSig g))) (Maybe (BSig g)))
-                                  (lam (se) (if-branches g tms st se)))))))))))))))])))
+                                  (lam (se) (if-branches g tms st se)))))))))))))))]
+      [(su-inl rty v)
+        (the (Pi ((g BTyCtx)) (Maybe (BSig g)))
+          (lam (g) (maybe-map (BSig g) (BSig g) (mk-inl g rty) (belab-go v g))))]
+      [(su-inr lty v)
+        (the (Pi ((g BTyCtx)) (Maybe (BSig g)))
+          (lam (g) (maybe-map (BSig g) (BSig g) (mk-inr g lty) (belab-go v g))))]
+      [(su-case scrut lbody rbody)
+        (the (Pi ((g BTyCtx)) (Maybe (BSig g)))
+          (lam (g)
+            (maybe-bind (BSig g) (BSig g) (belab-go scrut g)
+              (the (Pi ((ss (BSig g))) (Maybe (BSig g)))
+                (lam (ss)
+                  (match ss
+                    [(bsig sa tm-s)
+                      (maybe-bind (BSumEq sa) (BSig g) (split-sum sa)
+                        (the (Pi ((sv (BSumEq sa))) (Maybe (BSig g)))
+                          (lam (sv)
+                            (match sv
+                              [(bsumeq l r e)
+                                (maybe-bind (BSig (CSnoc g l)) (BSig g) (belab-go lbody (CSnoc g l))
+                                  (the (Pi ((sl (BSig (CSnoc g l)))) (Maybe (BSig g)))
+                                    (lam (sl)
+                                      (maybe-bind (BSig (CSnoc g r)) (BSig g)
+                                        (belab-go rbody (CSnoc g r))
+                                        (the (Pi ((sr (BSig (CSnoc g r)))) (Maybe (BSig g)))
+                                          (lam (sr)
+                                            (case-branches g l r (bty-coerce g sa (Sum l r) e tm-s) sl
+                                              sr)))))))]))))]))))))])))
 
 ; The headline, with the plan's argument order `(g : BTyCtx) (s : BSurf)`.
 (deftotal belaborate (Pi ((g BTyCtx) (s BSurf)) (Maybe (BSig g))) (lam (g s) (belab-go s g)))

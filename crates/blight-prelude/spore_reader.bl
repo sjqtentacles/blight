@@ -69,6 +69,10 @@
 (define kw-true (List Nat) (cons ?t (cons ?r (cons ?u (cons ?e nil)))))
 (define kw-false (List Nat) (cons ?f (cons ?a (cons ?l (cons ?s (cons ?e nil))))))
 (define kw-if (List Nat) (cons ?i (cons ?f nil)))
+(define kw-sum (List Nat) (cons ?S (cons ?u (cons ?m nil))))
+(define kw-inl (List Nat) (cons ?i (cons ?n (cons ?l nil))))
+(define kw-inr (List Nat) (cons ?i (cons ?n (cons ?r nil))))
+(define kw-case (List Nat) (cons ?c (cons ?a (cons ?s (cons ?e nil)))))
 
 ; ── Name resolution: `NAME` -> de Bruijn index against the enclosing binder stack ───────────────────
 ; `names` is innermost-binder-first, exactly the order `su-var`'s index counts in (`Zero` = the most
@@ -95,7 +99,19 @@
     (match e [(s-atom bs) (Succ Zero)] [(s-nil) (Succ Zero)]
       [(s-cons h r) (Succ (plus (bsexp-size h) (bsexp-size r)))])))
 
-; ── Type reader: `Base` | `(Arr T1 T2)` ──────────────────────────────────────────────────────────────
+; `(Arr T1 T2)` and `(Sum T1 T2)` parse identically (two type args) and differ only in the
+; constructor built at the leaf. Rather than duplicate the parse (a mutually-recursive helper is
+; impossible in the directly-recursive `deftotal` fragment), `head-binty` classifies the head atom as
+; `just false` (Arr) / `just true` (Sum) / `nothing`, and `mk-binty` picks the constructor at the leaf.
+(deftotal head-binty (Pi ((hbs (List Nat))) (Maybe Bool))
+  (lam (hbs)
+    (match (bytes-eq hbs kw-arr) [(true) (just false)]
+      [(false) (match (bytes-eq hbs kw-sum) [(true) (just true)] [(false) nothing])])))
+
+(deftotal mk-binty (Pi ((is-sum Bool) (t1 BTy) (t2 BTy)) BTy)
+  (lam (is-sum t1 t2) (match is-sum [(false) (Arr t1 t2)] [(true) (Sum t1 t2)])))
+
+; ── Type reader: `Base` | `Nat` | `Bool` | `(Arr T1 T2)` | `(Sum T1 T2)` ─────────────────────────────
 ; Fuel-recursive (see the file header note): `fuel` is the function's own first parameter and every
 ; self-call passes the current arm's `k` (from matching `fuel` as `(Succ k)`) unchanged as the new
 ; fuel, so every self-call is structurally eligible regardless of which `BSexp` sub-expression
@@ -114,8 +130,8 @@
           [(s-cons head rest)
             (match head [(s-nil) nothing] [(s-cons z1 z2) nothing]
               [(s-atom hbs)
-                (match (bytes-eq hbs kw-arr) [(false) nothing]
-                  [(true)
+                (match (head-binty hbs) [(nothing) nothing]
+                  [(just is-sum)
                     (match rest [(s-atom ra) nothing] [(s-nil) nothing]
                       [(s-cons t1e rest2)
                         (match rest2 [(s-atom ra2) nothing] [(s-nil) nothing]
@@ -125,7 +141,7 @@
                                 (match (resolve-ty-fuel k t1e) [(nothing) nothing]
                                   [(just t1)
                                     (match (resolve-ty-fuel k t2e) [(nothing) nothing]
-                                      [(just t2) (just (Arr t1 t2))])])])])])])])])])))
+                                      [(just t2) (just (mk-binty is-sum t1 t2))])])])])])])])])])))
 
 ; Top-level entry point: seed the fuel with `e`'s own size (always enough, since every recursive step
 ; strictly shrinks the sub-expression — see the file header note).
@@ -143,6 +159,30 @@
 ; Is this `BSexp` the bare keyword atom `if`? (The head of an `(if cond then else)` form.)
 (deftotal is-if-kw (Pi ((e BSexp)) Bool)
   (lam (e) (match e [(s-atom bs) (bytes-eq bs kw-if)] [(s-nil) false] [(s-cons h r) false])))
+
+; ── Head classification: which special form (if any) a cons-expression's head selects ─────────────────
+; A single flat classifier for the `(HEAD …)` dispatch in the term reader — a non-atom head (a nested
+; application like `((f x) y)`) or any non-keyword atom is `hk-app`. Flattening the dispatch this way
+; (one `match` over `HeadKind`, sibling arms) keeps the reader out of the deep `(match is-X …)` nesting
+; that adding six special forms one-inside-another would produce.
+(defdata HeadKind () (hk-lam) (hk-succ) (hk-if) (hk-inl) (hk-inr) (hk-case) (hk-app))
+
+(deftotal classify-head (Pi ((head BSexp)) HeadKind)
+  (lam (head)
+    (match head [(s-nil) hk-app] [(s-cons h r) hk-app]
+      [(s-atom bs)
+        (match (bytes-eq bs kw-lam) [(true) hk-lam]
+          [(false)
+            (match (bytes-eq bs kw-succ) [(true) hk-succ]
+              [(false)
+                (match (bytes-eq bs kw-if) [(true) hk-if]
+                  [(false)
+                    (match (bytes-eq bs kw-inl) [(true) hk-inl]
+                      [(false)
+                        (match (bytes-eq bs kw-inr) [(true) hk-inr]
+                          [(false)
+                            (match (bytes-eq bs kw-case) [(true) hk-case]
+                              [(false) hk-app])])])])])])])))
 
 ; ── Numeric literals: a digit-atom desugars to a nested `su-succ` chain (the "su-lit sugar") ──────────
 ; `digit-val b` is `just v` when the byte `b` is the ASCII digit for `v` (`?0↦0 … ?9↦9`), else
@@ -209,8 +249,8 @@
                               [(just i) (just (su-var i))])])])])])]
           [(s-nil) nothing]
           [(s-cons head rest)
-            (match (is-lam-kw head)
-              [(true)
+            (match (classify-head head)
+              [(hk-lam)
                 ; (lam (NAME TY) BODY): rest = (binder . body . ()), binder = (NAME . TY . ())
                 (match rest [(s-atom ra) nothing] [(s-nil) nothing]
                   [(s-cons binder rest2)
@@ -232,45 +272,97 @@
                                                 (match (resolve-term-fuel k (cons nbs names) bodyE)
                                                   [(nothing) nothing]
                                                   [(just body) (just (su-lam ty body))])])])])])])])])])]
-              [(false)
-                (match (is-succ-kw head)
-                  [(true)
-                    ; (succ OPERAND): rest = (operand . ())
-                    (match rest [(s-atom sra) nothing] [(s-nil) nothing]
-                      [(s-cons operandE srest2)
-                        (match srest2 [(s-atom sr2) nothing] [(s-cons sz1 sz2) nothing]
-                          [(s-nil)
-                            (match (resolve-term-fuel k names operandE) [(nothing) nothing]
-                              [(just oe) (just (su-succ oe))])])])]
-                  [(false)
-                    (match (is-if-kw head)
-                      [(true)
-                        ; (if COND THEN ELSE): rest = (cond . then . else . ())
-                        (match rest [(s-atom ir0) nothing] [(s-nil) nothing]
-                          [(s-cons condE irest2)
-                            (match irest2 [(s-atom ir2) nothing] [(s-nil) nothing]
-                              [(s-cons thenE irest3)
-                                (match irest3 [(s-atom ir3) nothing] [(s-nil) nothing]
-                                  [(s-cons elseE irest4)
-                                    (match irest4 [(s-atom ir4) nothing] [(s-cons iz1 iz2) nothing]
-                                      [(s-nil)
-                                        (match (resolve-term-fuel k names condE) [(nothing) nothing]
-                                          [(just cT)
-                                            (match (resolve-term-fuel k names thenE) [(nothing) nothing]
-                                              [(just tT)
-                                                (match (resolve-term-fuel k names elseE)
-                                                  [(nothing) nothing]
-                                                  [(just eT) (just (su-if cT tT eT))])])])])])])])]
-                      [(false)
-                        ; (FN ARG): rest = (argE . ())
-                        (match rest [(s-atom ra) nothing] [(s-nil) nothing]
-                          [(s-cons argE rest2)
-                            (match rest2 [(s-atom r2) nothing] [(s-cons z1 z2) nothing]
+              [(hk-succ)
+                ; (succ OPERAND): rest = (operand . ())
+                (match rest [(s-atom sra) nothing] [(s-nil) nothing]
+                  [(s-cons operandE srest2)
+                    (match srest2 [(s-atom sr2) nothing] [(s-cons sz1 sz2) nothing]
+                      [(s-nil)
+                        (match (resolve-term-fuel k names operandE) [(nothing) nothing]
+                          [(just oe) (just (su-succ oe))])])])]
+              [(hk-if)
+                ; (if COND THEN ELSE): rest = (cond . then . else . ())
+                (match rest [(s-atom ir0) nothing] [(s-nil) nothing]
+                  [(s-cons condE irest2)
+                    (match irest2 [(s-atom ir2) nothing] [(s-nil) nothing]
+                      [(s-cons thenE irest3)
+                        (match irest3 [(s-atom ir3) nothing] [(s-nil) nothing]
+                          [(s-cons elseE irest4)
+                            (match irest4 [(s-atom ir4) nothing] [(s-cons iz1 iz2) nothing]
                               [(s-nil)
-                                (match (resolve-term-fuel k names head) [(nothing) nothing]
-                                  [(just fnT)
-                                    (match (resolve-term-fuel k names argE) [(nothing) nothing]
-                                      [(just argT) (just (su-app fnT argT))])])])])])])])])])))
+                                (match (resolve-term-fuel k names condE) [(nothing) nothing]
+                                  [(just cT)
+                                    (match (resolve-term-fuel k names thenE) [(nothing) nothing]
+                                      [(just tT)
+                                        (match (resolve-term-fuel k names elseE) [(nothing) nothing]
+                                          [(just eT) (just (su-if cT tT eT))])])])])])])])]
+              [(hk-inl)
+                ; (inl RTY V): rest = (rtyE . v . ())
+                (match rest [(s-atom ra) nothing] [(s-nil) nothing]
+                  [(s-cons rtyE irest2)
+                    (match irest2 [(s-atom r2) nothing] [(s-nil) nothing]
+                      [(s-cons vE irest3)
+                        (match irest3 [(s-atom r3) nothing] [(s-cons z1 z2) nothing]
+                          [(s-nil)
+                            (match (resolve-ty rtyE) [(nothing) nothing]
+                              [(just rty)
+                                (match (resolve-term-fuel k names vE) [(nothing) nothing]
+                                  [(just v) (just (su-inl rty v))])])])])])]
+              [(hk-inr)
+                ; (inr LTY V): rest = (ltyE . v . ())
+                (match rest [(s-atom ra) nothing] [(s-nil) nothing]
+                  [(s-cons ltyE irest2)
+                    (match irest2 [(s-atom r2) nothing] [(s-nil) nothing]
+                      [(s-cons vE irest3)
+                        (match irest3 [(s-atom r3) nothing] [(s-cons z1 z2) nothing]
+                          [(s-nil)
+                            (match (resolve-ty ltyE) [(nothing) nothing]
+                              [(just lty)
+                                (match (resolve-term-fuel k names vE) [(nothing) nothing]
+                                  [(just v) (just (su-inr lty v))])])])])])]
+              [(hk-case)
+                ; (case SCRUT LNAME LBODY RNAME RBODY): the two branches each bind one name.
+                (match rest [(s-atom ra) nothing] [(s-nil) nothing]
+                  [(s-cons scrutE crest2)
+                    (match crest2 [(s-atom r2) nothing] [(s-nil) nothing]
+                      [(s-cons lnameE crest3)
+                        (match lnameE [(s-nil) nothing] [(s-cons z1 z2) nothing]
+                          [(s-atom lnbs)
+                            (match crest3 [(s-atom r3) nothing] [(s-nil) nothing]
+                              [(s-cons lbodyE crest4)
+                                (match crest4 [(s-atom r4) nothing] [(s-nil) nothing]
+                                  [(s-cons rnameE crest5)
+                                    (match rnameE [(s-nil) nothing] [(s-cons z3 z4) nothing]
+                                      [(s-atom rnbs)
+                                        (match crest5 [(s-atom r5) nothing] [(s-nil) nothing]
+                                          [(s-cons rbodyE crest6)
+                                            (match crest6 [(s-atom r6) nothing] [(s-cons z5 z6) nothing]
+                                              [(s-nil)
+                                                (match (resolve-term-fuel k names scrutE)
+                                                  [(nothing) nothing]
+                                                  [(just scrutT)
+                                                    (match
+                                                      (resolve-term-fuel k (cons lnbs names) lbodyE)
+                                                      [(nothing) nothing]
+                                                      [(just lbodyT)
+                                                        (match
+                                                          (resolve-term-fuel k (cons rnbs names)
+                                                            rbodyE)
+                                                          [(nothing) nothing]
+                                                          [(just rbodyT)
+                                                            (just
+                                                              (su-case scrutT lbodyT
+                                                                rbodyT))])])])])])])])])])])])]
+              [(hk-app)
+                ; (FN ARG): rest = (argE . ())
+                (match rest [(s-atom ra) nothing] [(s-nil) nothing]
+                  [(s-cons argE rest2)
+                    (match rest2 [(s-atom r2) nothing] [(s-cons z1 z2) nothing]
+                      [(s-nil)
+                        (match (resolve-term-fuel k names head) [(nothing) nothing]
+                          [(just fnT)
+                            (match (resolve-term-fuel k names argE) [(nothing) nothing]
+                              [(just argT) (just (su-app fnT argT))])])])])])])])))
 
 ; Top-level entry point: seed the fuel with `e`'s own size, exactly like `resolve-ty`.
 (deftotal resolve-term (Pi ((names (List (List Nat))) (e BSexp)) (Maybe BSurf))
@@ -351,4 +443,13 @@
 (define-by reader-if-refl
   (Path (Maybe BSurf) (bsexp->bsurf reader-if-sexp)
     (just (su-lam BoolT (su-if (su-var Zero) su-false su-true))))
+  refl)
+
+; `(inl Base zero)` — the `inl` injection with a right-summand type annotation and a value: reads as
+; `(su-inl Base su-zero)`. (The `(Sum …)` type, `inr`, and the binding `(case …)` form are exercised
+; end-to-end over on-disk source by `examples/selfhost_check.bl`.)
+(define reader-inl-sexp BSexp
+  (s-cons (s-atom kw-inl) (s-cons (s-atom kw-base) (s-cons (s-atom kw-zero) s-nil))))
+(define-by reader-inl-refl
+  (Path (Maybe BSurf) (bsexp->bsurf reader-inl-sexp) (just (su-inl Base su-zero)))
   refl)

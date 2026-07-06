@@ -22,13 +22,16 @@
 ; constructor never collides with spore.bl's host `Nat` datatype, which shares the name namespace.
 ; S4b adds `BoolT` (constructors `TTrue`/`TFalse`, eliminator `TIf`) — the first user-style,
 ; non-indexed inductive with more than one constructor. `BoolT` (not `Bool`) so the object-type
-; constructor never collides with spore.bl's host `Bool` datatype (shared name namespace).
-(defdata BTy () (Base) (NatT) (BoolT) (Arr (dom BTy) (cod BTy)))
+; constructor never collides with spore.bl's host `Bool` datatype (shared name namespace). It also
+; adds the sum type `Sum l r` (constructors `TInl`/`TInr` carrying data, eliminator `TCase` with two
+; variable-BINDING branches) — the canonical data-carrying non-indexed inductive.
+(defdata BTy () (Base) (NatT) (BoolT) (Arr (dom BTy) (cod BTy)) (Sum (l BTy) (r BTy)))
 
 (deftotal bty-size (Pi ((a BTy)) Nat)
   (lam (a)
     (match a [(Base) (Succ Zero)] [(NatT) (Succ Zero)] [(BoolT) (Succ Zero)]
-      [(Arr dom cod) (Succ (plus (bty-size dom) (bty-size cod)))])))
+      [(Arr dom cod) (Succ (plus (bty-size dom) (bty-size cod)))]
+      [(Sum l r) (Succ (plus (bty-size l) (bty-size r)))])))
 
 ; ---- typing contexts as snoc-lists of object types -------------------------------------------
 (defdata BTyCtx () (CNil) (CSnoc (rest BTyCtx) (ty BTy)))
@@ -59,7 +62,14 @@
   ; type `c` (a non-dependent, two-way case — the eliminator for a two-constructor inductive).
   (TTrue (g BTyCtx) (=> g BoolT))
   (TFalse (g BTyCtx) (=> g BoolT))
-  (TIf (g BTyCtx) (c BTy) (s (BTm g BoolT)) (thn (BTm g c)) (els (BTm g c)) (=> g c)))
+  (TIf (g BTyCtx) (c BTy) (s (BTm g BoolT)) (thn (BTm g c)) (els (BTm g c)) (=> g c))
+  ; `TInl`/`TInr` inject into `Sum a b` (each carries the OTHER summand's type, which its payload
+  ; doesn't determine). `TCase` eliminates it: the two branches bind a var of type `a` resp. `b` (the
+  ; contexts `CSnoc g a` / `CSnoc g b`) and share the result type `c`.
+  (TInl (g BTyCtx) (a BTy) (b BTy) (v (BTm g a)) (=> g (Sum a b)))
+  (TInr (g BTyCtx) (a BTy) (b BTy) (v (BTm g b)) (=> g (Sum a b)))
+  (TCase (g BTyCtx) (a BTy) (b BTy) (c BTy) (s (BTm g (Sum a b))) (lf (BTm (CSnoc g a) c))
+    (rf (BTm (CSnoc g b) c)) (=> g c)))
 
 ; A structural size measure over the intrinsic terms — proves the family is genuinely recursive and
 ; usable as a termination metric, exactly as `bsize` does for the extrinsic `BTerm`.
@@ -70,4 +80,9 @@
       [(TZero g) (Succ Zero)] [(TSuc g n) (Succ (btm-size g NatT n))]
       [(TTrue g) (Succ Zero)] [(TFalse g) (Succ Zero)]
       [(TIf g c s thn els)
-        (Succ (plus (btm-size g BoolT s) (plus (btm-size g c thn) (btm-size g c els))))])))
+        (Succ (plus (btm-size g BoolT s) (plus (btm-size g c thn) (btm-size g c els))))]
+      [(TInl g a b v) (Succ (btm-size g a v))] [(TInr g a b v) (Succ (btm-size g b v))]
+      [(TCase g a b c s lf rf)
+        (Succ
+          (plus (btm-size g (Sum a b) s)
+            (plus (btm-size (CSnoc g a) c lf) (btm-size (CSnoc g b) c rf))))])))

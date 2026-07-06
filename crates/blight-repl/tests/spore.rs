@@ -486,6 +486,44 @@ fn self_host_differential_agrees_with_rust() {
                 rust: "(the Bool (match Zero [(false) true] [(true) false]))",
                 bsurf: "(su-if su-zero su-true su-false)",
             },
+            // ── S4b: sum types — inl/inr (data-carrying) + case (binding match) ──
+            // inl 0 : Sum Nat Base — a left injection (the annotation gives the unused right summand).
+            Case {
+                label: "sum-inl",
+                rust: "(the (Sum Nat Base) (inl Zero))",
+                bsurf: "(su-inl Base su-zero)",
+            },
+            // inr true : Sum Nat Bool — a right injection.
+            Case {
+                label: "sum-inr",
+                rust: "(the (Sum Nat Bool) (inr true))",
+                bsurf: "(su-inr NatT su-true)",
+            },
+            // λs:(Sum Nat Nat). case s x→x y→y : (Sum Nat Nat) → Nat — project either payload.
+            Case {
+                label: "sum-case-project",
+                rust: "(the (Pi ((s (Sum Nat Nat))) Nat) (lam (s) (match s [(inl x) x] [(inr y) y])))",
+                bsurf: "(su-lam (Sum NatT NatT) (su-case (su-var Zero) (su-var Zero) (su-var Zero)))",
+            },
+            // λs:(Sum Bool Nat). case s x→0 y→(succ y) : (Sum Bool Nat) → Nat — branches use their binder.
+            Case {
+                label: "sum-case-branches",
+                rust: "(the (Pi ((s (Sum Bool Nat))) Nat) (lam (s) (match s [(inl x) Zero] [(inr y) (Succ y)])))",
+                bsurf: "(su-lam (Sum BoolT NatT) (su-case (su-var Zero) su-zero (su-succ (su-var Zero))))",
+            },
+            // ── ill-typed in both ──
+            // λs:(Sum Nat Bool). case s x→x y→y — the branches disagree (Nat vs Bool).
+            Case {
+                label: "sum-case-branch-mismatch",
+                rust: "(the (Pi ((s (Sum Nat Bool))) Nat) (lam (s) (match s [(inl x) x] [(inr y) y])))",
+                bsurf: "(su-lam (Sum NatT BoolT) (su-case (su-var Zero) (su-var Zero) (su-var Zero)))",
+            },
+            // λx:Nat. case x … — the scrutinee is a Nat, not a sum.
+            Case {
+                label: "sum-case-scrut-not-sum",
+                rust: "(the (Pi ((x Nat)) Nat) (lam (x) (match x [(inl a) Zero] [(inr b) Zero])))",
+                bsurf: "(su-lam NatT (su-case (su-var Zero) su-zero su-zero))",
+            },
         ];
 
         // (1) The Rust verdict per program (the base type is declared in a fresh env each time so the
@@ -493,11 +531,13 @@ fn self_host_differential_agrees_with_rust() {
         fn rust_accepts(body: &str) -> bool {
             let mut env = ElabEnv::new();
             let mut prog = Program::with_resolver(&mut env, prelude_resolver);
-            // `Base` is an opaque base type; `Nat` (S4a) and `Bool` (S4b) are the extra base types,
-            // so the Rust side of the differential can express the same object programs as the `.bl`.
+            // `Base` is an opaque base type; `Nat`/`Bool` (S4a/S4b) are the extra base types and
+            // `Sum` (S4b) the parameterized sum, so the Rust side of the differential can express the
+            // same object programs as the `.bl` side.
             prog.run(&format!(
                 "(defdata Base () (b0))\n(defdata Nat () (Zero) (Succ (n Nat)))\n\
-                 (defdata Bool () (false) (true))\n{body}"
+                 (defdata Bool () (false) (true))\n\
+                 (defdata Sum ((a (Type 0)) (b (Type 0))) (inl (x a)) (inr (y b)))\n{body}"
             ))
             .is_ok()
         }

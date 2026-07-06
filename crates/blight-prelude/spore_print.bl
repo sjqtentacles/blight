@@ -36,13 +36,15 @@
 ; `Base` is a host datatype the bridge program declares; `Arr d c` is a non-dependent `Pi`. The Pi
 ; binder name is irrelevant (the object language is simply typed, so `c` never mentions it) — a fixed
 ; `v` is fine, even when nested arrows shadow it.
-; `NatT` embeds to the host's real `Nat` (Zero/Succ) and `BoolT` to the host `Bool` (false/true) —
-; the disposer program declares both.
+; `NatT` embeds to the host's real `Nat` (Zero/Succ), `BoolT` to `Bool` (false/true), and `Sum l r`
+; to a parameterized host `Sum` (inl/inr) — the disposer program declares all three.
 (deftotal bty-print (Pi ((a BTy)) String)
   (lam (a)
     (match a [(Base) "Base"] [(NatT) "Nat"] [(BoolT) "Bool"]
       [(Arr d c)
-        (cat (cons "(Pi ((v " (cons (bty-print d) (cons ")) " (cons (bty-print c) (cons ")" nil))))))])))
+        (cat (cons "(Pi ((v " (cons (bty-print d) (cons ")) " (cons (bty-print c) (cons ")" nil))))))]
+      [(Sum l r)
+        (cat (cons "(Sum " (cons (bty-print l) (cons " " (cons (bty-print r) (cons ")" nil))))))])))
 
 ; ── Term embedding: ⟦BSurf⟧ at binding depth `d` ─────────────────────────────────────────────────────
 ; A `su-lam` at depth `d` binds the name `v<d>` and recurses at depth `d+1`; a `su-var i` at depth `d`
@@ -80,7 +82,23 @@
             (cons (bsurf-print cnd d)
               (cons " [(false) "
                 (cons (bsurf-print els d)
-                  (cons "] [(true) " (cons (bsurf-print thn d) (cons "])" nil))))))))])))
+                  (cons "] [(true) " (cons (bsurf-print thn d) (cons "])" nil))))))))]
+      ; `inl`/`inr` are host constructors (params inferred in checking mode); `case` embeds to a host
+      ; `match` whose two arms each BIND the payload as `v<d>`, so each branch body prints at depth d+1.
+      [(su-inl rty v) (cat (cons "(inl " (cons (bsurf-print v d) (cons ")" nil))))]
+      [(su-inr lty v) (cat (cons "(inr " (cons (bsurf-print v d) (cons ")" nil))))]
+      [(su-case scrut lbody rbody)
+        (cat
+          (cons "(match "
+            (cons (bsurf-print scrut d)
+              (cons " [(inl "
+                (cons (binder-name d)
+                  (cons ") "
+                    (cons (bsurf-print lbody (Succ d))
+                      (cons "] [(inr "
+                        (cons (binder-name d)
+                          (cons ") "
+                            (cons (bsurf-print rbody (Succ d)) (cons "])" nil))))))))))))])))
 
 ; ── The bridge payload for one source term ───────────────────────────────────────────────────────────
 ; The elaborator's verdict rendered as a checkable line: `ACCEPT (the ⟦a⟧ ⟦s⟧)` on success, `REJECT`

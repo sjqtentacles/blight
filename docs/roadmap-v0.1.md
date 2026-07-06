@@ -478,7 +478,17 @@ S2 bridge differential and growing its corpus by ≥5 cases:
   `selfhost_bridge.bl` (+4 Nat cases, kernel re-checks each `(the Nat …)` payload) and
   `selfhost_check.bl` (numeral + Nat successor read from disk, native run) both extended.
 - **S4b** — user inductives: BTy gains declared datatypes; `belaborate` gains constructors +
-  match on non-indexed inductives.
+  match on non-indexed inductives. **[x] DONE (2026-07-05).** Two representative non-indexed
+  inductives baked into the object language: `BoolT` (nullary `TTrue`/`TFalse` + the two-branch
+  eliminator `TIf`) and the sum `Sum l r` (data-carrying `TInl`/`TInr` + the variable-BINDING
+  eliminator `TCase`, whose branch-binder types `l`/`r` are recovered from the scrutinee's
+  runtime-discovered type via a `split-sum` view + `bty-coerce`). Full pipeline (intrinsic/elab/
+  compile/print/reader); the reader's head dispatch was refactored to a flat `classify-head` to
+  absorb six special forms without deep `(match is-X …)` nesting. Differential grew +12 cases
+  (6 Bool, 6 Sum; kernel-`refl`), the bridge +7 (real-kernel disposer re-checks each `match`/`inl`/
+  `inr` payload), `selfhost_check.bl` +2 sources (the Bool `if` and the Sum `case`, read from disk
+  and run natively). A general *user-declared* datatype mechanism (arbitrary inductives via an
+  object-level datatype environment) remains a deeper follow-up.
 - **S4c** — dependent Pi (BTy indexed by context; the intrinsic two-index machinery is already
   proven by `spore_intrinsic.bl`).
 

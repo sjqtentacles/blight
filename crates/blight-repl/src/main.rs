@@ -3097,11 +3097,11 @@ mod tests {
         assert!(run.status.success(), "selfhost_check runs successfully");
         assert_eq!(
             String::from_utf8_lossy(&run.stdout),
-            "OK size=6\nREJECT\nOK size=8\nOK size=9\nOK size=13\n",
+            "OK size=6\nREJECT\nOK size=8\nOK size=9\nOK size=13\nOK size=13\n",
             "the Blight-written front end accepts the well-typed toy source (size-6 ANF), rejects \
              the ill-typed one, (S4a) accepts the numeric literal `2` (size-8 ANF) and the Nat \
-             successor function (size-9 ANF), and (S4b) accepts the Bool negation `if` (size-13 \
-             ANF), all read from disk"
+             successor function (size-9 ANF), and (S4b) accepts the Bool negation `if` and the Sum \
+             `case` projection (both size-13 ANF), all read from disk"
         );
     }
 
@@ -3150,7 +3150,8 @@ mod tests {
         let expected_accept = [
             true, true, true, true, false, false, false, // c0–c6 (STLC over Base)
             true, true, true, false, // c7–c10 (S4a: Nat identity / literal 2 / successor fn / succ-of-fn)
-            true, true, false, // c11–c13 (S4b: bool literal / negation / branch-type mismatch)
+            true, true, false, // c11–c13 (S4b Bool: literal / negation / branch-type mismatch)
+            true, true, true, false, // c14–c17 (S4b Sum: inl / inr / case-project / case-mismatch)
         ];
         let mut seen_accept = false;
         let mut seen_reject = false;
@@ -3169,12 +3170,14 @@ mod tests {
                 seen_accept = true;
                 let payload = verdict.strip_prefix("ACCEPT ").unwrap();
                 // Disposer: the trusted kernel independently re-checks the embedded judgement.
-                // `Base` is the opaque base type; `Nat` (S4a) and `Bool` (S4b) are the base types the
-                // `NatT`/`BoolT` embeddings render to, so `(the Nat (Succ …))` and `(match … [(false)
-                // …] [(true) …])` payloads re-check.
+                // `Base` is the opaque base type; `Nat`/`Bool` (S4a/S4b) and the parameterized `Sum`
+                // (S4b) are the base types the `NatT`/`BoolT`/`Sum` embeddings render to, so
+                // `(the Nat (Succ …))`, `(match … [(false) …] [(true) …])`, and `(inl …)`/`(match …
+                // [(inl x) …] [(inr y) …])` payloads all re-check.
                 let src = format!(
                     "(defdata Base () (b0))\n(defdata Nat () (Zero) (Succ (n Nat)))\n\
-                     (defdata Bool () (false) (true))\n{payload}"
+                     (defdata Bool () (false) (true))\n\
+                     (defdata Sum ((a (Type 0)) (b (Type 0))) (inl (x a)) (inr (y b)))\n{payload}"
                 );
                 let mut env = ElabEnv::new();
                 let mut prog = Program::new(&mut env);
