@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+# Cancel an in-flight run when a newer commit is pushed to the same ref: during push-heavy
+# iteration the old ~13-min run is dead weight, and each superseded run otherwise holds runner
+# slots the new one then queues behind. `main` is excluded (group is unique per-SHA there) so no
+# post-merge run is ever cancelled by a later merge.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
