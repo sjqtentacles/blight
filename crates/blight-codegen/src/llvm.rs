@@ -499,6 +499,33 @@ impl<'ctx> Codegen<'ctx> {
             call.set_call_convention(self.call_conv);
             let r = call.try_as_basic_value().unwrap_basic();
             ab.build_return(Some(&r)).unwrap();
+
+            // Tailcc trampoline for the runtime's delimited continuation (`bl_cont_apply`, effects.c).
+            // A continuation `k` is a BL_CLOSURE whose code is an ordinary C (ccc) function, but user
+            // code applies `(k v)` through the pure application path — `build_indirect_call` under the
+            // lifted (tailcc) convention (see `Tail::TailCall`) — where a ccc callee corrupts the
+            // x86_64 stack. Emit a STRONG tailcc wrapper that ccc-calls the C impl; `make_cont` stores
+            // THIS as the continuation's code pointer, so both the IR path and `bl_apply1` reach it as
+            // tailcc, uniformly. effects.c ships a weak ccc `bl_cont_apply_tc` for C-only harnesses.
+            let cont_impl = self.module.get_function("bl_cont_apply").unwrap_or_else(|| {
+                self.module
+                    .add_function("bl_cont_apply", self.func_ty(), Some(Linkage::External))
+            });
+            let cont_tc =
+                self.module
+                    .add_function("bl_cont_apply_tc", self.func_ty(), Some(Linkage::External));
+            cont_tc.set_call_conventions(self.call_conv); // tailcc entry
+            let cbb = self.context.append_basic_block(cont_tc, "entry");
+            let cb = self.context.create_builder();
+            cb.position_at_end(cbb);
+            let c0 = cont_tc.get_nth_param(0).unwrap();
+            let c1 = cont_tc.get_nth_param(1).unwrap();
+            // Plain ccc call to the C impl (do NOT set tailcc on this call).
+            let ccall = cb
+                .build_call(cont_impl, &[c0.into(), c1.into()], "cont_impl")
+                .unwrap();
+            let cr = ccall.try_as_basic_value().unwrap_basic();
+            cb.build_return(Some(&cr)).unwrap();
         }
 
         // Emit `bl_program_entry() -> ptr` wrapping the entry tail.
