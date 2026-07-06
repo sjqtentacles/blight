@@ -7,9 +7,7 @@
 (defdata Nat () (Zero) (Succ (n Nat)))
 
 ; The level-polymorphic identity: `id : ∀u. (A : Type u) → A → A`.
-(define-level id (u)
-  (Pi ((A (Type u) omega)) (Pi ((x A omega)) A))
-  (lam (A x) x))
+(define-level id (u) (Pi ((A (Type u) omega)) (Pi ((x A omega)) A)) (lam (A x) x))
 
 ; Instantiate at level 0 (values): `(inst id 0) Nat Zero : Nat`.
 (define id-at-nat (the Nat ((inst id 0) Nat Zero)))

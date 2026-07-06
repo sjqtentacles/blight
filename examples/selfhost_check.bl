@@ -74,5 +74,4 @@
                 (let ((u4 (put-str (string-append v-succ nl))))
                   (let ((v-bool (check-source bool-not)))
                     (let ((u5 (put-str (string-append v-bool nl))))
-                      (let ((v-sum (check-source sum-case)))
-                        (put-str (string-append v-sum nl))))))))))))))
+                      (let ((v-sum (check-source sum-case))) (put-str (string-append v-sum nl))))))))))))))

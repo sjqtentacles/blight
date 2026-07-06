@@ -51,11 +51,13 @@
 (deftotal banf-size (Pi ((e BAnf)) Nat)
   (lam (e)
     (match e [(a-var i) (Succ Zero)] [(a-tmp n) (Succ Zero)] [(a-zero) (Succ Zero)]
-      [(a-true) (Succ Zero)] [(a-false) (Succ Zero)]
+      [(a-true) (Succ Zero)]
+      [(a-false) (Succ Zero)]
       [(c-app f x) (Succ (plus (banf-size f) (banf-size x)))]
       [(c-suc a) (Succ (banf-size a))]
       [(c-if c t e) (Succ (plus (banf-size c) (plus (banf-size t) (banf-size e))))]
-      [(c-inl v) (Succ (banf-size v))] [(c-inr v) (Succ (banf-size v))]
+      [(c-inl v) (Succ (banf-size v))]
+      [(c-inr v) (Succ (banf-size v))]
       [(c-case s l r) (Succ (plus (banf-size s) (plus (banf-size l) (banf-size r))))]
       [(c-lam body) (Succ (banf-size body))]
       [(t-ret a) (Succ (banf-size a))]
@@ -70,20 +72,26 @@
 ; A plain, non-indexed de Bruijn term. Erasing FIRST isolates all index handling in this single
 ; btm-size-shaped pass, so the ANF stage below threads its fresh-name counter over an ordinary
 ; inductive with no dependent-index interaction.
-(defdata UTm () (uvar (i Nat)) (ulam (body UTm)) (uapp (fn UTm) (arg UTm))
-  (uzero) (usucc (n UTm))
-  (utrue) (ufalse) (uif (c UTm) (t UTm) (e UTm))
-  (uinl (v UTm)) (uinr (v UTm)) (ucase (s UTm) (lf UTm) (rf UTm)))
+(defdata UTm () (uvar (i Nat)) (ulam (body UTm)) (uapp (fn UTm) (arg UTm)) (uzero) (usucc (n UTm))
+  (utrue)
+  (ufalse)
+  (uif (c UTm) (t UTm) (e UTm))
+  (uinl (v UTm))
+  (uinr (v UTm))
+  (ucase (s UTm) (lf UTm) (rf UTm)))
 
 (deftotal berase (Pi ((g BTyCtx) (a BTy) (t (BTm g a))) UTm)
   (lam (g a t)
     (match t [(TVar g a x) (uvar (bvar-index g a x))]
       [(TLam g a b body) (ulam (berase (CSnoc g a) b body))]
       [(TApp g a b f x) (uapp (berase g (Arr a b) f) (berase g a x))]
-      [(TZero g) uzero] [(TSuc g n) (usucc (berase g NatT n))]
-      [(TTrue g) utrue] [(TFalse g) ufalse]
+      [(TZero g) uzero]
+      [(TSuc g n) (usucc (berase g NatT n))]
+      [(TTrue g) utrue]
+      [(TFalse g) ufalse]
       [(TIf g c s thn els) (uif (berase g BoolT s) (berase g c thn) (berase g c els))]
-      [(TInl g a b v) (uinl (berase g a v))] [(TInr g a b v) (uinr (berase g b v))]
+      [(TInl g a b v) (uinl (berase g a v))]
+      [(TInr g a b v) (uinr (berase g b v))]
       [(TCase g a b c s lf rf)
         (ucase (berase g (Sum a b) s) (berase (CSnoc g a) c lf) (berase (CSnoc g b) c rf))])))
 
@@ -147,8 +155,8 @@
               [(bc-out ce lse ate)
                 (bc-out (Succ ce)
                   (cappend (CPair Nat BAnf) lsc
-                    (ccons
-                      (cpair ce (c-if atc (bc-lets lst (t-ret att)) (bc-lets lse (t-ret ate)))) cnil))
+                    (ccons (cpair ce (c-if atc (bc-lets lst (t-ret att)) (bc-lets lse (t-ret ate))))
+                      cnil))
                   (a-tmp ce))])])])))
 
 ; `inl`/`inr` lower exactly like `c-suc` (single operand → a computation bound to a fresh temp).
@@ -175,7 +183,8 @@
                 (bc-out (Succ cr)
                   (cappend (CPair Nat BAnf) lss
                     (ccons
-                      (cpair cr (c-case ats (bc-lets lsl (t-ret atl)) (bc-lets lsr (t-ret atr)))) cnil))
+                      (cpair cr (c-case ats (bc-lets lsl (t-ret atl)) (bc-lets lsr (t-ret atr))))
+                      cnil))
                   (a-tmp cr))])])])))
 
 ; The counter `c` is CURRIED (matched `t` first, each arm returns a `Nat -> BcOut`) so deftotal sees

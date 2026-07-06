@@ -69,7 +69,8 @@
   (TInl (g BTyCtx) (a BTy) (b BTy) (v (BTm g a)) (=> g (Sum a b)))
   (TInr (g BTyCtx) (a BTy) (b BTy) (v (BTm g b)) (=> g (Sum a b)))
   (TCase (g BTyCtx) (a BTy) (b BTy) (c BTy) (s (BTm g (Sum a b))) (lf (BTm (CSnoc g a) c))
-    (rf (BTm (CSnoc g b) c)) (=> g c)))
+    (rf (BTm (CSnoc g b) c))
+    (=> g c)))
 
 ; A structural size measure over the intrinsic terms — proves the family is genuinely recursive and
 ; usable as a termination metric, exactly as `bsize` does for the extrinsic `BTerm`.
@@ -77,11 +78,14 @@
   (lam (g a t)
     (match t [(TVar g a x) (Succ Zero)] [(TLam g a b body) (Succ (btm-size (CSnoc g a) b body))]
       [(TApp g a b f x) (Succ (plus (btm-size g (Arr a b) f) (btm-size g a x)))]
-      [(TZero g) (Succ Zero)] [(TSuc g n) (Succ (btm-size g NatT n))]
-      [(TTrue g) (Succ Zero)] [(TFalse g) (Succ Zero)]
+      [(TZero g) (Succ Zero)]
+      [(TSuc g n) (Succ (btm-size g NatT n))]
+      [(TTrue g) (Succ Zero)]
+      [(TFalse g) (Succ Zero)]
       [(TIf g c s thn els)
         (Succ (plus (btm-size g BoolT s) (plus (btm-size g c thn) (btm-size g c els))))]
-      [(TInl g a b v) (Succ (btm-size g a v))] [(TInr g a b v) (Succ (btm-size g b v))]
+      [(TInl g a b v) (Succ (btm-size g a v))]
+      [(TInr g a b v) (Succ (btm-size g b v))]
       [(TCase g a b c s lf rf)
         (Succ
           (plus (btm-size g (Sum a b) s)

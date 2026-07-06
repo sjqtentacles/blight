@@ -34,23 +34,15 @@
 ; callers pass `(length … input)`, which is always enough.
 (define-rec sum-toks (Pi ((fuel Nat)) (! Parse Nat))
   (lam (fuel)
-    (match fuel
-      [(Zero) Zero]
-      [(Succ f)
-        (match (perform next pu)
-          [(nothing) Zero]
-          [(just t) (plus t (sum-toks f))])])))
+    (match fuel [(Zero) Zero]
+      [(Succ f) (match (perform next pu) [(nothing) Zero] [(just t) (plus t (sum-toks f))])])))
 
 ; `count-toks` reads every token and counts them (ignoring their values) — a second parser sharing
 ; the same effect and handler, to show the effect layer is reusable.
 (define-rec count-toks (Pi ((fuel Nat)) (! Parse Nat))
   (lam (fuel)
-    (match fuel
-      [(Zero) Zero]
-      [(Succ f)
-        (match (perform next pu)
-          [(nothing) Zero]
-          [(just t) (Succ (count-toks f))])])))
+    (match fuel [(Zero) Zero]
+      [(Succ f) (match (perform next pu) [(nothing) Zero] [(just t) (Succ (count-toks f))])])))
 
 ; ── The runner: the sole handler ─────────────────────────────────────────────────────────────
 ; `run p input` feeds `input` to a parser body `p` and returns its result paired with the leftover
@@ -59,26 +51,19 @@
 ; handle expression has type `List Nat -> Pair Nat (List Nat)`; applying it to `input` runs it.
 (define run-sum (Pi ((input (List Nat))) (Pair Nat (List Nat)))
   (lam (input)
-    ((handle (sum-toks (length input))
-       (return x (the (Pi ((rest (List Nat))) (Pair Nat (List Nat))) (lam (rest) (mk-pair x rest))))
-       (next u k (the (Pi ((rest (List Nat))) (Pair Nat (List Nat))) (lam (rest)
-         (match rest [(nil) ((k nothing) nil)] [(cons t more) ((k (just t)) more)])))))
-     input)))
+    ((handle (sum-toks (length input)) (return x (the (Pi ((rest (List Nat))) (Pair Nat (List Nat))) (lam (rest) (mk-pair x rest)))) (next u k (the (Pi ((rest (List Nat))) (Pair Nat (List Nat))) (lam (rest) (match rest [(nil) ((k nothing) nil)] [(cons t more) ((k (just t)) more)])))))
+      input)))
 
 (define run-count (Pi ((input (List Nat))) (Pair Nat (List Nat)))
   (lam (input)
-    ((handle (count-toks (length input))
-       (return x (the (Pi ((rest (List Nat))) (Pair Nat (List Nat))) (lam (rest) (mk-pair x rest))))
-       (next u k (the (Pi ((rest (List Nat))) (Pair Nat (List Nat))) (lam (rest)
-         (match rest [(nil) ((k nothing) nil)] [(cons t more) ((k (just t)) more)])))))
-     input)))
+    ((handle (count-toks (length input)) (return x (the (Pi ((rest (List Nat))) (Pair Nat (List Nat))) (lam (rest) (mk-pair x rest)))) (next u k (the (Pi ((rest (List Nat))) (Pair Nat (List Nat))) (lam (rest) (match rest [(nil) ((k nothing) nil)] [(cons t more) ((k (just t)) more)])))))
+      input)))
 
 ; ── Kernel-checked computation demo: on input [4,8,15,16,23,42], sum = 108 and count = 6, with no
 ; input left. These are `refl`-style constant `plam` paths — the kernel accepts each ONLY if the
 ; effect-driven parser computes the stated result *definitionally* (it runs the whole handler inside
 ; conversion). The re-checker `Declined`s these two (it does not run effects); see the header.
-(define sample (List Nat)
-  (cons 4 (cons 8 (cons 15 (cons 16 (cons 23 (cons 42 nil)))))))
+(define sample (List Nat) (cons 4 (cons 8 (cons 15 (cons 16 (cons 23 (cons 42 nil)))))))
 
 (define sum-is-108 (Path (Pair Nat (List Nat)) (run-sum sample) (mk-pair 108 nil))
   (plam (i) (mk-pair 108 nil)))

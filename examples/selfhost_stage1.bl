@@ -42,7 +42,8 @@
 (define s6 BSurf (su-lam NatT (su-succ (su-succ (su-var Zero)))))
 ; 7. dispatch : Nat → Bool → Nat         — λn.λb. if b n (succ n)
 (define s7 BSurf
-  (su-lam NatT (su-lam BoolT (su-if (su-var Zero) (su-var (Succ Zero)) (su-succ (su-var (Succ Zero)))))))
+  (su-lam NatT
+    (su-lam BoolT (su-if (su-var Zero) (su-var (Succ Zero)) (su-succ (su-var (Succ Zero)))))))
 ; 8. apply-twice : (Bool→Bool) → Bool → Bool   — λf.λb. f (f b)
 (define s8 BSurf
   (su-lam (Arr BoolT BoolT)
@@ -66,8 +67,15 @@
 (define s14 BSurf (su-lam NatT (su-case (su-var Zero) (su-var Zero) (su-var Zero))))
 
 (define corpus (List BSurf)
-  (cons s0 (cons s1 (cons s2 (cons s3 (cons s4 (cons s5 (cons s6 (cons s7 (cons s8 (cons s9
-    (cons s10 (cons s11 (cons s12 (cons s13 (cons s14 nil))))))))))))))))
+  (cons s0
+    (cons s1
+      (cons s2
+        (cons s3
+          (cons s4
+            (cons s5
+              (cons s6
+                (cons s7
+                  (cons s8 (cons s9 (cons s10 (cons s11 (cons s12 (cons s13 (cons s14 nil))))))))))))))))
 
 ; ── Emit each verdict as a `BRIDGE <idx> <verdict>` line, sequencing under `Console` ──────────────────
 ; (`bridge-line` is spore_print.bl's proposer: it runs `belaborate` on `s` and renders the verdict.)

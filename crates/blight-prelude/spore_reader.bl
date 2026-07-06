@@ -180,9 +180,7 @@
                     (match (bytes-eq bs kw-inl) [(true) hk-inl]
                       [(false)
                         (match (bytes-eq bs kw-inr) [(true) hk-inr]
-                          [(false)
-                            (match (bytes-eq bs kw-case) [(true) hk-case]
-                              [(false) hk-app])])])])])])])))
+                          [(false) (match (bytes-eq bs kw-case) [(true) hk-case] [(false) hk-app])])])])])])])))
 
 ; ── Numeric literals: a digit-atom desugars to a nested `su-succ` chain (the "su-lit sugar") ──────────
 ; `digit-val b` is `just v` when the byte `b` is the ASCII digit for `v` (`?0↦0 … ?9↦9`), else
@@ -197,15 +195,24 @@
 (deftotal digit-val (Pi ((b Nat)) (Maybe Nat))
   (lam (b)
     (match (nat-eq b ?0) [(true) (just 0)]
-      [(false) (match (nat-eq b ?1) [(true) (just 1)]
-        [(false) (match (nat-eq b ?2) [(true) (just 2)]
-          [(false) (match (nat-eq b ?3) [(true) (just 3)]
-            [(false) (match (nat-eq b ?4) [(true) (just 4)]
-              [(false) (match (nat-eq b ?5) [(true) (just 5)]
-                [(false) (match (nat-eq b ?6) [(true) (just 6)]
-                  [(false) (match (nat-eq b ?7) [(true) (just 7)]
-                    [(false) (match (nat-eq b ?8) [(true) (just 8)]
-                      [(false) (match (nat-eq b ?9) [(true) (just 9)] [(false) nothing])])])])])])])])])])))
+      [(false)
+        (match (nat-eq b ?1) [(true) (just 1)]
+          [(false)
+            (match (nat-eq b ?2) [(true) (just 2)]
+              [(false)
+                (match (nat-eq b ?3) [(true) (just 3)]
+                  [(false)
+                    (match (nat-eq b ?4) [(true) (just 4)]
+                      [(false)
+                        (match (nat-eq b ?5) [(true) (just 5)]
+                          [(false)
+                            (match (nat-eq b ?6) [(true) (just 6)]
+                              [(false)
+                                (match (nat-eq b ?7) [(true) (just 7)]
+                                  [(false)
+                                    (match (nat-eq b ?8) [(true) (just 8)]
+                                      [(false)
+                                        (match (nat-eq b ?9) [(true) (just 9)] [(false) nothing])])])])])])])])])])))
 
 ; Fold a byte list to `just <decimal value>` iff EVERY byte is a digit, else `nothing`. Structural on
 ; `bs` (FIRST parameter); the accumulator `acc` (SMALL — the value so far) rides TRAILING, so each step
@@ -336,7 +343,8 @@
                                       [(s-atom rnbs)
                                         (match crest5 [(s-atom r5) nothing] [(s-nil) nothing]
                                           [(s-cons rbodyE crest6)
-                                            (match crest6 [(s-atom r6) nothing] [(s-cons z5 z6) nothing]
+                                            (match crest6 [(s-atom r6) nothing]
+                                              [(s-cons z5 z6) nothing]
                                               [(s-nil)
                                                 (match (resolve-term-fuel k names scrutE)
                                                   [(nothing) nothing]
@@ -350,9 +358,7 @@
                                                             rbodyE)
                                                           [(nothing) nothing]
                                                           [(just rbodyT)
-                                                            (just
-                                                              (su-case scrutT lbodyT
-                                                                rbodyT))])])])])])])])])])])])]
+                                                            (just (su-case scrutT lbodyT rbodyT))])])])])])])])])])])])]
               [(hk-app)
                 ; (FN ARG): rest = (argE . ())
                 (match rest [(s-atom ra) nothing] [(s-nil) nothing]
@@ -437,8 +443,7 @@
     (s-cons (s-cons (s-atom (cons ?x nil)) (s-cons (s-atom kw-bool) s-nil))
       (s-cons
         (s-cons (s-atom kw-if)
-          (s-cons (s-atom (cons ?x nil))
-            (s-cons (s-atom kw-false) (s-cons (s-atom kw-true) s-nil))))
+          (s-cons (s-atom (cons ?x nil)) (s-cons (s-atom kw-false) (s-cons (s-atom kw-true) s-nil))))
         s-nil))))
 (define-by reader-if-refl
   (Path (Maybe BSurf) (bsexp->bsurf reader-if-sexp)

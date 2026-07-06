@@ -26,10 +26,7 @@
 ; The sign of an integer as `-1 / 0 / 1`, branching with nested `if-zero` (zero first, then
 ; negative-vs-positive via the `int<` flag).
 (deftotal sign (Pi ((n Int)) Int)
-  (lam (n)
-    (if-zero n
-      (int 0)
-      (if-zero (int< n (int 0)) (int 1) (int- (int 0) (int 1))))))
+  (lam (n) (if-zero n (int 0) (if-zero (int< n (int 0)) (int 1) (int- (int 0) (int 1))))))
 
 ; Entry point: `if-zero` folds a computed-zero scrutinee (`5 - 5 = 0`) to the `then` branch, so
 ; `main` evaluates to `111`. Also forces the predicates above to be checked by the kernel + spore.

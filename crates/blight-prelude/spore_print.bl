@@ -97,8 +97,7 @@
                     (cons (bsurf-print lbody (Succ d))
                       (cons "] [(inr "
                         (cons (binder-name d)
-                          (cons ") "
-                            (cons (bsurf-print rbody (Succ d)) (cons "])" nil))))))))))))])))
+                          (cons ") " (cons (bsurf-print rbody (Succ d)) (cons "])" nil))))))))))))])))
 
 ; ── The bridge payload for one source term ───────────────────────────────────────────────────────────
 ; The elaborator's verdict rendered as a checkable line: `ACCEPT (the ⟦a⟧ ⟦s⟧)` on success, `REJECT`

@@ -48,8 +48,7 @@
 ; head mismatch. This is exactly definitional equality on the conversion-free fragment.
 (define-rec bterm-eq (Pi ((a BTerm) (b BTerm)) Bool)
   (lam (a)
-    (match a
-      [(BVar n) (lam (b) (match b [(BVar m) (nat-eq n m)] [_ false]))]
+    (match a [(BVar n) (lam (b) (match b [(BVar m) (nat-eq n m)] [_ false]))]
       [(BUniv l) (lam (b) (match b [(BUniv m) (nat-eq l m)] [_ false]))]
       [(BPi grd dom cod)
         (lam (b)
@@ -61,7 +60,8 @@
       [(BApp f x)
         (lam (b) (match b [(BApp f2 x2) (band (bterm-eq f f2) (bterm-eq x x2))] [_ false]))]
       [(BSig dom cod)
-        (lam (b) (match b [(BSig dom2 cod2) (band (bterm-eq dom dom2) (bterm-eq cod cod2))] [_ false]))]
+        (lam (b)
+          (match b [(BSig dom2 cod2) (band (bterm-eq dom dom2) (bterm-eq cod cod2))] [_ false]))]
       [(BPair x y)
         (lam (b) (match b [(BPair x2 y2) (band (bterm-eq x x2) (bterm-eq y y2))] [_ false]))]
       [(BFst p) (lam (b) (match b [(BFst p2) (bterm-eq p p2)] [_ false]))]
@@ -113,9 +113,7 @@
                     (match (bterm-eq inferred ty) [(true) (just ty)] [(false) nothing])])])]
           ; ── INFER mode ──
           [(nothing)
-            (match e
-              [(BVar n) (bctx-lookup g n)]
-              [(BUniv l) (just (BUniv (Succ l)))]
+            (match e [(BVar n) (bctx-lookup g n)] [(BUniv l) (just (BUniv (Succ l)))]
               ; Pi formation: both components must be types; the result lives at their max level.
               [(BPi grd dom cod)
                 (match (as-univ (dc k g dom nothing)) [(nothing) nothing]
@@ -145,25 +143,25 @@
 (deftotal dep-fuel (Pi ((e BTerm) (ty BTerm)) Nat)
   (lam (e ty) (let ((s (plus (bsize e) (bsize ty)))) (plus s (plus s s)))))
 
-(deftotal binfer (Pi ((g BCtx) (e BTerm)) (Maybe BTerm))
-  (lam (g e) (dc (dep-fuel e e) g e nothing)))
+(deftotal binfer (Pi ((g BCtx) (e BTerm)) (Maybe BTerm)) (lam (g e) (dc (dep-fuel e e) g e nothing)))
 
 (deftotal bcheck-dep (Pi ((g BCtx) (e BTerm) (ty BTerm)) Bool)
   (lam (g e ty) (match (dc (dep-fuel e ty) g e (just ty)) [(nothing) false] [(just t) true])))
 
 ; ── Demos: the kernel certifies the checker's verdicts by definitional computation ───────────────────
 ; The polymorphic identity's TYPE: `Π(A:Type0). Π(x:A). A`, as a raw de-Bruijn `BTerm`.
-(define ty-poly-id BTerm
-  (BPi Gw (BUniv Zero) (BPi Gw (BVar Zero) (BVar (Succ Zero)))))
+(define ty-poly-id BTerm (BPi Gw (BUniv Zero) (BPi Gw (BVar Zero) (BVar (Succ Zero)))))
 
 ; That type is itself well-formed, living at universe 1 — `binfer` computes exactly `BUniv 1`.
 (define-by dep-poly-id-ty-univ1
-  (Path (Maybe BTerm) (binfer BNil ty-poly-id) (just (BUniv (Succ Zero)))) refl)
+  (Path (Maybe BTerm) (binfer BNil ty-poly-id) (just (BUniv (Succ Zero))))
+  refl)
 
 ; The polymorphic identity FUNCTION `λA. λx. x` (= `BLam (BLam (BVar Zero))`) CHECKS against that type
 ; — the dependent binder `x:A` and the returned `A` all line up under de-Bruijn shifting.
 (define-by dep-poly-id-checks
-  (Path Bool (bcheck-dep BNil (BLam (BLam (BVar Zero))) ty-poly-id) true) refl)
+  (Path Bool (bcheck-dep BNil (BLam (BLam (BVar Zero))) ty-poly-id) true)
+  refl)
 
 ; THE dependent step, live: in a context holding `f : Π(x:Type1). x` (a function whose result type
 ; IS its argument), `binfer` on `(f Type0)` computes exactly `Type0` — the codomain `x` with the
@@ -171,16 +169,19 @@
 ; applied; this is what makes the checker dependent rather than simply-typed.
 (define ctx-dep-f BCtx (BSnoc BNil (BPi Gw (BUniv (Succ Zero)) (BVar Zero))))
 (define-by dep-app-substitutes-arg
-  (Path (Maybe BTerm) (binfer ctx-dep-f (BApp (BVar Zero) (BUniv Zero))) (just (BUniv Zero))) refl)
+  (Path (Maybe BTerm) (binfer ctx-dep-f (BApp (BVar Zero) (BUniv Zero))) (just (BUniv Zero)))
+  refl)
 
 ; Ill-typed #1: an unbound variable in the empty context is rejected.
-(define-by dep-unbound-var-rejected
-  (Path Bool (bcheck-dep BNil (BVar Zero) (BUniv Zero)) false) refl)
+(define-by dep-unbound-var-rejected (Path Bool (bcheck-dep BNil (BVar Zero) (BUniv Zero)) false)
+  refl)
 
 ; Ill-typed #2: applying a universe (not a function) is rejected — `(Type0 Type0)`.
 (define-by dep-apply-nonfunction-rejected
-  (Path Bool (bcheck-dep BNil (BApp (BUniv Zero) (BUniv Zero)) (BUniv Zero)) false) refl)
+  (Path Bool (bcheck-dep BNil (BApp (BUniv Zero) (BUniv Zero)) (BUniv Zero)) false)
+  refl)
 
 ; Ill-typed #3: a lambda checked against a non-Pi (`Type0`) is rejected.
 (define-by dep-lam-vs-nonpi-rejected
-  (Path Bool (bcheck-dep BNil (BLam (BVar Zero)) (BUniv Zero)) false) refl)
+  (Path Bool (bcheck-dep BNil (BLam (BVar Zero)) (BUniv Zero)) false)
+  refl)

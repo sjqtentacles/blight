@@ -36,12 +36,16 @@
 ; S4a adds the `NatT` introducers: `su-zero` (the literal `0`) and `su-succ` (successor); numeric
 ; literals in concrete syntax desugar to nested `su-succ` in the reader (spore_reader.bl).
 (defdata BSurf () (su-var (i Nat)) (su-lam (dom BTy) (body BSurf)) (su-app (fn BSurf) (arg BSurf))
-  (su-zero) (su-succ (n BSurf))
+  (su-zero)
+  (su-succ (n BSurf))
   ; S4b: the `BoolT` introducers `su-true`/`su-false` and the eliminator `su-if` (cond/then/else).
-  (su-true) (su-false) (su-if (cnd BSurf) (thn BSurf) (els BSurf))
+  (su-true)
+  (su-false)
+  (su-if (cnd BSurf) (thn BSurf) (els BSurf))
   ; S4b: the `Sum` introducers `su-inl`/`su-inr` (each annotated with the OTHER summand's type, which
   ; the payload doesn't determine) and the eliminator `su-case` (scrutinee + two binding branches).
-  (su-inl (rty BTy) (v BSurf)) (su-inr (lty BTy) (v BSurf))
+  (su-inl (rty BTy) (v BSurf))
+  (su-inr (lty BTy) (v BSurf))
   (su-case (scrut BSurf) (lbody BSurf) (rbody BSurf)))
 
 ; ── Existential outputs: a type packed with a well-typed term/variable at that type, in context g ────
@@ -139,7 +143,8 @@
 (deftotal split-arrow (Pi ((a BTy)) (Maybe (BArrEq a)))
   (lam (a)
     (match a [(Base) nothing] [(NatT) nothing] [(BoolT) nothing]
-      [(Arr dom cod) (just (barreq dom cod (bty-refl (Arr dom cod))))] [(Sum l r) nothing])))
+      [(Arr dom cod) (just (barreq dom cod (bty-refl (Arr dom cod))))]
+      [(Sum l r) nothing])))
 
 ; ── Sum view: read a type as a sum, carrying the equality witness (the `split-arrow` analogue) ────────
 ; `BSumEq a` is `Sigma (l r : BTy). BtyEq a (Sum l r)` — evidence that `a` is a sum type. `su-case`
@@ -218,8 +223,7 @@
 (deftotal succ-of
   (Pi ((g BTyCtx) (aa BTy) (tm (BTm g aa)) (me (Maybe (BtyEq aa NatT)))) (Maybe (BSig g)))
   (lam (g aa tm me)
-    (match me [(nothing) nothing]
-      [(just e) (just (bsig NatT (TSuc g (bty-coerce g aa NatT e tm))))])))
+    (match me [(nothing) nothing] [(just e) (just (bsig NatT (TSuc g (bty-coerce g aa NatT e tm))))])))
 (deftotal succ-sig (Pi ((g BTyCtx) (s (BSig g))) (Maybe (BSig g)))
   (lam (g s) (match s [(bsig aa tm) (succ-of g aa tm (bty-deceq aa NatT))])))
 
@@ -227,8 +231,7 @@
 ; term as a `BTm g BoolT` (the same domain-check+coerce shape, fixed to `BoolT`).
 (deftotal cond-of
   (Pi ((g BTyCtx) (ca BTy) (tm (BTm g ca)) (me (Maybe (BtyEq ca BoolT)))) (Maybe (BTm g BoolT)))
-  (lam (g ca tm me)
-    (match me [(nothing) nothing] [(just e) (just (bty-coerce g ca BoolT e tm))])))
+  (lam (g ca tm me) (match me [(nothing) nothing] [(just e) (just (bty-coerce g ca BoolT e tm))])))
 (deftotal cond-as-bool (Pi ((g BTyCtx) (s (BSig g))) (Maybe (BTm g BoolT)))
   (lam (g s) (match s [(bsig ca tm) (cond-of g ca tm (bty-deceq ca BoolT))])))
 
@@ -243,9 +246,11 @@
   (lam (g tms c1 tmt c2 tme me)
     (match me [(nothing) nothing]
       [(just e) (just (bsig c1 (TIf g c1 tms tmt (bty-coerce g c2 c1 e tme))))])))
-(deftotal if-branches (Pi ((g BTyCtx) (tms (BTm g BoolT)) (st (BSig g)) (se (BSig g))) (Maybe (BSig g)))
+(deftotal if-branches
+  (Pi ((g BTyCtx) (tms (BTm g BoolT)) (st (BSig g)) (se (BSig g))) (Maybe (BSig g)))
   (lam (g tms st se)
-    (match st [(bsig c1 tmt) (match se [(bsig c2 tme) (if-of g tms c1 tmt c2 tme (bty-deceq c2 c1))])])))
+    (match st
+      [(bsig c1 tmt) (match se [(bsig c2 tme) (if-of g tms c1 tmt c2 tme (bty-deceq c2 c1))])])))
 
 ; `su-inl`/`su-inr` finishers: the payload's inferred type becomes one summand, the annotation the
 ; other. (`inl v : Sum a rty` when `v : a`; symmetrically for `inr`.)
@@ -260,14 +265,16 @@
 (deftotal case-of
   (Pi
     ((g BTyCtx) (l BTy) (r BTy) (s (BTm g (Sum l r))) (c1 BTy) (tl (BTm (CSnoc g l) c1)) (c2 BTy)
-      (tr (BTm (CSnoc g r) c2)) (me (Maybe (BtyEq c2 c1))))
+      (tr (BTm (CSnoc g r) c2))
+      (me (Maybe (BtyEq c2 c1))))
     (Maybe (BSig g)))
   (lam (g l r s c1 tl c2 tr me)
     (match me [(nothing) nothing]
       [(just e) (just (bsig c1 (TCase g l r c1 s tl (bty-coerce (CSnoc g r) c2 c1 e tr))))])))
 (deftotal case-branches
   (Pi
-    ((g BTyCtx) (l BTy) (r BTy) (s (BTm g (Sum l r))) (sl (BSig (CSnoc g l))) (sr (BSig (CSnoc g r))))
+    ((g BTyCtx) (l BTy) (r BTy) (s (BTm g (Sum l r))) (sl (BSig (CSnoc g l)))
+      (sr (BSig (CSnoc g r))))
     (Maybe (BSig g)))
   (lam (g l r s sl sr)
     (match sl
@@ -346,7 +353,8 @@
                                         (belab-go rbody (CSnoc g r))
                                         (the (Pi ((sr (BSig (CSnoc g r)))) (Maybe (BSig g)))
                                           (lam (sr)
-                                            (case-branches g l r (bty-coerce g sa (Sum l r) e tm-s) sl
+                                            (case-branches g l r (bty-coerce g sa (Sum l r) e tm-s)
+                                              sl
                                               sr)))))))]))))]))))))])))
 
 ; The headline, with the plan's argument order `(g : BTyCtx) (s : BSurf)`.
