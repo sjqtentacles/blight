@@ -85,7 +85,10 @@ jobs:
           # `blight-codegen/tests/wasm_exec.rs`) needs a wasm-capable `clang` (llvm.sh's `clang-18`
           # already is one — unlike distro/Apple clang, apt.llvm.org builds every target in) and
           # `wasm-ld` (shipped in the versioned `lld-18` package, not installed by `llvm.sh` itself).
-          sudo apt-get install -y lld-18
+          # `libpolly-18-dev` supplies the static `Polly` lib `llvm-sys` links against — `llvm.sh`
+          # installs the LLVM runtime but not that dev static lib, so without it `llvm-sys` fails
+          # "could not find native static library `Polly`".
+          sudo apt-get install -y lld-18 libpolly-18-dev
           echo "BLIGHT_WASM_CC=$(command -v clang-18)" >> "$GITHUB_ENV"
           echo "BLIGHT_WASM_LD=$(command -v wasm-ld-18)" >> "$GITHUB_ENV"
       - name: Clippy (llvm)
@@ -131,7 +134,8 @@ jobs:
           chmod +x llvm.sh
           sudo ./llvm.sh 18
           echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
-          sudo apt-get install -y libsdl2-dev
+          # libsdl2-dev for the graphics feature; libpolly-18-dev for `llvm-sys`'s static Polly link.
+          sudo apt-get install -y libsdl2-dev libpolly-18-dev
       - name: Clippy (llvm + graphics)
         run: cargo clippy --workspace --all-targets --features blight-codegen/graphics,blight-repl/graphics -- -D warnings
       - name: Test (llvm + graphics)
@@ -158,7 +162,10 @@ jobs:
         with:
           tool: cargo-fuzz
       - name: Replay committed corpus (${{ matrix.target }})
-        run: cargo +nightly fuzz run ${{ matrix.target }} -- -runs=0
+        # Force the gnu target: cargo-fuzz otherwise defaults to `x86_64-unknown-linux-musl`, whose
+        # statically-linked libc is incompatible with the address sanitizer ("sanitizer is
+        # incompatible with statically linked libc"). gnu links libc dynamically, so ASan builds.
+        run: cargo +nightly fuzz run ${{ matrix.target }} --target x86_64-unknown-linux-gnu -- -runs=0
       - name: Upload any crash artifacts
         if: failure()
         uses: actions/upload-artifact@v4

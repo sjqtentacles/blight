@@ -57,6 +57,8 @@ jobs:
           chmod +x llvm.sh
           sudo ./llvm.sh 18
           echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18" >> "$GITHUB_ENV"
+          # `llvm-sys` links the static `Polly` lib, which `llvm.sh` doesn't install on its own.
+          sudo apt-get install -y libpolly-18-dev
       # Verbatim from README §Building a program: compile the hello example and run it → prints 7.
       - name: build + run examples/hello_nat.bl
         run: |
