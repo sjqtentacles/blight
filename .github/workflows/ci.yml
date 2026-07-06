@@ -16,8 +16,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
-  # sccache (set up by the setup-blight-llvm action) caches per-crate compilations across jobs/runs;
-  # it cannot cache incremental artifacts, so incremental must be off — also the right default for CI.
+  # Incremental compilation buys little in CI (each run starts from a restored cache, not a warm
+  # target dir mid-edit) and bloats the rust-cache; off is the recommended CI default.
   CARGO_INCREMENTAL: 0
 
 jobs:

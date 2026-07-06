@@ -1,9 +1,9 @@
 name: Setup Blight LLVM toolchain
 description: >
   Rust toolchain + a shared compile cache (Swatinem/rust-cache with a common key so the split
-  llvm-family jobs restore one prebuilt target dir, plus sccache) + LLVM 18 (clang / wasm-ld / lld /
-  Polly, optionally SDL2) and every env var the blight-codegen `llvm`/`graphics` build needs. Assumes
-  the repository is already checked out (this action lives in the repo, so checkout must precede it).
+  llvm-family jobs restore one prebuilt target dir) + LLVM 18 (clang / wasm-ld / lld / Polly,
+  optionally SDL2) and every env var the blight-codegen `llvm`/`graphics` build needs. Assumes the
+  repository is already checked out (this action lives in the repo, so checkout must precede it).
 
 inputs:
   sdl2:
@@ -24,7 +24,6 @@ runs:
     - uses: Swatinem/rust-cache@v2
       with:
         shared-key: blight-llvm
-    - uses: mozilla-actions/sccache-action@v0.0.6
     - name: Install LLVM 18 (+ optional SDL2)
       shell: bash
       run: |
@@ -42,6 +41,4 @@ runs:
           echo "LLVM_SYS_181_PREFIX=/usr/lib/llvm-18"
           echo "BLIGHT_WASM_CC=$(command -v clang-18)"
           echo "BLIGHT_WASM_LD=$(command -v wasm-ld-18)"
-          echo "RUSTC_WRAPPER=sccache"
-          echo "SCCACHE_GHA_ENABLED=true"
         } >> "$GITHUB_ENV"
