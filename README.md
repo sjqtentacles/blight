@@ -1,5 +1,10 @@
 # Blight
 
+[![CI](https://github.com/sjqtentacles/blight/actions/workflows/ci.yml/badge.svg)](https://github.com/sjqtentacles/blight/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/tag/sjqtentacles/blight?label=release&sort=semver&color=brightgreen)](https://github.com/sjqtentacles/blight/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.96%2B-orange.svg)](https://www.rust-lang.org)
+
 > "Scheme's soul, a proof assistant's spine, grown from one spore."
 
 **Blight is a dependently-typed programming language that is also a proof assistant**, written in
@@ -8,18 +13,16 @@ pattern matching, a standard library) *and* state and prove theorems about them 
 small, trusted core checks both. That core is the **spore**: a tiny kernel that is the only thing
 allowed to certify that a term is well-typed. Everything else is built on top of it.
 
-**The one big idea: trust is bounded, power is not.** The kernel is deliberately microscopic and is
-the *only* code that can mint a `Proof`. "Trusted" here means *implicitly trusted* — relied on
-without any external check, so a bug in it could silently certify something false; that is a
-liability, not a badge. Data types, pattern matching, traits, ML-style modules and functors, effect
-handlers, tactics, the standard library, and the package manager are all *"tower" code*: the
-*untrusted, explicitly-checked* layer. "Tower" is a role, not a folder — it spans both the untrusted
-Rust crates and the `.bl` standard library, and its defining property is that the kernel re-verifies
-everything it produces. So a tower bug at worst *fails to produce* a `Proof` (it is caught), never
-mints a false one. Building *on top of* the kernel is a dependency relationship; it does not make
-tower code trusted, because the kernel it depends on is precisely the checker that re-derives every
-verdict. A second, independently-written **re-checker** can re-verify any kernel-accepted proof, so
-the soundness argument is "two small checkers agree (or the second honestly, countably *declines*) —
+**The one big idea: trust is bounded, power is not.** The kernel — the *spore* — is the only code
+that can mint a `Proof`, and it is deliberately microscopic. "Trusted" here means *implicitly*
+trusted: relied on with no external check, so a bug in it could silently certify something false.
+That is a liability, not a badge — which is exactly why everything else is kept *out* of it. Data
+types, pattern matching, traits, ML-style functors, effect handlers, tactics, the standard library,
+the package manager — all of it is *tower* code: the *untrusted, explicitly-checked* layer that the
+kernel re-verifies. (Tower is a role, not a folder — it spans both the untrusted Rust crates and the
+`.bl` standard library.) So a tower bug at worst *fails to produce* a `Proof` — it is caught — and
+can never mint a false one. And a second, independently-written **re-checker** can re-verify any
+accepted proof, so soundness rests on "two small checkers agree, or the second honestly *declines* —
 never silently disagree," not "trust one large compiler."
 
 **How it compares.** If you know other languages: Blight takes its dependent, *cubical* type theory
@@ -384,10 +387,10 @@ All milestones M0-M6 are implemented and green (`cargo test --workspace`, with a
 unboxing, cross-object LTO, untrusted `Float`, distributed-actor addressing — all zero TCB growth).
 
 The [v0.1 roadmap](docs/roadmap-v0.1.md) (ergonomics, self-hosting, proof track, release) is
-essentially landed: **self-hosting Stage-1 is declared** — the Blight-written front end checks a real
-fragment (STLC + `Nat`/`Bool`/`Sum`, plus a dependent-Pi checker) and the trusted kernel independently
-re-checks every term it produces (`examples/selfhost_stage1.bl`). The only open v0.1 item is the R4
-content freeze + `v0.1.0` tag.
+**complete — `v0.1.0` is released.** Its headline: **self-hosting Stage-1 is declared** — the
+Blight-written front end checks a real fragment (STLC + `Nat`/`Bool`/`Sum`, plus a dependent-Pi
+checker) and the trusted kernel independently re-checks every term it produces
+(`examples/selfhost_stage1.bl`).
 
 | Milestone | Deliverable |
 |---|---|
