@@ -381,8 +381,23 @@ __attribute__((weak)) BlValue bl_call_tailcc(void *fn, BlValue clo, BlValue arg)
   return ((BlClo1)fn)(clo, arg);
 }
 
+static BlValue bl_cont_apply(BlValue clo, BlValue v); /* fwd: a runtime (ccc) closure code, see below */
+
 static BlValue bl_apply1(BlValue clo, BlValue arg) {
-  return bl_call_tailcc((void *)(uintptr_t)clo->header.aux, clo, arg);
+  void *fn = (void *)(uintptr_t)clo->header.aux;
+  /* Two kinds of closure share this apply path, and they use DIFFERENT calling conventions on native.
+   * A lifted Blight closure's code is `tailcc`; it must go through the adapter, because calling a
+   * tailcc function as ccc corrupts the x86_64 stack (the original Linux segfault). But the runtime
+   * itself synthesizes a handful of closures whose code is an ordinary C (`ccc`) function —
+   * continuations (`bl_cont_apply`), the `perform`/compose thunks, the con-bubble field rebuilder —
+   * and calling one of THOSE as tailcc corrupts the stack just the same (the inverse mismatch, which
+   * only surfaces once effects/continuations run; pure code never allocates these). Dispatch by code
+   * pointer: the runtime's own ccc closures are a small, fixed set. */
+  if (fn == (void *)bl_perform_apply || fn == (void *)bl_compose_apply ||
+      fn == (void *)bl_rebuild_field_apply || fn == (void *)bl_cont_apply) {
+    return ((BlClo1)fn)(clo, arg);
+  }
+  return bl_call_tailcc(fn, clo, arg);
 }
 
 /* A heap "handler record" capturing everything needed to re-fold a resumed computation under the
