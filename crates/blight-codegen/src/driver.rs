@@ -1743,6 +1743,7 @@ int main(void) {{
         let bin = work.join(name);
         let mut link = Command::new("clang");
         link.arg("-o").arg(&bin);
+        link.arg("-rdynamic"); // TEMP: export symbols so the SIGSEGV backtrace shows function names
         for o in &objs {
             link.arg(o);
         }

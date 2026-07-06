@@ -12,6 +12,24 @@
 #include "blight_rt.h"
 #include <stdlib.h>
 #include <stdio.h>
+/* TEMP: crash backtrace to localize the Linux native segfault (installed via a constructor so every
+ * binary gets it without touching the generated `main`). Removed once the codegen bug is fixed. */
+#include <execinfo.h>
+#include <signal.h>
+#include <unistd.h>
+static void bl_segv_handler(int sig) {
+  void *bt[64];
+  int n = backtrace(bt, 64);
+  fprintf(stderr, "[rt] fatal signal %d — backtrace:\n", sig);
+  fflush(stderr);
+  backtrace_symbols_fd(bt, n, STDERR_FILENO);
+  _exit(139);
+}
+__attribute__((constructor)) static void bl_install_segv_handler(void) {
+  signal(SIGSEGV, bl_segv_handler);
+  signal(SIGILL, bl_segv_handler);
+  signal(SIGBUS, bl_segv_handler);
+}
 
 typedef struct Segment {
   char *base;
