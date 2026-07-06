@@ -216,7 +216,7 @@ structurally total:
             (let ((_ (perform print "nope, try again.\n"))) (play k))
             (string-eq g secret))))])))
 
-(define main (! Console Unit) (play (Succ (Succ (Succ Zero)))))
+(define main (! Console Unit) (play 3))
 ```
 
 Build and run it, feeding it guesses on stdin:
@@ -270,7 +270,7 @@ Any `main : Nat` is buildable:
 
 ```
 (load "std/nat.bl")
-(define main Nat (plus (mult (Succ (Succ Zero)) (Succ (Succ (Succ Zero)))) (Succ Zero)))
+(define main Nat (plus (mult 2 3) 1))
 ```
 
 ```bash

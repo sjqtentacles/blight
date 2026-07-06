@@ -6,10 +6,12 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-## [0.1.0] — 2026-07-04
+## [0.1.0] — 2026-07-05
 
 The first tagged release: the v0.1 roadmap arcs (E, S, N, R) landed on top of the M0–M6 kernel,
-plus a full soundness-hardening pass over the trusted checkers.
+plus a full soundness-hardening pass over the trusted checkers. The self-hosting arc is complete
+through **Stage-1** — the Blight-written front end checks a real fragment (STLC + Nat/Bool/Sum, plus
+a dependent-Pi checker) and the trusted kernel independently re-checks every term it produces.
 
 ### Added
 

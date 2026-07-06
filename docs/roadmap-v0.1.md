@@ -884,7 +884,7 @@ repo-wide drift (the deferred `style_edition=2021` reformat, `e73c904`) across f
 touched — resolving it needs the worktree-branch merge coordination and is an R4-tag prerequisite,
 not an R3 change.
 
-### [ ] R4 — v0.1 content freeze + docs truth pass
+### [x] R4 — v0.1 content freeze + docs truth pass
 
 README status extended through the arcs actually landed; tutorial refreshed post-E1/E2 (decimals
 + implicits change every snippet); examples/README regenerated; this file's statuses flipped;
@@ -893,16 +893,16 @@ tag `v0.1.0`.
 - **Exit:** a fresh-clone quickstart (README only) succeeds on a clean machine, scripted in CI
   (`quickstart.yml` running the README commands verbatim).
 
-**Prep DONE (2026-07-05), tag PENDING (maintainer's release call).** Landed toward R4: the docs
-truth pass for the self-hosting arc (`examples/README.md` self-host entries corrected + Stage-1 row;
-README `## Status` gained a v0.1/Stage-1 line; `docs/implementation.md` Stage section updated); the
-CHANGELOG grew S4 + S5 entries; and **`.github/workflows/quickstart.yml`** now scripts the README
+**DONE (2026-07-05) — v0.1 content FROZEN, `v0.1.0` tagged.** Docs truth pass: `examples/README.md`
+self-host entries corrected + Stage-1 row; README `## Status` v0.1/Stage-1 line; `docs/implementation.md`
+Stage section; the tutorial's two remaining pre-E1 Peano snippets converted to decimals
+(`(Succ (Succ (Succ Zero)))` → `3`, `(plus (mult 2 3) 1)`). CHANGELOG `[0.1.0]` dated 2026-07-05 with
+S4 + S5 entries. Exit-criterion CI **`.github/workflows/quickstart.yml`** scripts the README
 quickstart verbatim on a fresh runner (from-source `cargo build --release` + `blight --version` +
-REPL smoke; `llvm`-gated `blight build examples/hello_nat.bl` → `7`) — the exit-criterion CI, all
-three commands validated locally. Roadmap statuses flipped through S5. **Remaining = the maintainer's
-call:** declare the content freeze (no more features before v0.1) and pull the `v0.1.0` git tag
-(`release.yml`'s matrix build triggers off it); optionally finalize the CHANGELOG `[0.1.0]` date and
-refresh the tutorial for E1/E2.
+REPL smoke; `llvm`-gated `blight build examples/hello_nat.bl` → `7`), all three validated locally.
+Every v0.1 roadmap marker is now `[x]`/`[~]`; the annotated **`v0.1.0`** git tag is cut (local — no
+remote configured, so no release published; `release.yml` will build the artifact matrix if/when a
+remote is added and the tag pushed).
 
 ---
 
