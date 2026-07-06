@@ -616,15 +616,10 @@ fn main_source_for(ty: &Term) -> String {
 #include <stdlib.h>
 extern BlValue bl_program_entry(void);
 int main(void) {{
-  fprintf(stderr, "[bt] start\n"); fflush(stderr);
   bl_gc_init(64 * 1024 * 1024); /* 64 MiB initial heap (the collector grows it on demand) */
-  fprintf(stderr, "[bt] gc_init ok\n"); fflush(stderr);
   bl_stack_init();
-  fprintf(stderr, "[bt] stack_init ok\n"); fflush(stderr);
   BlValue result = {handler_fn}(bl_program_entry());
-  fprintf(stderr, "[bt] entry ok; result=%p\n", (void*)result); fflush(stderr);
   {printer}
-  fprintf(stderr, "[bt] printer ok\n"); fflush(stderr);
 {gc_stats}  return 0;
 }}
 "#
@@ -637,15 +632,10 @@ int main(void) {{
 #include <stdlib.h>
 extern BlValue bl_program_entry(void);
 int main(void) {{
-  fprintf(stderr, "[bt] start\n"); fflush(stderr);
   bl_gc_init(64 * 1024 * 1024); /* 64 MiB initial heap (the collector grows it on demand) */
-  fprintf(stderr, "[bt] gc_init ok\n"); fflush(stderr);
   bl_stack_init();
-  fprintf(stderr, "[bt] stack_init ok\n"); fflush(stderr);
   BlValue result = bl_program_entry();
-  fprintf(stderr, "[bt] entry ok; result=%p\n", (void*)result); fflush(stderr);
   {printer}
-  fprintf(stderr, "[bt] printer ok\n"); fflush(stderr);
 {gc_stats}  return 0;
 }}
 "#
@@ -1743,7 +1733,6 @@ int main(void) {{
         let bin = work.join(name);
         let mut link = Command::new("clang");
         link.arg("-o").arg(&bin);
-        link.arg("-rdynamic"); // TEMP: export symbols so the SIGSEGV backtrace shows function names
         for o in &objs {
             link.arg(o);
         }
