@@ -346,6 +346,14 @@ BlValue bl_app_global(void *fnptr, BlValue a);
  * harnesses — which link the runtime but never emit a Blight program — linkable. */
 BlValue bl_call_tailcc(void *fn, BlValue clo, BlValue arg);
 
+/* Apply a closure value to one argument — the shared runtime apply used by every effect runner
+ * (console / bytes / arrays / graphics) and the handler fold. It distinguishes the runtime's OWN ccc
+ * closures (continuations, perform/compose thunks, con-bubble rebuilders) from lifted tailcc closures
+ * and calls each under the correct convention (see effects.c). A site that applies a closure through
+ * anything else — e.g. a raw `bl_call_tailcc`, which assumes tailcc — mis-calls those ccc runtime
+ * closures and corrupts the x86_64 stack (exactly how graphics dispatch segfaulted). */
+BlValue bl_apply1(BlValue clo, BlValue arg);
+
 /* OpNode-aware data construction (spec §4.3): after a Con/Tuple is built eagerly, this bubbles any
  * effectful field so `Succ (perform op a)` suspends with continuation `λn. Succ n`. Pure objects are
  * returned unchanged. */

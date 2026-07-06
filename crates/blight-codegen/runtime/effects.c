@@ -92,7 +92,7 @@ const char *bl_effect_name_of(uint64_t idx) { return effect_name_of(idx); }
 
 static int is_opnode(BlValue v);
 static BlValue bl_perform_idx(uint64_t opidx, BlValue arg);
-static BlValue bl_apply1(BlValue clo, BlValue arg); /* fwd */
+BlValue bl_apply1(BlValue clo, BlValue arg); /* fwd */
 
 /* A "perform on resume" closure: fields [0]=old continuation (or NULL), [1]=BL_INT op-index. When
  * resumed with a value, replay the captured continuation then perform the recorded op on the result.
@@ -155,7 +155,7 @@ BlValue bl_perform(const char *effect, const char *op, BlValue arg) {
  *   - effectful function `f`: bubble, recording "apply my resume value to the fixed argument `a`".
  * When a handler later resumes the continuation with a value `v`, the composed closure replays the
  * old continuation then performs the recorded application — excavating the captured computation. */
-static BlValue bl_apply1(BlValue clo, BlValue arg); /* fwd */
+BlValue bl_apply1(BlValue clo, BlValue arg); /* fwd */
 
 /* A composed-continuation closure. fields: [0]=old continuation (or NULL), [1]=mode tag boxed as
  * BL_INT (0 = apply f to resume; 1 = apply resume to a), [2]=the fixed operand (f or a). */
@@ -390,7 +390,7 @@ __attribute__((weak)) BlValue bl_cont_apply_tc(BlValue clo, BlValue arg) {
   return bl_cont_apply(clo, arg);
 }
 
-static BlValue bl_apply1(BlValue clo, BlValue arg) {
+BlValue bl_apply1(BlValue clo, BlValue arg) {
   void *fn = (void *)(uintptr_t)clo->header.aux;
   /* Two kinds of closure share this apply path with DIFFERENT native calling conventions. A lifted
    * Blight closure's code is `tailcc` and goes through the adapter (calling it as ccc corrupts the
