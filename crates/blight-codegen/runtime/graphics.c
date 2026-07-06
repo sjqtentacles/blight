@@ -138,9 +138,9 @@ static void bl_graphics_present(void) {
 static int bl_gfx_is_opnode(BlValue v) { return v != NULL && !bl_is_imm(v) && BL_TAG(v) == BL_OPNODE; }
 
 static BlValue bl_gfx_apply1(BlValue clo, BlValue arg) {
-  typedef BlValue (*Fn1)(BlValue, BlValue);
-  Fn1 fn = (Fn1)(void *)(uintptr_t)clo->header.aux;
-  return fn(clo, arg);
+  /* Route through bl_call_tailcc (lifted code is tailcc on native; a direct C call is the wrong ABI
+   * on x86_64 and segfaults). See blight_rt.h. */
+  return bl_call_tailcc((void *)(uintptr_t)clo->header.aux, clo, arg);
 }
 
 BlValue bl_run_graphics(BlValue comp) {

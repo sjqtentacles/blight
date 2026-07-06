@@ -473,6 +473,34 @@ impl<'ctx> Codegen<'ctx> {
             self.emit_tail(&f.body, fv, &mut fr, funcs_ref, true, 0)?;
         }
 
+        // P0 (Linux x86_64 fix): emit the strong `bl_call_tailcc` adapter. Lifted functions use the
+        // `tailcc` convention on native, whose x86_64 register/stack ABI differs from C's — so the C
+        // runtime (bl_apply1 / bl_app_global / the delay stepper / graphics) cannot call a lifted code
+        // pointer through a plain C function pointer without corrupting the stack (segfault; the two
+        // ABIs happen to coincide on arm64, which is why it only bit x86_64). Those sites route through
+        // this adapter instead: a C-callable (ccc) function that performs the closure-code indirect
+        // call under the lifted convention. Native only — on wasm the lifted convention is already
+        // ccc, so the weak ccc fallback in effects.c is correct and no strong override is needed.
+        if self.call_conv == TAILCC {
+            let p = self.ptr_ty();
+            let adapter_ty = p.fn_type(&[p.into(), p.into(), p.into()], false);
+            let adapter =
+                self.module
+                    .add_function("bl_call_tailcc", adapter_ty, Some(Linkage::External));
+            let abb = self.context.append_basic_block(adapter, "entry");
+            let ab = self.context.create_builder();
+            ab.position_at_end(abb);
+            let fnp = adapter.get_nth_param(0).unwrap().into_pointer_value();
+            let a0 = adapter.get_nth_param(1).unwrap();
+            let a1 = adapter.get_nth_param(2).unwrap();
+            let call = ab
+                .build_indirect_call(self.func_ty(), fnp, &[a0.into(), a1.into()], "adapt")
+                .unwrap();
+            call.set_call_convention(self.call_conv);
+            let r = call.try_as_basic_value().unwrap_basic();
+            ab.build_return(Some(&r)).unwrap();
+        }
+
         // Emit `bl_program_entry() -> ptr` wrapping the entry tail.
         let entry_fn =
             self.module

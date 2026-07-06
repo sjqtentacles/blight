@@ -244,7 +244,7 @@ BlValue bl_app_global(void *fnptr, BlValue a) {
     bl_gc_pop_roots(1);
     return bl_app(clo, a);
   }
-  return ((BlFn2)fnptr)(NULL, a);
+  return bl_call_tailcc(fnptr, NULL, a);
 }
 
 /* ---- OpNode-aware data construction (spec §4.3). ----
@@ -373,9 +373,16 @@ BlValue bl_handle(BlValue env, BlThunk body, BlReturnClause ret,
  * the clause representation differs. */
 typedef BlValue (*BlClo1)(BlValue clo, BlValue arg);
 
+/* Weak ccc fallback for `bl_call_tailcc` (declared in blight_rt.h). Codegen emits a STRONG `tailcc`
+ * definition that overrides this in every real `blight build` binary; this fallback exists only so
+ * C-only runtime test harnesses (which link the runtime but emit no Blight program, hence no strong
+ * definition) still link. In those harnesses every linked function is ccc, so a plain call is correct. */
+__attribute__((weak)) BlValue bl_call_tailcc(void *fn, BlValue clo, BlValue arg) {
+  return ((BlClo1)fn)(clo, arg);
+}
+
 static BlValue bl_apply1(BlValue clo, BlValue arg) {
-  BlClo1 fn = (BlClo1)(void *)(uintptr_t)clo->header.aux;
-  return fn(clo, arg);
+  return bl_call_tailcc((void *)(uintptr_t)clo->header.aux, clo, arg);
 }
 
 /* A heap "handler record" capturing everything needed to re-fold a resumed computation under the

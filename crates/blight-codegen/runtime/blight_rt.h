@@ -315,6 +315,16 @@ BlValue bl_app(BlValue f, BlValue a);
  * effectful (OpNode) argument falls back to `bl_app` so effects bubble identically to a normal call. */
 BlValue bl_app_global(void *fnptr, BlValue a);
 
+/* Call a *lifted* function pointer (`fn`, an opaque code pointer stored in a closure's header.aux)
+ * with the object's calling convention. Every C-runtime site that applies compiled closure code —
+ * `bl_apply1`, `bl_app_global`, the delay stepper, graphics dispatch — MUST go through this rather
+ * than casting `fn` to a plain C function pointer and calling it directly: on native the lifted
+ * functions use `tailcc`, whose x86_64 register/stack ABI differs from the C convention, so a direct
+ * C call corrupts the stack and segfaults (it happens to coincide on arm64). Codegen emits a strong
+ * definition that performs the call under `tailcc`; a weak C fallback (ccc) below keeps C-only test
+ * harnesses — which link the runtime but never emit a Blight program — linkable. */
+BlValue bl_call_tailcc(void *fn, BlValue clo, BlValue arg);
+
 /* OpNode-aware data construction (spec §4.3): after a Con/Tuple is built eagerly, this bubbles any
  * effectful field so `Succ (perform op a)` suspends with continuation `λn. Succ n`. Pure objects are
  * returned unchanged. */
