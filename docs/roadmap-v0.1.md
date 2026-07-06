@@ -464,7 +464,12 @@ kernel/elab/recheck/codegen). Protocol, all gates pre-registered in the red comm
   deliberately pinned as-is in the golden; a stdlib coverage-guard gap (std/graphics.bl); and an
   unrunnable pipeline bench (reader nesting limit + missed E2 arity sweep), fixed on main first.
 
-### [ ] S4 — Grow the self-hosted fragment
+### [~] S4 — Grow the self-hosted fragment
+
+All three sub-milestones shipped (2026-07-05): S4a (Nat), S4b (Bool + Sum), S4c (dependent Pi, via
+the extrinsic route — see below). `[~]` rather than `[x]` only because S4c is the conversion-free
+fragment with documented follow-ups (a normalizer for full β/η-conversion, a differential-vs-kernel
+embedding, Σ checking).
 
 Toy STLC (Base/Arr) → a real Blight fragment, one sub-milestone per feature, each re-running the
 S2 bridge differential and growing its corpus by ≥5 cases:
