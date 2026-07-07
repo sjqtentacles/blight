@@ -248,9 +248,10 @@ mod tests {
         );
     }
 
-    /// `from_kernel` declines (never rejects, never silently passes) the Glue univalence layer.
+    /// F1: `from_kernel` now *translates* the Glue univalence layer (it is modeled, not declined).
+    /// This pins the increment-1 translation; increment 2 adds the typing + Kan-Glue reduction.
     #[test]
-    fn from_kernel_declines_glue() {
+    fn from_kernel_translates_glue() {
         let u0 = || Term::Univ(Level::Zero);
         let glue = Term::Glue {
             base: Rc::new(u0()),
@@ -258,15 +259,9 @@ mod tests {
             ty: Rc::new(u0()),
             equiv: Rc::new(u0()),
         };
-        assert!(matches!(
-            term::from_kernel(&glue),
-            Err(RecheckError::Declined(_))
-        ));
+        assert!(matches!(term::from_kernel(&glue), Ok(RTerm::Glue { .. })));
         let unglue = Term::Unglue(Rc::new(glue));
-        assert!(matches!(
-            term::from_kernel(&unglue),
-            Err(RecheckError::Declined(_))
-        ));
+        assert!(matches!(term::from_kernel(&unglue), Ok(RTerm::Unglue(_))));
     }
 
     /// `from_kernel` declines cubical partial elements and systems.

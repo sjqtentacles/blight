@@ -233,6 +233,25 @@ pub enum RTerm {
         base: Box<RTerm>,
     },
 
+    // ---- univalence: the cubical Glue type former + its intro/elim (spec §2.6). Modeled
+    // independently (F1) so `ua` and transports along it are Checked, not Declined. ----
+    /// `Glue A φ T e` — over the cofibration φ it is the partial type `T` (equivalent to the base
+    /// `A` via `e : Equiv T A`), and off φ it is `A`.
+    Glue {
+        base: Box<RTerm>,
+        cofib: RCofib,
+        ty: Box<RTerm>,
+        equiv: Box<RTerm>,
+    },
+    /// `glue` introduction.
+    GlueTerm {
+        cofib: RCofib,
+        partial: Box<RTerm>,
+        base: Box<RTerm>,
+    },
+    /// `unglue` elimination.
+    Unglue(Box<RTerm>),
+
     // ---- partiality (spec §4.5): the intensional Capretta delay, modeled independently so it is
     // Checked, not Declined. The re-checker does not track effect rows, so it re-derives only the
     // *types* (`Delay A : Univ`, `now a : Delay A`, `later d : Delay A`, `force d : A`); the
@@ -380,6 +399,29 @@ pub fn from_kernel(t: &Term) -> Result<RTerm, RecheckError> {
             base: Box::new(from_kernel(base)?),
         },
 
+        // ---- univalence: now MODELED (Checked), not declined (F1) ----
+        Term::Glue {
+            base,
+            cofib,
+            ty,
+            equiv,
+        } => RTerm::Glue {
+            base: Box::new(from_kernel(base)?),
+            cofib: cofib_from_kernel(cofib),
+            ty: Box::new(from_kernel(ty)?),
+            equiv: Box::new(from_kernel(equiv)?),
+        },
+        Term::GlueTerm {
+            cofib,
+            partial,
+            base,
+        } => RTerm::GlueTerm {
+            cofib: cofib_from_kernel(cofib),
+            partial: Box::new(from_kernel(partial)?),
+            base: Box::new(from_kernel(base)?),
+        },
+        Term::Unglue(g) => RTerm::Unglue(Box::new(from_kernel(g)?)),
+
         // ---- partiality: now MODELED (Checked), not declined ----
         Term::Delay(a) => RTerm::Delay(Box::new(from_kernel(a)?)),
         Term::Now(a) => RTerm::Now(Box::new(from_kernel(a)?)),
@@ -449,9 +491,6 @@ pub fn from_kernel(t: &Term) -> Result<RTerm, RecheckError> {
             return Err(RecheckError::Declined(
                 "higher inductive type path constructor".into(),
             ))
-        }
-        Term::Glue { .. } | Term::GlueTerm { .. } | Term::Unglue(..) => {
-            return Err(RecheckError::Declined("Glue type".into()))
         }
         // A `foreign` postulate is trusted, kernel-only code (spec §7.6): the independent re-checker
         // cannot re-verify an opaque external symbol, so any judgement mentioning one is *declined*

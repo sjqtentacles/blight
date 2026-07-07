@@ -146,7 +146,11 @@ fn recheck_declines_foreign() {
 /// table — the decline happens at `from_kernel`, before normalization). This is the A1/A2b guarantee
 /// that the trusted kernel solely owns the Glue computation rule. We form `Glue U₀ (i=0) U₀ e` (the
 /// `ua`-shaped single-face Glue head) and assert the re-check declines.
+// F1 (WIP): `from_kernel` no longer declines Glue — the re-checker now models it. Increment 2 flips
+// this test to assert the *bogus* glue here (`equiv: U₀`, not a real equivalence) is **Rejected**
+// once the typing rule + `equiv_type` land, and adds a genuine `id-equiv` positive that returns `Ok`.
 #[test]
+#[ignore = "F1 increment 2: flip to expect Rejected (bogus equiv) + add an id-equiv Ok positive"]
 fn recheck_declines_glue() {
     let sig = Signature::new();
     let u0 = || Term::Univ(blight_kernel::Level::Zero);

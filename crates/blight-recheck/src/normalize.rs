@@ -80,6 +80,13 @@ fn uses_binder(t: &RTerm, depth: usize) -> bool {
         RTerm::Comp {
             family, tube, base, ..
         } => uses_binder(family, depth) || uses_binder(tube, depth) || uses_binder(base, depth),
+        RTerm::Glue {
+            base, ty, equiv, ..
+        } => uses_binder(base, depth) || uses_binder(ty, depth) || uses_binder(equiv, depth),
+        RTerm::GlueTerm { partial, base, .. } => {
+            uses_binder(partial, depth) || uses_binder(base, depth)
+        }
+        RTerm::Unglue(g) => uses_binder(g, depth),
         RTerm::Delay(a) | RTerm::Now(a) | RTerm::Later(a) | RTerm::Force(a) | RTerm::EffTy(a) => {
             uses_binder(a, depth)
         }
@@ -217,6 +224,14 @@ pub fn eval(sig: &Signature, env: &Env, t: &RTerm) -> RValue {
             tube,
             base,
         } => crate::kan::eval_comp(sig, env, family, cofib, tube, base),
+
+        // F1 increment 2 (typing/reduction): eval `Glue A φ T e` to an `RValue::Glue` (add that
+        // variant to value.rs), `glue`/`unglue` to their intro/elim values, and the ua transport
+        // (`transp_glue`) into `crate::kan` — independently re-derived from `kernel/kan.rs:111-183`.
+        // Increment 1 lands the term grammar + translation + structural traversals + typing skeleton.
+        RTerm::Glue { .. } | RTerm::GlueTerm { .. } | RTerm::Unglue(_) => {
+            todo!("F1: eval for Glue/GlueTerm/Unglue (increment 2)")
+        }
 
         RTerm::Delay(a) => RValue::Delay(Rc::new(eval(sig, env, a))),
         RTerm::Now(a) => RValue::Now(Rc::new(eval(sig, env, a))),
