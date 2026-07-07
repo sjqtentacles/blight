@@ -67,16 +67,17 @@ pub fn transp(sig: &Signature, family: &DimClosure, cofib: &RCofib, base: &RValu
         RValue::Pi(..) => transp_pi(sig, family, base),
         RValue::Sigma(..) => transp_sigma(sig, family, base),
         RValue::PathP { .. } => transp_path(sig, family, base),
-        // No `Glue` arm by design: the re-checker *declines* any judgement mentioning `Glue` during
-        // `from_kernel` (see `term.rs`), so a Glue line can never reach here — the trusted kernel
-        // owns the univalence Kan-Glue reduction, and the independent checker deliberately does not
-        // duplicate it. The residual heads (non-constant indexed-`Data`/`Int`/`Eff` lines) are
-        // unreachable from the corpus (all constant ⟹ caught by `family_is_constant` above); we
-        // *fail safe* (panic) rather than risk a silent mis-reduction, mirroring `blight_kernel`.
+        // No `transp`-over-`Glue` arm **yet**: F1 increment 2 models Glue *typing* + boundary
+        // reductions, so a `Glue` line can now reach here (F1 stopped declining Glue at `from_kernel`),
+        // but the ua-transport `transp_glue` (independently re-derived from `kernel/kan.rs:111-183`) is
+        // F1 increment 3. Until then a Glue-varying line **fails safe** here — parity with the kernel's
+        // frontier, never a silent acceptance. The residual heads (non-constant indexed-`Data`/`Int`/
+        // `Eff` lines) are unreachable from the corpus (all constant ⟹ caught by `family_is_constant`).
         _ => unimplemented!(
-            "recheck transp: unsupported heterogeneous former (Pi/Sigma/PathP/Data/Univ implemented; \
-             Glue is declined upstream; a non-constant indexed/Int/Eff line is unreachable from the \
-             corpus and fail-safe, never an acceptance)"
+            "recheck transp: Glue transport is F1 increment 3 (typing + boundary reductions land in \
+             increment 2); the other heterogeneous formers (Pi/Sigma/PathP/Data/Univ) are implemented \
+             and a non-constant indexed/Int/Eff line is unreachable from the corpus — fail-safe, never \
+             an acceptance)"
         ),
     }
 }
@@ -168,7 +169,8 @@ fn transp_sigma(sig: &Signature, family: &DimClosure, pair: &RValue) -> RValue {
     // first-component line the fill is constant `= a0`, recovering `i. B i a0`; with a genuinely
     // varying one, instantiating `B` at the source `a0` (the previous behavior) diverged from the
     // kernel. (Reachability: a varying first-component *type* line requires a path between distinct
-    // types, i.e. a `ua`/`Glue`, which the re-checker *declines* — so this branch is defensive.)
+    // types, i.e. a `ua`/`Glue` line; transporting along one is not yet independently re-derived in
+    // recheck — F1 increment 3, fail-safe — so in the current fragment this branch stays defensive.)
     let snd_line = if family_is_constant(sig, &fst_line) {
         let a0c = a0.clone();
         line_closure(sig, family, move |a| match a {
@@ -277,11 +279,11 @@ pub fn hcomp(
         }
         // Mirrors `blight_kernel::kan::hcomp`: Π/Σ/PathP compose structurally above; a varying face
         // in a closed inductive/universe/Glue needs the system machinery the value domain does not
-        // represent and is unreachable from the corpus (Glue is declined upstream). Fail-safe panic,
-        // never a silent acceptance.
+        // represent. `hcomp` over a `Glue` line is part of the same univalence Kan frontier as
+        // `transp_glue` (F1 increment 3); until then it **fails safe** here, never a silent acceptance.
         _ => unimplemented!(
-            "recheck hcomp: varying face in a closed inductive/universe/Glue (unreachable from the \
-             corpus; fail-safe, never an acceptance)"
+            "recheck hcomp: varying face in a closed inductive/universe/Glue (Glue hcomp is F1 \
+             increment 3; fail-safe, never an acceptance)"
         ),
     }
 }
@@ -424,8 +426,9 @@ pub fn eval_comp(
 // quoting `lvl`*. Applying it via `PApp` at the line's own bound dimension (`dim_dep`) then gives a
 // value that is *genuinely* non-constant across `i` — `PApp(Var(MAX), I0)` vs `PApp(Var(MAX), I1)`
 // are different neutrals by `conv`'s structural-quote comparison — without needing any indexed
-// `Data`/`Glue` type variance (which this crate's value domain cannot represent; `Glue` is declined
-// upstream). This is what lets these tests force the real Π/Σ/PathP structural dispatch rather than
+// `Data`-index or `Glue` type variance (which the Kan engine does not yet *reduce*: indexed-`Data`
+// and Glue transport are both out-of-fragment, F1 increment 3). This is what lets these tests force
+// the real Π/Σ/PathP structural dispatch rather than
 // only ever hitting `family_is_constant`'s early-return fast path.
 // =================================================================================================
 #[cfg(test)]
@@ -691,8 +694,9 @@ mod tests {
     /// second-component line at the *fill* of the first component, mirroring the kernel) is the
     /// identity on a constant type line — `base` at both endpoints. This is the only reachable
     /// input: a genuinely *varying* first-component type line needs a path between distinct types
-    /// (a `ua`/`Glue`), which the re-checker declines, so the divergent branch is unreachable and
-    /// the fix is defensive parity with the mechanized kernel.
+    /// (a `ua`/`Glue` line); transporting along one is not yet re-derived in recheck (F1 increment 3,
+    /// fail-safe), so the divergent branch is unreachable in the current fragment and the fix is
+    /// defensive parity with the mechanized kernel.
     #[test]
     fn transp_fill_line_is_identity_on_a_constant_family() {
         let s = sig();
@@ -850,7 +854,7 @@ mod tests {
     /// non-empty) is out of the implemented fragment (§1.3 obligation 2, Track M3) and must fail
     /// safe rather than silently fall through to the paramless-`Data` identity rule.
     #[test]
-    #[should_panic(expected = "unsupported heterogeneous former")]
+    #[should_panic(expected = "fail-safe, never an acceptance")]
     fn transp_indexed_data_line_fails_safe() {
         let s = sig();
         // i. Vec (Var(FREE) @ i) — a "Data" line whose one param genuinely varies with i.
