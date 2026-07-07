@@ -483,6 +483,14 @@ impl<'a> Recheck<'a> {
                 Ok((ty_at_1, b_row, b_usage))
             }
 
+            // Univalence (spec §2.6), modeled independently (F1). Increment 2 fills the typing rule
+            // mirroring kernel `check.rs:971-1017`: `Glue A φ T e : Univ ℓ` when `A`,`T : Univ ℓ` and
+            // `e : Equiv T A` at grade 0 (with `equiv_type` re-derived in RTerm via `shift_free`),
+            // plus `glue` intro / `unglue` elim, the `RValue::Glue` variant, and the Kan-Glue transport.
+            RTerm::Glue { .. } | RTerm::GlueTerm { .. } | RTerm::Unglue(_) => {
+                todo!("F1: infer for Glue/GlueTerm/Unglue (increment 2)")
+            }
+
             // Partiality (spec §4.5), modeled independently. `Delay A : Univ ℓ` is a pure type
             // former. `now a` is *total* (the row of `a`). `later`/`force` **may diverge**, so each
             // contributes the built-in `Partial` label at the ambient demand — exactly the nonzero
@@ -1983,6 +1991,9 @@ fn translate_go(t: &RTerm, depth_in: usize, m: usize, repls: &[RTerm]) -> RTerm 
         | RTerm::Transp { .. }
         | RTerm::HComp { .. }
         | RTerm::Comp { .. }
+        | RTerm::Glue { .. }
+        | RTerm::GlueTerm { .. }
+        | RTerm::Unglue(_)
         | RTerm::Delay(_)
         | RTerm::Now(_)
         | RTerm::Later(_)
@@ -2117,6 +2128,27 @@ fn shift_free_cut(t: &RTerm, d: usize, cut: usize) -> RTerm {
             cofib: cofib.clone(),
             base: Box::new(shift_free_cut(base, d, cut)),
         },
+        RTerm::Glue {
+            base,
+            cofib,
+            ty,
+            equiv,
+        } => RTerm::Glue {
+            base: Box::new(shift_free_cut(base, d, cut)),
+            cofib: cofib.clone(),
+            ty: Box::new(shift_free_cut(ty, d, cut)),
+            equiv: Box::new(shift_free_cut(equiv, d, cut)),
+        },
+        RTerm::GlueTerm {
+            cofib,
+            partial,
+            base,
+        } => RTerm::GlueTerm {
+            cofib: cofib.clone(),
+            partial: Box::new(shift_free_cut(partial, d, cut)),
+            base: Box::new(shift_free_cut(base, d, cut)),
+        },
+        RTerm::Unglue(g) => RTerm::Unglue(Box::new(shift_free_cut(g, d, cut))),
         RTerm::HComp {
             ty,
             cofib,
