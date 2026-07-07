@@ -118,6 +118,33 @@ pub fn conv(sig: &Signature, lvl: usize, dlvl: usize, a: &RValue, b: &RValue) ->
         (RValue::Force(a), RValue::Force(b)) => conv(sig, lvl, dlvl, a, b),
         (RValue::IntTy, RValue::IntTy) => true,
         (RValue::IntLit(a), RValue::IntLit(b)) => a == b,
+        // Glue (spec §2.6): structural. `eval` has already applied the ⊤/⊥ boundary reductions and
+        // stored a *resolved* cofib, so a `Glue` value here is always a proper face — compare the
+        // folded cofib syntactically and the three type components up to conversion. (Plan F1 step 3
+        // specifies this structural arm. The trusted kernel's `conv_at` has no `Value::Glue` case, so
+        // two Glue values fall through to `false` there; this arm is thus strictly *more* complete
+        // than the kernel. It is unreachable on kernel-accepted terms in the current fragment — Glue
+        // values are boundary-collapsed or eliminated before conv — hence no differential divergence;
+        // it is the behaviour F1 increment 3's Glue transport will actually exercise.)
+        (
+            RValue::Glue {
+                base: b1,
+                cofib: c1,
+                ty: t1,
+                equiv: e1,
+            },
+            RValue::Glue {
+                base: b2,
+                cofib: c2,
+                ty: t2,
+                equiv: e2,
+            },
+        ) => {
+            c1 == c2
+                && conv(sig, lvl, dlvl, b1, b2)
+                && conv(sig, lvl, dlvl, t1, t2)
+                && conv(sig, lvl, dlvl, e1, e2)
+        }
         _ => false,
     }
 }

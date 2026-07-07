@@ -24,14 +24,22 @@
 //! (`PathP`/`PLam`/`PApp` with the De Morgan interval and β/η). Everything the prelude + M0–M5
 //! acceptance corpus need lives here.
 //!
-//! Declined (never silently accepted): the cubical `Glue` operations (`Glue`/`GlueTerm`/`Unglue`)
-//! and cubical partial elements/systems (`Partial`/`System`). The re-checker's own normalizer does
-//! not model these layers, so reaching one yields [`RecheckError::Declined`] — an *honest refusal*
-//! to re-verify, never a pass. In particular `std/path.bl`'s `ua : Equiv A B -> Path (Type 0) A B`
-//! builds a `Glue` type, so re-checking `ua` (and anything that transports along it) is *declined*,
-//! not rejected — the univalence layer is trusted to the seed kernel, whose `transp`-over-`Glue`
-//! computation rule is exercised by a kernel white-box test and the closed `examples/ua_compute.bl`
-//! (the independent re-checker deliberately does not duplicate the Glue Kan engine).
+//! The univalence **`Glue`** layer (`Glue`/`GlueTerm`/`Unglue`) is now *modeled* (F1): the re-checker
+//! independently re-derives Glue **formation** — its own contractible-fibres `equiv_type`, checking
+//! the `equiv` slot against `Equiv T A` at grade 0 (the kernel-audit K3 soundness point — an
+//! arbitrary term there is *Rejected*, not laundered) — and the CCHM **boundary reductions**
+//! (`Glue A ⊤ T e ≡ T`, `Glue A ⊥ T e ≡ A`). So `std/path.bl`'s `ua : Equiv A B -> Path (Type 0) A B`,
+//! a single-face `Glue` line, is now **Checked** by both checkers, not declined. What remains at the
+//! univalence frontier is *transporting along* a Glue line (`transp`/`hcomp` over `Glue` — the
+//! `ua`-computation rule): that reduction is still owned solely by the seed kernel's `transp_glue`
+//! (exercised by a kernel white-box test and the closed `examples/ua_compute.bl`); until the
+//! independent re-derivation lands (F1 increment 3) the re-checker **fails safe** on a Glue-varying
+//! Kan line — a parity panic at the frontier, never a silent acceptance.
+//!
+//! Declined (never silently accepted): cubical partial elements/systems (`Partial`/`System`), a
+//! higher-inductive path constructor (`PCon`), and the `foreign` FFI hatch. The re-checker's own
+//! normalizer does not model these, so reaching one yields [`RecheckError::Declined`] — an *honest
+//! refusal* to re-verify, never a pass.
 //!
 //! The intensional **partiality** layer (`Delay`/`now`/`later`/`force`) *is* modeled (a second,
 //! independent NbE over `Delay`/`Now`/`Later`/`Force` values with `force (now a) ⇝ a` and guarded
@@ -71,9 +79,10 @@ use blight_kernel::{Judgement, Proof, Signature};
 /// Why a re-check did not succeed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecheckError {
-    /// The judgement is outside the supported core fragment (cubical `Glue`/partial-element/system,
-    /// or a `foreign` postulate was reached). Effects/handlers, `Int`, partiality-via-`Delay`, and
-    /// symbolic universe levels (T2.3 — including prenex level variables, re-verified under the
+    /// The judgement is outside the supported core fragment (a cubical partial-element/system, a
+    /// higher-inductive path constructor, or a `foreign` postulate was reached). The univalence
+    /// `Glue` layer (formation + boundary reductions), effects/handlers, `Int`, partiality-via-`Delay`,
+    /// and symbolic universe levels (T2.3 — including prenex level variables, re-verified under the
     /// leveled door's told `n_levels`) are modeled and checked, not declined. This is an honest
     /// refusal, **not** a rejection of the proof.
     Declined(String),

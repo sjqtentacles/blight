@@ -42,7 +42,8 @@ fn dead_ih_disabled() -> bool {
 /// enumeration, independent of the kernel's): `Lam`/`Pi`-codomain/`Sigma`-second bind one,
 /// `Handle`'s return clause binds one and each op clause two; dimension binders (`PLam`,
 /// `family`/`tube` lines) live in a separate index space. Over-approximating "used" is safe
-/// (costs an unnecessary IH); RTerm has no `System`/`Partial`/`Glue` (declined at translation).
+/// (costs an unnecessary IH). `System`/`Partial` are declined at translation; `Glue`/`GlueTerm`/
+/// `Unglue` are present in `RTerm` and traversed here (one term-index space, dimensions separate).
 fn uses_binder(t: &RTerm, depth: usize) -> bool {
     match t {
         RTerm::Var(i) => *i == depth,
@@ -225,12 +226,58 @@ pub fn eval(sig: &Signature, env: &Env, t: &RTerm) -> RValue {
             base,
         } => crate::kan::eval_comp(sig, env, family, cofib, tube, base),
 
-        // F1 increment 2 (typing/reduction): eval `Glue A φ T e` to an `RValue::Glue` (add that
-        // variant to value.rs), `glue`/`unglue` to their intro/elim values, and the ua transport
-        // (`transp_glue`) into `crate::kan` — independently re-derived from `kernel/kan.rs:111-183`.
-        // Increment 1 lands the term grammar + translation + structural traversals + typing skeleton.
-        RTerm::Glue { .. } | RTerm::GlueTerm { .. } | RTerm::Unglue(_) => {
-            todo!("F1: eval for Glue/GlueTerm/Unglue (increment 2)")
+        // Univalence (spec §2.6), modeled independently (F1). CCHM boundary reductions: on a total
+        // face the Glue *is* its glued type `T` (`ty`), on an empty face it *is* its base `A`
+        // (`base`) — this is what makes `(ua e) @ i0 ≡ A` / `@ i1 ≡ B` hold definitionally. Only a
+        // *proper* face survives as an `RValue::Glue`. Mirrors kernel `normalize.rs:426-450`.
+        RTerm::Glue {
+            base,
+            cofib,
+            ty,
+            equiv,
+        } => {
+            let cofib = crate::kan::resolve_cofib(env, cofib);
+            if crate::kan::is_total(&cofib) {
+                eval(sig, env, ty)
+            } else if crate::kan::is_empty_face(&cofib) {
+                eval(sig, env, base)
+            } else {
+                RValue::Glue {
+                    base: Rc::new(eval(sig, env, base)),
+                    cofib,
+                    ty: Rc::new(eval(sig, env, ty)),
+                    equiv: Rc::new(eval(sig, env, equiv)),
+                }
+            }
+        }
+        // `unglue`: project the base off a `Glue` value; the identity on the total/empty boundary
+        // (where the glued value is already an `A`/`T`-value, not a `Glue`) and on a stuck neutral —
+        // mirroring kernel `kan::unglue` exactly (recheck models no effect-neutrals to bubble).
+        RTerm::Unglue(g) => match eval(sig, env, g) {
+            RValue::Glue { base, .. } => crate::value::unshare_rvalue(base),
+            other => other,
+        },
+        // `glue` introduction: on a boundary it collapses to `partial` (⊤) / `base` (⊥); off a proper
+        // face it has no first-class value node (its only eliminator is `unglue`, which reduces via
+        // the boundary above), exactly as the kernel gives a bare `GlueTerm` no eval arm
+        // (`normalize.rs:533`). A proper-face `glue` value is only produced under Glue transport —
+        // F1 increment 3; unreachable from any Glue-free-transport judgement re-checked here.
+        RTerm::GlueTerm {
+            cofib,
+            partial,
+            base,
+        } => {
+            let cofib = crate::kan::resolve_cofib(env, cofib);
+            if crate::kan::is_total(&cofib) {
+                eval(sig, env, partial)
+            } else if crate::kan::is_empty_face(&cofib) {
+                eval(sig, env, base)
+            } else {
+                unimplemented!(
+                    "recheck eval: off-boundary `glue` introduction value (produced only under \
+                     Glue transport — F1 increment 3; fail-safe, never an acceptance)"
+                )
+            }
         }
 
         RTerm::Delay(a) => RValue::Delay(Rc::new(eval(sig, env, a))),
@@ -566,6 +613,17 @@ pub fn quote(sig: &Signature, lvl: usize, dlvl: usize, v: &RValue) -> RTerm {
             RTerm::Lam(Box::new(quote(sig, lvl + 1, dlvl, &body)))
         }
         RValue::Interval(r) => RTerm::Interval(nf_interval(r)),
+        RValue::Glue {
+            base,
+            cofib,
+            ty,
+            equiv,
+        } => RTerm::Glue {
+            base: Box::new(quote(sig, lvl, dlvl, base)),
+            cofib: cofib.clone(),
+            ty: Box::new(quote(sig, lvl, dlvl, ty)),
+            equiv: Box::new(quote(sig, lvl, dlvl, equiv)),
+        },
         RValue::Delay(a) => RTerm::Delay(Box::new(quote(sig, lvl, dlvl, a))),
         RValue::Now(a) => RTerm::Now(Box::new(quote(sig, lvl, dlvl, a))),
         RValue::Later(d) => RTerm::Later(Box::new(quote(sig, lvl, dlvl, d))),
@@ -774,6 +832,53 @@ mod rp1_tests {
         // In-scope quoting is unaffected: k < dlvl still gives dlvl - k - 1.
         assert_eq!(quote_interval(2, &RInterval::Dim(0)), RInterval::Dim(1));
         assert_eq!(quote_interval(2, &RInterval::Dim(1)), RInterval::Dim(0));
+    }
+}
+
+#[cfg(test)]
+mod glue_eval_tests {
+    use super::*;
+    use crate::term::{RCofib, RInterval};
+
+    /// F1 (spec §2.6): the CCHM `Glue` boundary reductions in `eval` — `Glue A ⊤ T e ≡ T` and
+    /// `Glue A ⊥ T e ≡ A`. `eval` applies these before any `RValue::Glue` is formed and never
+    /// consults the `equiv` slot (an eval-irrelevant dummy here); a proper (non-constant) face
+    /// instead survives as a distinct `RValue::Glue`. This is the plan's isolated step-3
+    /// `Glue A ⊤ T e ≡ T` conversion test, complementing the end-to-end `ua` positive in
+    /// `tests/recheck.rs`.
+    #[test]
+    fn glue_boundary_reductions_in_eval() {
+        let sig = Signature::new();
+        let env = Env::new();
+        let a = || Box::new(RTerm::Univ(crate::term::rlevel_of_nat(0))); // A = Type 0
+        let t = || Box::new(RTerm::IntTy); // T = Int, distinct from A
+        let eq = || Box::new(RTerm::Univ(crate::term::rlevel_of_nat(5))); // equiv slot: eval-irrelevant
+        let glue = |cofib| RTerm::Glue {
+            base: a(),
+            cofib,
+            ty: t(),
+            equiv: eq(),
+        };
+        let cv = |x: &RValue, y: &RValue| crate::conv::conv(&sig, 0, 0, x, y);
+
+        // ⊤ collapses to the glued type T; ⊥ collapses to the base A; the two are NOT interchanged.
+        assert!(cv(
+            &eval(&sig, &env, &glue(RCofib::Top)),
+            &eval(&sig, &env, &t())
+        ));
+        assert!(cv(
+            &eval(&sig, &env, &glue(RCofib::Bot)),
+            &eval(&sig, &env, &a())
+        ));
+        assert!(!cv(
+            &eval(&sig, &env, &glue(RCofib::Top)),
+            &eval(&sig, &env, &a())
+        ));
+
+        // A proper (non-constant) face survives as a distinct `Glue` value, collapsed to neither.
+        let env_i = env.extend_dim(RInterval::Dim(0));
+        let proper = eval(&sig, &env_i, &glue(RCofib::Eq0(RInterval::Dim(0))));
+        assert!(matches!(proper, RValue::Glue { .. }));
     }
 }
 

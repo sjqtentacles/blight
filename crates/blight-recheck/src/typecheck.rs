@@ -483,12 +483,51 @@ impl<'a> Recheck<'a> {
                 Ok((ty_at_1, b_row, b_usage))
             }
 
-            // Univalence (spec §2.6), modeled independently (F1). Increment 2 fills the typing rule
-            // mirroring kernel `check.rs:971-1017`: `Glue A φ T e : Univ ℓ` when `A`,`T : Univ ℓ` and
-            // `e : Equiv T A` at grade 0 (with `equiv_type` re-derived in RTerm via `shift_free`),
-            // plus `glue` intro / `unglue` elim, the `RValue::Glue` variant, and the Kan-Glue transport.
-            RTerm::Glue { .. } | RTerm::GlueTerm { .. } | RTerm::Unglue(_) => {
-                todo!("F1: infer for Glue/GlueTerm/Unglue (increment 2)")
+            // Univalence (spec §2.6), modeled independently (F1). Mirrors kernel `check.rs:966-1017`.
+            // `Glue A φ T e : Univ ℓ` when `A`,`T : Univ ℓ` and `e : Equiv T A` **checked at grade 0**
+            // (the K3 soundness point — an arbitrary term in the equiv slot is *Rejected*, not merely
+            // inferred-and-discarded). `equiv_type` is re-derived above in `RTerm`. There is no
+            // `check_cofib` in the re-checker (its `Transp`/`HComp`/`Comp` arms likewise ignore the
+            // cofib scope: recheck only ever re-checks kernel-accepted, already-well-scoped cofibs).
+            RTerm::Glue {
+                base, ty, equiv, ..
+            } => {
+                let l = self.infer_universe(ctx, base)?;
+                self.infer_universe(ctx, ty)?;
+                let equiv_ty = eval(self.sig, &ctx.env, &equiv_type(ty, base));
+                self.check(ctx, equiv, &equiv_ty, RGrade::Zero)?;
+                Ok((RValue::Univ(l), RRow::empty(), Usage::zero(n)))
+            }
+            // `glue` introduction: `partial` and `base` carry σ; assemble the `Glue` type value. The
+            // field reuse mirrors the kernel exactly — the intro's `partial`/`base` populate the
+            // type's `ty`/`equiv` slots (differential agreement, not semantic naming).
+            RTerm::GlueTerm {
+                cofib,
+                partial,
+                base,
+            } => {
+                let (_partial_ty, row_p, usage_p) = self.infer(ctx, partial, sigma)?;
+                let (base_ty, row_b, usage_b) = self.infer(ctx, base, sigma)?;
+                Ok((
+                    RValue::Glue {
+                        base: Rc::new(base_ty),
+                        cofib: crate::kan::resolve_cofib(&ctx.env, cofib),
+                        ty: Rc::new(eval(self.sig, &ctx.env, partial)),
+                        equiv: Rc::new(eval(self.sig, &ctx.env, base)),
+                    },
+                    row_p.union(&row_b),
+                    usage_p.add(&usage_b),
+                ))
+            }
+            // `unglue` elimination: the scrutinee must infer to a `Glue` type; the result is its base.
+            RTerm::Unglue(g) => {
+                let (g_ty, row, usage) = self.infer(ctx, g, sigma)?;
+                match g_ty {
+                    RValue::Glue { base, .. } => {
+                        Ok((crate::value::unshare_rvalue(base), row, usage))
+                    }
+                    other => Err(reject(format!("unglue of a non-Glue type: {other:?}"))),
+                }
             }
 
             // Partiality (spec §4.5), modeled independently. `Delay A : Univ ℓ` is a pure type
@@ -2050,6 +2089,74 @@ fn translate_go(t: &RTerm, depth_in: usize, m: usize, repls: &[RTerm]) -> RTerm 
             else_: Box::new(translate_go(else_, depth_in, m, repls)),
         },
     }
+}
+
+/// The CCHM equivalence type `Equiv A B`, fully unfolded to core formers, re-derived here in the
+/// re-checker's **own** `RTerm` vocabulary (spec §2.6, Voevodsky's contractible-fibres definition):
+///
+/// ```text
+///   Σ (f : A → B).                                 -- the underlying map
+///     Π (y : B).                                   -- is-equiv A B f
+///       Σ (c : fib). Π (z : fib). Path fib c z     --   is-contr (fiber A B f y)
+///   where  fib = Σ (x : A). Path B (f x) y         --   fiber A B f y
+/// ```
+///
+/// Deliberately re-derived **independently** of the kernel's `equiv_type` (`check.rs`): the `Glue`
+/// formation rule checks its `equiv` slot against this at grade 0, and the differential harness fails
+/// loudly on any divergence — copying the kernel would forfeit the two-checker independence that is
+/// F1's whole point. `Path B l r` is a *constant* `RTerm::PathP` (its family binds a dimension — a
+/// separate index space — so it shares Γ's term indices and takes no term-shift). Every `Π` is at ω.
+fn equiv_type(a: &RTerm, b: &RTerm) -> RTerm {
+    // `Path B l r` — a constant `PathP`; the family takes no term-shift (it binds a dimension).
+    fn path(family: RTerm, lhs: RTerm, rhs: RTerm) -> RTerm {
+        RTerm::PathP {
+            family: Box::new(family),
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        }
+    }
+    // `fiber = Σ (x : A). Path B (f x) y`; the `x` binder (index 0) shifts `b`/`f`/`y` up by one.
+    fn fiber(a_s: &RTerm, b_s: &RTerm, f_s: &RTerm, y_s: &RTerm) -> RTerm {
+        RTerm::Sigma(
+            Box::new(a_s.clone()),
+            Box::new(path(
+                shift_free(b_s, 1),
+                RTerm::App(Box::new(shift_free(f_s, 1)), Box::new(RTerm::Var(0))),
+                shift_free(y_s, 1),
+            )),
+        )
+    }
+    // `is-contr T = Σ (c : T). Π^ω (z : T). Path T c z`  (c = Var 1, z = Var 0 under the two binders).
+    fn is_contr(t_s: &RTerm) -> RTerm {
+        RTerm::Sigma(
+            Box::new(t_s.clone()),
+            Box::new(RTerm::Pi(
+                RGrade::Omega,
+                Box::new(shift_free(t_s, 1)),
+                Box::new(path(shift_free(t_s, 2), RTerm::Var(1), RTerm::Var(0))),
+            )),
+        )
+    }
+    // `is-equiv A B f = Π^ω (y : B). is-contr (fiber A B f y)`, in scope `[f, Γ]` (f = Var 0).
+    let is_equiv_body = {
+        let a2 = shift_free(a, 2); // under [y, f]
+        let b2 = shift_free(b, 2);
+        let fib = fiber(&a2, &b2, &RTerm::Var(1), &RTerm::Var(0)); // f = Var 1, y = Var 0
+        RTerm::Pi(
+            RGrade::Omega,
+            Box::new(shift_free(b, 1)),
+            Box::new(is_contr(&fib)),
+        )
+    };
+    // `Equiv A B = Σ (f : A → B). is-equiv A B f`;  `A → B = Π^ω (_ : A). ↑B`.
+    RTerm::Sigma(
+        Box::new(RTerm::Pi(
+            RGrade::Omega,
+            Box::new(a.clone()),
+            Box::new(shift_free(b, 1)),
+        )),
+        Box::new(is_equiv_body),
+    )
 }
 
 /// Shift free de Bruijn indices `>= 0` upward by `d` (closed-term weakening helper for building

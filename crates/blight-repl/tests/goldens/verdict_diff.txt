@@ -805,7 +805,7 @@ GLOBAL std/path.bl id-equiv Ok
 GLOBAL std/path.bl is-contr Ok
 GLOBAL std/path.bl is-equiv Ok
 GLOBAL std/path.bl sym Ok
-GLOBAL std/path.bl ua Declined
+GLOBAL std/path.bl ua Ok
 FILE std/prelude.bl forms=104 declared=95 checked=9
 GLOBAL std/prelude.bl Nat-Ord Ok
 GLOBAL std/prelude.bl NatTree Ok
@@ -4829,9 +4829,9 @@ GLOBAL examples/ua_compute.bl is-equiv Ok
 GLOBAL examples/ua_compute.bl not Ok
 GLOBAL examples/ua_compute.bl or Ok
 GLOBAL examples/ua_compute.bl sym Ok
-GLOBAL examples/ua_compute.bl ua Declined
-GLOBAL examples/ua_compute.bl ua-bool Declined
-GLOBAL examples/ua_compute.bl ua-computes-bool Declined
+GLOBAL examples/ua_compute.bl ua Ok
+GLOBAL examples/ua_compute.bl ua-bool Ok
+GLOBAL examples/ua_compute.bl ua-computes-bool Ok
 FILE examples/ua_compute_reverse.bl forms=17 declared=17 checked=0
 GLOBAL examples/ua_compute_reverse.bl Equiv Ok
 GLOBAL examples/ua_compute_reverse.bl and Ok
@@ -4845,10 +4845,10 @@ GLOBAL examples/ua_compute_reverse.bl is-equiv Ok
 GLOBAL examples/ua_compute_reverse.bl not Ok
 GLOBAL examples/ua_compute_reverse.bl or Ok
 GLOBAL examples/ua_compute_reverse.bl sym Ok
-GLOBAL examples/ua_compute_reverse.bl ua Declined
-GLOBAL examples/ua_compute_reverse.bl ua-bool Declined
-GLOBAL examples/ua_compute_reverse.bl ua-bool-rev Declined
-GLOBAL examples/ua_compute_reverse.bl ua-computes-bool-reverse Declined
+GLOBAL examples/ua_compute_reverse.bl ua Ok
+GLOBAL examples/ua_compute_reverse.bl ua-bool Ok
+GLOBAL examples/ua_compute_reverse.bl ua-bool-rev Ok
+GLOBAL examples/ua_compute_reverse.bl ua-computes-bool-reverse Ok
 FILE examples/vec_head.bl forms=39 declared=33 checked=6
 GLOBAL examples/vec_head.bl and Ok
 GLOBAL examples/vec_head.bl even Ok

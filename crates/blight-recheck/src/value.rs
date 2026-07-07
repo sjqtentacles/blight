@@ -38,6 +38,16 @@ pub enum RValue {
     /// An interval value (only in dimension argument position).
     Interval(RInterval),
 
+    // ---- univalence (spec §2.6): the cubical Glue type value, modeled independently (F1). Only
+    // ever built for a *proper* face — on a total/empty face `eval` collapses it to `ty`/`base`
+    // (the CCHM boundary reductions) before a `Glue` value is formed, mirroring the kernel. ----
+    Glue {
+        base: Rc<RValue>,
+        cofib: crate::term::RCofib,
+        ty: Rc<RValue>,
+        equiv: Rc<RValue>,
+    },
+
     // ---- partiality (spec §4.5): the intensional Capretta delay (modeled independently) ----
     /// `Delay A` as a type value.
     Delay(Rc<RValue>),

@@ -140,24 +140,21 @@ fn recheck_declines_foreign() {
     }
 }
 
-/// The univalence layer (`Glue`) is the one cubical Kan hatch the independent re-checker does **not**
-/// duplicate: `std/path.bl`'s `ua` builds a `Glue` type, and re-checking anything mentioning `Glue`
-/// must be honestly **declined** (never silently accepted, never crashed in the re-checker's Kan
-/// table — the decline happens at `from_kernel`, before normalization). This is the A1/A2b guarantee
-/// that the trusted kernel solely owns the Glue computation rule. We form `Glue U₀ (i=0) U₀ e` (the
-/// `ua`-shaped single-face Glue head) and assert the re-check declines.
-// F1 (WIP): `from_kernel` no longer declines Glue — the re-checker now models it. Increment 2 flips
-// this test to assert the *bogus* glue here (`equiv: U₀`, not a real equivalence) is **Rejected**
-// once the typing rule + `equiv_type` land, and adds a genuine `id-equiv` positive that returns `Ok`.
+/// F1 increment 2 — the **negative** (kernel audit K3). The univalence `Glue` layer is now *modeled*
+/// by the independent re-checker (it was declined at `from_kernel`). The soundness point: the `equiv`
+/// slot of a `Glue` must be a genuine `Equiv T A`, checked at **grade 0** — an arbitrary term there is
+/// **Rejected**, never silently accepted (an unchecked slot let `transp_glue` launder a value into the
+/// wrong type). Here `equiv := U₀` is not an equivalence (`U₀ : Univ 1`, not `Σ (f : U₀→U₀). …`), so
+/// forming `Glue U₀ (i=0) U₀ U₀` must be Rejected. The genuine positive is `recheck_models_ua_glue_line`.
 #[test]
-#[ignore = "F1 increment 2: flip to expect Rejected (bogus equiv) + add an id-equiv Ok positive"]
-fn recheck_declines_glue() {
+fn recheck_rejects_bogus_glue_equiv() {
     let sig = Signature::new();
     let u0 = || Term::Univ(blight_kernel::Level::Zero);
     let glue = Term::Glue {
         base: Rc::new(u0()),
         cofib: blight_kernel::Cofib::Eq0(blight_kernel::Interval::I0),
         ty: Rc::new(u0()),
+        // NOT an `Equiv U₀ U₀` — the K3 soundness violation the grade-0 equiv check must catch.
         equiv: Rc::new(u0()),
     };
     let j = Judgement::HasType {
@@ -167,13 +164,35 @@ fn recheck_declines_glue() {
         ))),
     };
     match recheck_judgement(&sig, &j) {
-        Err(RecheckError::Declined(msg)) => {
-            assert!(
-                msg.to_lowercase().contains("glue"),
-                "decline reason should mention Glue, got: {msg}"
-            );
-        }
-        other => panic!("expected the re-checker to DECLINE the Glue type, got {other:?}"),
+        Err(RecheckError::Rejected(_)) => {}
+        other => panic!("expected the re-checker to REJECT the bogus-equiv Glue, got {other:?}"),
+    }
+}
+
+/// F1 increment 2 — the genuine **positive**. `std/path.bl`'s `ua` is the univalence map, defined as
+/// the single-face Glue line `lam (A B e). plam (i). Glue B (i=0) A e`. The re-checker now *models* it
+/// (it was Declined). Re-checking `ua` exercises the Glue formation rule end-to-end: `equiv_type(A,B)`
+/// re-derived independently and the binder `e : Equiv A B` checked against it at grade 0 (they converge
+/// because the kernel's `equiv_type`, `std/equiv.bl`'s `Equiv`, and the re-checker's `equiv_type` are
+/// the *same* CCHM formula), plus the CCHM boundary reductions at the path endpoints
+/// (`Glue B ⊤ A e ≡ A` at i0, `Glue B ⊥ A e ≡ B` at i1). Forming `ua` never transports along the line,
+/// so this stays inside increment 2 (transport is increment 3).
+#[test]
+fn recheck_models_ua_glue_line() {
+    let (env, _proofs) = load("(load \"std/path.bl\")");
+    let sig = env.signature();
+    let globals = env.typed_globals();
+    let (_, term, ty) = globals
+        .iter()
+        .find(|(n, _, _)| n.as_str() == "ua")
+        .expect("std/path.bl should define `ua`");
+    let j = Judgement::HasType {
+        term: term.clone(),
+        ty: ty.clone(),
+    };
+    match recheck_judgement(sig, &j) {
+        Ok(()) => {}
+        other => panic!("expected the re-checker to MODEL (Ok) the `ua` Glue line, got {other:?}"),
     }
 }
 
