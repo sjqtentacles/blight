@@ -120,13 +120,13 @@ pub fn conv(sig: &Signature, lvl: usize, dlvl: usize, a: &RValue, b: &RValue) ->
         (RValue::IntLit(a), RValue::IntLit(b)) => a == b,
         // Glue (spec §2.6): structural. `eval` has already applied the ⊤/⊥ boundary reductions and
         // stored a *resolved* cofib, so a `Glue` value here is always a proper face — compare the
-        // folded cofib syntactically and the three type components up to conversion. (Plan F1 step 3
-        // specifies this structural arm. The trusted kernel's `conv_at` has no `Value::Glue` case, so
-        // two Glue values fall through to `false` there; this arm is thus strictly *more* complete
-        // than the kernel. It is now *exercised* by `kan::family_is_constant`, which conv-compares a
-        // Glue line at two fresh dims (always distinct cofibs ⟹ `false`, correctly non-constant); a
-        // genuine structural Glue≡Glue never arises on kernel-accepted terms, so no differential
-        // divergence.)
+        // folded cofib syntactically and the three type components up to conversion. The trusted
+        // kernel's `conv_at` carries the identical `Value::Glue` arm (added with the 2026-07-08
+        // ambient-face soundness fix — `docs/soundness-2026-07-08.md`), so the two checkers are at
+        // parity here. Exercised by `kan::family_is_constant`, which conv-compares a Glue line at two
+        // fresh dims: a genuine `ua` line's face *moves with* the transport dim → distinct folded
+        // cofibs → `false` (non-constant, dispatches to `transp_glue`); an *ambient*-dimension face is
+        // identical at both probes → `true` (constant line → identity transport).
         (
             RValue::Glue {
                 base: b1,

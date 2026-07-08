@@ -41,7 +41,10 @@ jobs:
       # Only mutants on lines touched by this PR (intersected with the kernel/recheck scope in
       # `.cargo/mutants.toml`). Exits non-zero if any such mutant survives — the gate.
       - name: Mutation-test changed trusted-base lines
-        run: cargo mutants --in-place -j 2 --in-diff pr.diff
+        # NOTE: `--in-place` and `-j/--jobs` are mutually exclusive in current cargo-mutants; keep
+        # `--in-place` (reuses the build cache) and run serially — the `--in-diff` gate only mutates
+        # the PR's changed lines, so the mutant count is small.
+        run: cargo mutants --in-place --in-diff pr.diff
       - name: Upload mutants report
         if: always()
         uses: actions/upload-artifact@v4
@@ -66,7 +69,9 @@ jobs:
       # than failing the build on a pre-existing gap. The PR `incremental` job is the actual gate.
       - name: Mutation-test the whole trusted base
         continue-on-error: true
-        run: cargo mutants --in-place -j 2 --no-shuffle
+        # `--in-place` and `-j/--jobs` are mutually exclusive in current cargo-mutants; keep
+        # `--in-place`. This full-base run is informational (`continue-on-error`), so serial is fine.
+        run: cargo mutants --in-place --no-shuffle
       - name: Upload mutants report
         if: always()
         uses: actions/upload-artifact@v4
