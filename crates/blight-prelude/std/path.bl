@@ -6,9 +6,9 @@
 ; single-face `Glue` type, which the independent re-checker now **models** (F1): it re-derives Glue
 ; *formation* (its own `equiv_type`, with the equiv slot checked at grade 0) plus the CCHM boundary
 ; reductions, so re-checking `ua` returns `Ok`. Transporting *along* a `ua`/`Glue` line — the
-; univalence *computation* rule `transp (ua e) a ≡ equiv-fun e a` — is still owned solely by the seed
-; kernel until F1 increment 3 re-derives `transp_glue`; it holds *definitionally* in the kernel (see
-; `crates/blight-kernel/src/kan.rs::transp_glue`), verified as a kernel white-box test and a closed
+; univalence *computation* rule `transp (ua e) a ≡ equiv-fun e a` — is now **independently re-derived**
+; by the re-checker too (`transp_glue`), so both checkers compute it; it holds *definitionally* in the
+; kernel (see `crates/blight-kernel/src/kan.rs::transp_glue`), verified as a kernel white-box test and a closed
 ; end-to-end example (`examples/ua_compute.bl`) rather than as a polymorphic in-Blight lemma (see the
 ; `ua` comment + docs/metatheory.md for why).
 

@@ -167,8 +167,8 @@ engineering treatment:
   documented unreachable-from-corpus and guarded by **fail-safe panics** — they never silently
   accept. The one `Glue` line `ua` actually reaches (`transp` over the single-face `i=0` line) is
   implemented and guarded. The re-checker now **models** `Glue`/`ua` *judgements* (F1): it re-derives
-  Glue formation + the CCHM boundary reductions (they were `Declined`), so `ua` re-checks `Ok`;
-  transporting *along* a `Glue` line is deferred to F1 increment 3 (fail-safe until then). See
+  Glue formation + the CCHM boundary reductions (they were `Declined`) *and* the `transp`-over-`Glue`
+  univalence computation (`transp_glue`), so `ua` and its transport re-check `Ok` in both checkers. See
   [docs/metatheory.md](metatheory.md) §1.5 for the full reachability table and fail-safe discipline.
 
 The critical scheduling note (see §6): the M0 acceptance proof `plus-zero` does **not** exercise

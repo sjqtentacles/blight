@@ -7,7 +7,7 @@
 //! NOTE (TDD): the M0 acceptance proof `plus-zero` does NOT exercise this table, so it is
 //! driven by its own conformance suite (ledger L5), never by the acceptance test.
 
-use crate::normalize::{conv, quote_value_at};
+use crate::normalize::{conv_dim, quote_value_at};
 use crate::term::{Cofib, Interval};
 use crate::value::{Closure, Env, Value};
 use std::rc::Rc;
@@ -34,13 +34,22 @@ pub fn is_empty_face(cofib: &Cofib) -> bool {
     }
 }
 
-/// Whether a dimension-binding line of types is *constant* — its value at `i = 0` is
-/// definitionally equal to its value at `i = 1`. Transport along a constant line is the identity
+/// Whether a dimension-binding line of types is *constant* — genuinely independent of its dimension
+/// `i`, not merely equal at the two endpoints. Transport along a constant line is the identity
 /// (spec §2.6, the constant-family rule).
 fn family_is_constant(family: &Closure) -> bool {
-    let a0 = family.apply_dim(Interval::I0);
-    let a1 = family.apply_dim(Interval::I1);
-    conv(0, &a0, &a1)
+    // Probe with TWO distinct fresh dimensions: a constant line yields the same value at both, a
+    // genuinely varying one yields values mentioning the two *distinct* rigid dims and so differs
+    // under `conv`. This replaces a former `conv(A@i0, A@i1)` endpoint check, which was UNSOUND for a
+    // line with equal endpoints but a varying interior: the univalence loop `i. Glue B (i=0) A e`
+    // with `A ≡ B` (e.g. `ua (e : Equiv Bool Bool)`) collapses to `B` at BOTH endpoints, so the old
+    // check called it constant and `transp` short-circuited to the identity — laundering
+    // `transp (ua e) a` to `a` instead of `equiv-fun e a`, proving model-false lemmas for any
+    // non-identity self-equivalence (e.g. Bool negation). With the interior probe the loop is seen as
+    // non-constant and dispatches to `transp_glue`, the genuine univalence map.
+    let a0 = family.apply_dim(Interval::Dim(0));
+    let a1 = family.apply_dim(Interval::Dim(1));
+    conv_dim(0, 2, &a0, &a1)
 }
 
 /// `Transp (i. A) φ a0` — transport `a0 : A[I0/i]` to `A[I1/i]` (spec §2.6). The family is the
@@ -520,6 +529,7 @@ mod tests {
     //! `plus-zero` acceptance proof (which never forces the Kan table). Goldens are checked
     //! against Cubical Agda's expected normal forms (spec §8.3).
     use super::*;
+    use crate::normalize::conv;
     use crate::value::{Closure, Env, Value};
 
     fn univ(n: u32) -> Value {
