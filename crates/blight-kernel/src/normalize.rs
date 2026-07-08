@@ -1435,6 +1435,33 @@ fn conv_at(lvl: usize, dlvl: usize, a: &Value, b: &Value) -> bool {
         // Primitive machine integers: the type is a singleton; literals compare by value.
         (Value::IntTy, Value::IntTy) => true,
         (Value::IntLit(a), Value::IntLit(b)) => a == b,
+        // Glue (spec §2.6): structural — folded cofib compared syntactically, the three type
+        // components up to conversion. Parity with the re-checker's `conv.rs` `Glue` arm. This is
+        // what lets `kan::family_is_constant` correctly classify a *constant* `Glue` line (e.g. one
+        // whose face sits on an *ambient* dimension, so both interior probes yield the same folded
+        // cofib): without it two equal `Glue` values fell through to `false`, the line was judged
+        // non-constant, and `transp` laundered it through `transp_glue` (the equivalence map) instead
+        // of the identity (soundness fix, 2026-07-08). A genuine `ua` line differs at the two probes
+        // (its face moves with the transport dim → distinct folded cofibs) and stays non-constant.
+        (
+            Value::Glue {
+                base: b1,
+                cofib: c1,
+                ty: t1,
+                equiv: e1,
+            },
+            Value::Glue {
+                base: b2,
+                cofib: c2,
+                ty: t2,
+                equiv: e2,
+            },
+        ) => {
+            c1 == c2
+                && conv_at(lvl, dlvl, b1, b2)
+                && conv_at(lvl, dlvl, t1, t2)
+                && conv_at(lvl, dlvl, e1, e2)
+        }
         _ => false,
     }
 }

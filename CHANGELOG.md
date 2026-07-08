@@ -29,6 +29,14 @@ All notable changes to this project are documented here. The format is based on
   composition); it now derives ambient term/dim levels from the family's captured environment.
   `comp`'s Kan-adequacy obligation was also corrected to `tube@i0 ≡ base` in `A(i0)` (was a mis-typed
   cross-type comparison). Pinned by `kan_open_family.rs` + `recheck_handles_comp_over_open_family`.
+- **Kan soundness — `transp_glue` ambient-face wildcard.** A `Glue` line whose face is on an *ambient*
+  dimension (not the transport dim) is constant along the transport, so its transport is the identity;
+  `transp_glue` matched the face with a wildcard dimension and mis-applied the equivalence map instead
+  (laundering `base` to `e.fun base`). Fixed by a kernel `conv` `Glue` arm (parity with recheck, so
+  `family_is_constant` returns the identity) plus tightening `transp_glue`'s face match to the
+  transport dim in both checkers. Latent (a closed exploit needs F3 HITs), found by the PR #2 review;
+  pinned by `kan::transp_glue_ambient_face_is_identity`, verdict golden byte-identical. See
+  `docs/soundness-2026-07-08.md`.
 
 ## [0.1.0] — 2026-07-05
 

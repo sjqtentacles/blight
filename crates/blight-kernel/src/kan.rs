@@ -156,16 +156,25 @@ fn transp_glue(family: &Closure, base: &Value) -> Value {
     // fold a bare negated-dimension cofibration into the other constructor (only literal `I0`/`I1`
     // endpoints get folded to `Top`/`Bot`), so both syntactic forms must be recognized here. A
     // `Min`/`Max`/double-`Neg`/disjunction is a different (out of scope) line.
+    // The face must be on the **transport dimension itself** — `Dim(0)` in this open-line view (the
+    // fresh dim `transp` substitutes). A face on any *other* (ambient) dimension `Dim(k≠0)` means the
+    // Glue is constant along the transport dim, so its transport is the identity — that case is caught
+    // by `family_is_constant` *before* dispatch (kernel `conv_at` and recheck `conv` both compare
+    // `Glue` structurally, so the two interior probes fold to the same cofib). If an ambient-face line
+    // still reaches here it is non-constant in some *other* component (a genuinely heterogeneous Glue
+    // line, out of scope), so we fail safe rather than mis-apply the equivalence to an ambient face
+    // (the wildcard `Dim(_)` here used to launder such a line — soundness fix, 2026-07-08).
     let forward_direction = match &cofib {
-        Cofib::Eq0(Interval::Dim(_)) => true,
-        Cofib::Eq1(Interval::Dim(_)) => false,
-        Cofib::Eq1(Interval::Neg(inner)) if matches!(**inner, Interval::Dim(_)) => true,
-        Cofib::Eq0(Interval::Neg(inner)) if matches!(**inner, Interval::Dim(_)) => false,
+        Cofib::Eq0(Interval::Dim(0)) => true,
+        Cofib::Eq1(Interval::Dim(0)) => false,
+        Cofib::Eq1(Interval::Neg(inner)) if matches!(**inner, Interval::Dim(0)) => true,
+        Cofib::Eq0(Interval::Neg(inner)) if matches!(**inner, Interval::Dim(0)) => false,
         _ => unimplemented!(
-            "transp over a Glue line whose face is not the univalence `i=0`-or-`i=1` direction \
-             (nor its De Morgan-negated twin) is out of scope (only the CCHM `ua` line \
-             `i. Glue B (i=0) A e` and its reverse `i. Glue B (i=1) A e` — however the negation is \
-             syntactically distributed — are implemented); got cofib {cofib:?}"
+            "transp over a Glue line whose face is not the univalence `i=0`-or-`i=1` direction on the \
+             *transport* dimension (nor its De Morgan-negated twin) is out of scope (only the CCHM \
+             `ua` line `i. Glue B (i=0) A e` and its reverse `i. Glue B (i=1) A e` — however the \
+             negation is syntactically distributed — are implemented; an ambient-dimension face is a \
+             constant line handled by `family_is_constant`); got cofib {cofib:?}"
         ),
     };
     // The base type line `i. B` must be constant (the `ua` line glues a *fixed* codomain `B`); a
@@ -1119,5 +1128,46 @@ mod tests {
             },
         };
         let _ = transp(&line, &Cofib::Bot, &zero());
+    }
+
+    /// SOUNDNESS (2026-07-08, found by the PR #2 adversarial review): a `Glue` line whose face is on
+    /// an *ambient* dimension (NOT the bound transport dim) is constant in the transport dim, so its
+    /// transport must be the **identity** — never the equivalence map. `transp_glue` used to match the
+    /// face with a wildcard dimension (`Eq0(Dim(_))`), so it applied `e.fun` to an ambient-face line,
+    /// laundering the value. Here the line `i. Glue Bool (j=0) Nat e` mentions the transport dim `i`
+    /// nowhere; the face sits on the ambient dim `j` (a rigid free dim in the captured env).
+    #[test]
+    fn transp_glue_ambient_face_is_identity() {
+        let zero = || Value::Con(crate::term::ConName("zero".into()), Rc::new(vec![]));
+        // A fake equivalence whose forward map is `λ_. true`, so `e.fun zero = true ≠ zero` — the
+        // mis-application is observable as a distinct constructor.
+        let e = Value::Pair(
+            Rc::new(Value::Lam(Closure {
+                env: Env::empty(),
+                body: Term::Con(crate::term::ConName("true".into()), vec![]),
+            })),
+            Rc::new(zero()),
+        );
+        // The family's captured env holds ONE ambient dimension bound to a distinct rigid dim
+        // (`Dim(3)`), so it cannot alias the transport substitution (`Dim(0)`). In the body the
+        // transport dim is `Dim(0)`; the ambient dim is `Dim(1)` (index 1 after `transp` prepends the
+        // transport dim). The Glue face is on the ambient dim, so the line is constant in `i`.
+        let ambient_env = Env::empty().extend_dim(Interval::Dim(3));
+        let line = Closure {
+            env: ambient_env,
+            body: Term::Glue {
+                base: Rc::new(bool_ty_term()),
+                cofib: Cofib::Eq0(Interval::Dim(1)),
+                ty: Rc::new(nat_ty_term()),
+                equiv: Rc::new(quote_value_at(0, 1, &e)),
+            },
+        };
+        let out = transp(&line, &Cofib::Bot, &zero());
+        assert!(
+            conv(0, &out, &zero()),
+            "ambient-face Glue line is constant in the transport dim ⟹ transport is the identity \
+             (expected `zero`), got {:?} — transp_glue mis-applied the equivalence to an ambient face",
+            quote_value_at(0, 0, &out)
+        );
     }
 }
