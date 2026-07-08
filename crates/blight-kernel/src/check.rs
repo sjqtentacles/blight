@@ -843,7 +843,14 @@ impl Checker {
                 let (row, usage) = self.check_g(ctx, base, &a0, sigma)?;
                 let a1 = self.family_at(ctx, family, crate::term::Interval::I1);
                 if crate::kan::is_total(&self.resolve_cofib_at(ctx, cofib)) {
-                    if !conv(ctx.len(), &a0, &a1) {
+                    // φ = ⊤ requires the type line CONSTANT. The former `conv(a0, a1)` compared only
+                    // the ENDPOINTS — unsound: the univalence loop `i. Glue B (i=0) A e` with `A ≡ B`
+                    // has equal endpoints but a varying interior, so a bogus `φ = ⊤` slipped through
+                    // and `transp` laundered to the identity (proving `∀ e. transp (ua e) a ≡ a`).
+                    // Probe the interior — compare an endpoint against a generic interior point.
+                    let dl = ctx.dim_len();
+                    let a_gen = self.family_at(ctx, family, crate::term::Interval::Dim(dl));
+                    if !conv_dim(ctx.len(), dl + 1, &a0, &a_gen) {
                         return Err(TypeError::BadCubical(
                             "Transp with φ = ⊤ requires a constant type line".into(),
                         ));
