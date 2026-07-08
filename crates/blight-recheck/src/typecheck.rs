@@ -500,7 +500,8 @@ impl<'a> Recheck<'a> {
                 Ok((ty_at_1, b_row, b_usage))
             }
 
-            // Univalence (spec §2.6), modeled independently (F1). Mirrors kernel `check.rs:966-1017`.
+            // Univalence (spec §2.6), modeled independently (F1). Mirrors the kernel's `Term::Glue`/
+            // `GlueTerm`/`Unglue` formation rules in `check.rs`.
             // `Glue A φ T e : Univ ℓ` when `A`,`T : Univ ℓ` and `e : Equiv T A` **checked at grade 0**
             // (the K3 soundness point — an arbitrary term in the equiv slot is *Rejected*, not merely
             // inferred-and-discarded). `equiv_type` is re-derived above in `RTerm`. There is no

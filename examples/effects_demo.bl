@@ -7,8 +7,9 @@
 ; Effects are now MODELED at the type level by the independent re-checker (`Op`/`Handle`/`EffTy` in
 ; `crates/blight-recheck/src/term.rs`), not declined: `blight build --recheck` re-derives this
 ; program's type and AGREES with the seed kernel (see `recheck_agrees_on_surface_effect_program`).
-; The re-checker declines only cubical `Glue`/`ua`/partial, `foreign` postulates, and universe-level
-; variables. This is a load-only example (exercised by `cargo test -p blight-repl --test examples`).
+; The re-checker declines only cubical partial elements and `foreign` postulates (cubical `Glue`/`ua`
+; and universe-level variables are now modeled). This is a load-only example (exercised by `cargo
+; test -p blight-repl --test examples`).
 
 (load "std/nat.bl")
 

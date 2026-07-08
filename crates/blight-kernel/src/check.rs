@@ -942,12 +942,13 @@ impl Checker {
                 let fam_at_i =
                     self.family_at(ctx, family, crate::term::Interval::Dim(ctx.dim_len()));
                 let (row_tube, usage_tube) = self.check_g(&ctx_dim, tube, &fam_at_i, sigma)?;
-                // Kan adequacy (mirrors `HComp` above): `comp` is `hcomp`-after-`transp` (CCHM),
-                // so on every face where `cofib` holds, the tube's own floor must equal `base`
-                // *transported* into the family's line there — not `base` itself when the family
-                // genuinely varies. Without this, `base` and the tube's lid are unrelated
-                // arbitrary values and `comp` would mint a path between them regardless (the same
-                // unsoundness `HComp` guards against).
+                // Kan adequacy (mirrors `HComp` above): `comp` is `hcomp`-after-`transp` (CCHM), and
+                // its input-compatibility condition is that on every face where `cofib` holds the
+                // tube's floor agrees with `base` at the *start* dimension `i0`, in the source type
+                // `A(i0)` — `tube@i0 ≡ base` (no transport enters at `i0`). Without this, `base` and
+                // the tube's lid are unrelated arbitrary values and `comp` would mint a path between
+                // them regardless (the same unsoundness `HComp` guards against). See the inner note
+                // for the `transp(A,⊥,·)` cross-type bug this replaced.
                 self.check_kan_adequacy(ctx, cofib, |env| {
                     // CCHM adequacy: the tube must agree with the base at `i = i0` on `φ`, in the
                     // *source* type `A(i0)` — `u(i0) ≡ a0` — exactly as `HComp` checks above (there `A`

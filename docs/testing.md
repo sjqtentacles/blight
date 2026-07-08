@@ -14,8 +14,15 @@ why.
 | Soundness negative corpus | `crates/blight-recheck/tests/negative.rs` | A curated set of *ill-typed* terms the kernel rejects **and** the re-checker refuses (actively `Rejected`, never `Ok`). |
 | Differential (custom PRNG + proptest) | `crates/blight-recheck/tests/differential.rs`, `proptest_differential.rs` | Many well-typed-by-construction core terms; the re-checker never `Rejected`s what the kernel certified (the soundness alarm). |
 | Backend bit-identity | `crates/blight-repl/src/main.rs` (`DIFF_FLAGS`) | Every optimization pass is bit-identical under its `BL_NO_*` off-switch. |
-| White-box unit | `#[cfg(test)]` in `crates/blight-recheck/src/*.rs`, `crates/blight-kernel/src/*.rs` | Per-arm behaviour of `conv`/`subtype`, the `from_kernel` decline/reject boundary, the purity flag, and the re-checker's independent Kan table (`kan.rs`: constant-line fast paths, heterogeneous Π/Σ/PathP `transp`/`hcomp`, derived `comp`, and `#[should_panic]` goldens for the two fail-safe `unimplemented!` arms). |
+| White-box unit | `#[cfg(test)]` in `crates/blight-recheck/src/*.rs`, `crates/blight-kernel/src/*.rs` | Per-arm behaviour of `conv`/`subtype`, the `from_kernel` decline/reject boundary, the purity flag, and the re-checker's independent Kan table (`kan.rs`: constant-line fast paths, heterogeneous Π/Σ/PathP `transp`/`hcomp`, derived `comp`, `transp_glue` (ua forward/inverse + De Morgan face), and `#[should_panic]` goldens for the fail-safe `unimplemented!` arms). |
 | Mutation (cargo-mutants) | `.cargo/mutants.toml`, `.github/workflows/mutants.yml` | The above tests actually *catch bugs* injected into the kernel + re-checker. |
+
+The 2026-07-07 Kan-layer soundness fixes (the interior-constancy probe, the `φ=⊤`/`is_total` `transp`
+bypass, and the `comp` Kan-adequacy correction with its open-family `quote` underflow) are pinned by
+`crates/blight-repl/tests/ua_transp_soundness.rs`, `crates/blight-repl/tests/kan_open_family.rs`,
+`recheck::recheck_handles_comp_over_open_family`, and
+`kan::transp_glue_total_cofib_does_not_launder_to_identity` — see
+[metatheory.md](metatheory.md) §1.5 for the per-test disposition.
 
 ## Property suites
 

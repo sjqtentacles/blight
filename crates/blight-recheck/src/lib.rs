@@ -261,8 +261,8 @@ mod tests {
         );
     }
 
-    /// F1: `from_kernel` now *translates* the Glue univalence layer (it is modeled, not declined).
-    /// This pins the increment-1 translation; increment 2 adds the typing + Kan-Glue reduction.
+    /// F1: `from_kernel` *translates* the Glue univalence layer — it is modeled (typed, boundary-
+    /// reduced, and Kan-transported via `transp_glue`), not declined. This test pins the translation.
     #[test]
     fn from_kernel_translates_glue() {
         let u0 = || Term::Univ(Level::Zero);
@@ -294,8 +294,8 @@ mod tests {
 
     /// `from_kernel` declines a higher inductive type's path constructor (Wave 7/E4): the
     /// re-checker has no independent model of a HIT's `PathConstructor` boundary equations (those
-    /// live only in the kernel's own `Signature`), so — exactly like `Glue`/`Partial`/`System`
-    /// above — it honestly declines rather than silently pass a construct it cannot re-verify.
+    /// live only in the kernel's own `Signature`), so — exactly like `Partial`/`System` above — it
+    /// honestly declines rather than silently pass a construct it cannot re-verify.
     #[test]
     fn from_kernel_declines_pcon() {
         let pcon = Term::PCon {

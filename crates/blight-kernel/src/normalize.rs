@@ -386,9 +386,10 @@ pub fn eval(env: &Env, term: &Term) -> Value {
                 env: env.clone(),
                 body: (**family).clone(),
             };
-            let cof = resolve_cofib(env, cofib);
             let b = eval(env, base);
-            crate::kan::transp(&fam, &cof, &b)
+            // `transp` no longer consults φ (it is a checker obligation, enforced in `check.rs`); pass
+            // the raw cofib — resolving it here was dead work.
+            crate::kan::transp(&fam, cofib, &b)
         }
         Term::HComp {
             ty,

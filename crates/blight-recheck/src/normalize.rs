@@ -259,9 +259,11 @@ pub fn eval(sig: &Signature, env: &Env, t: &RTerm) -> RValue {
         },
         // `glue` introduction: on a boundary it collapses to `partial` (⊤) / `base` (⊥); off a proper
         // face it has no first-class value node (its only eliminator is `unglue`, which reduces via
-        // the boundary above), exactly as the kernel gives a bare `GlueTerm` no eval arm. A proper-face
-        // `glue` intro value is not produced by any corpus judgement (`transp_glue` acts on Glue
-        // *types*, not glue intros), so this stays fail-safe.
+        // the boundary above). The kernel has no `GlueTerm` eval arm at all — a bare `GlueTerm` in
+        // value position is malformed there and hits eval's catch-all `todo!`; recheck instead reduces
+        // the ⊤/⊥ boundary faces (to `partial`/`base`) and fail-safe-panics only off-boundary.
+        // A proper-face `glue` intro value is not produced by any corpus judgement (`transp_glue` acts
+        // on Glue *types*, not glue intros), so this stays fail-safe.
         RTerm::GlueTerm {
             cofib,
             partial,

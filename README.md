@@ -289,8 +289,9 @@ cargo run -p blight-repl --features llvm -- build examples/hello_nat.bl -o hello
   ([std/path.bl](crates/blight-prelude/std/path.bl)): `funext` re-checks, and `ua` is built from a
   single-face `Glue` line whose `transp` reduces to the equivalence's forward map (the univalence
   *computation* rule, witnessed by a kernel white-box test and the closed
-  [ua_compute.bl](examples/ua_compute.bl)). The independent re-checker `Declines` `ua`/`Glue`
-  (TCB-disciplined — see caveats).
+  [ua_compute.bl](examples/ua_compute.bl)). The independent re-checker now **models** `ua`/`Glue`
+  (F1): it re-derives Glue formation, the CCHM boundary reductions, and the `transp`-over-`ua`
+  computation (`transp_glue`), so `ua` re-checks `Ok` in both checkers — see caveats.
 - **Traits and modules** — dictionary-passing `Show`/`Ord` and an ML-style `RedBlackTree` functor
   applied to a `Nat` module ([std/tree.bl](crates/blight-prelude/std/tree.bl)).
 - **Effects and grades** — quantitative binders (`0`/`1`/`ω`) drive erasure and region elision;
@@ -429,9 +430,11 @@ See the [milestone map](docs/implementation.md#7-milestone-map-m0m6), the
   reduces to `e`'s forward map) holds definitionally in the kernel and is witnessed by a white-box
   test plus the closed [ua_compute.bl](examples/ua_compute.bl). What is **deliberately deferred** is
   a *polymorphic* `ua-computes` lemma proved inside Blight: that would force threading De Bruijn
-  *levels* through the open-Kan API — trusted-surface growth the kernel-size analysis argues
-  against. The independent re-checker `Declines` `ua`/`Glue` (an honest "won't certify", never a
-  rejection). See [docs/metatheory.md](docs/metatheory.md) §1.4–§1.5.
+  *levels* through the *entire* open-Kan API (every structural reducer and the equivalence
+  machinery) — trusted-surface growth the kernel-size analysis argues against. The independent
+  re-checker **models** `ua`/`Glue` (F1): the *ground* univalence computation re-checks `Ok` in both
+  checkers; only this polymorphic restatement is deferred. See
+  [docs/metatheory.md](docs/metatheory.md) §1.4–§1.5.
 - `--target=wasm32` emits a WebAssembly object and, when a wasm-capable `clang` + `wasm-ld` are
   available (set `BLIGHT_WASM_CC` / `BLIGHT_WASM_LD` or have them on `PATH`), links a runnable
   `.wasm` module exporting `bl_main` against a minimal freestanding wasm ABI; without that toolchain
@@ -439,11 +442,11 @@ See the [milestone map](docs/implementation.md#7-milestone-map-m0m6), the
 - The re-checker covers the core fragment plus multi-parameter / multi-index inductive eliminators,
   the cubical Kan table (transp/hcomp/comp), native `Int`, and effects/handlers + partiality
   *at the type level* (a genuine second opinion, not a blanket decline). It honestly *declines*
-  (rather than rejects) only the genuinely out-of-fragment forms: cubical `Glue`/`ua`/partial
-  elements, `foreign` postulates (an FFI *axiom* you must believe — it genuinely grows the trusted
-  base, since the kernel cannot re-verify a foreign symbol), and universe-*level* variables. Declines
-  are counted
-  and reported, never silently skipped.
+  (rather than rejects) only the genuinely out-of-fragment forms: cubical partial elements and
+  `foreign` postulates (an FFI *axiom* you must believe — it genuinely grows the trusted base, since
+  the kernel cannot re-verify a foreign symbol). Cubical `Glue`/`ua` (F1) and universe-*level*
+  variables (T2) are now modeled, not declined. Declines are counted and reported, never silently
+  skipped.
 - Performance is correctness-first, not throughput-first: `Nat` is unary (so a bespoke recursion over
   `Succ` is O(n) allocations — though the backend recognizer (M20) makes the prelude `plus`/`mult`/etc.
   and the untrusted `Float` (M23) O(1) machine-word ops, and the primitive machine `Int` is O(1); see

@@ -310,13 +310,18 @@ the strongest such surface golden).
 **Deliberately deferred: a *polymorphic* in-Blight `ua-computes` lemma.** Stating
 `transp (ua e) a ≡ equiv-fun e a` as a Blight term `Π A B e a. Path B (transp (i.(ua e)@i) ⊥ a)
 (equiv-fun e a)` would force the kernel's Kan operations to *evaluate* `transp` **under open binders**
-(with `A B e a` free). The entire Kan layer — in both the trusted kernel and the independent
-re-checker — currently assumes Kan ops run on *closed* values (`family_is_constant`/`line_closure`
-quote/convert at de Bruijn level `0`). Supporting the open case means threading ambient De Bruijn
-levels through the whole Kan API in *both* checkers — a substantial expansion of trusted surface area
-and re-checker parity burden, for a lemma whose computational content is already established by the
-closed evidence above. Per this repo's TCB discipline (the kernel is the only trusted base; never add
-a kernel feature that closed tower-level evidence already covers; keep the `ua` surface minimal), the
+(with `A B e a` free). Most of the Kan layer — in both the trusted kernel and the independent
+re-checker — runs on *closed* values: the structural reducers (`line_closure`/`transp_pi` and the
+`hcomp`/`comp` component code) quote/convert at a fixed base de Bruijn level. (`family_is_constant`
+is the exception — since the open-family DoS fix it derives its ambient term/dim levels from the
+family's captured environment, `family.env.len()`/`dim_len()`, so the Kan ops *reached during corpus
+reductions* over an open line, e.g. `comp` composing an open path, no longer underflow `quote`.)
+Supporting the *fully* open case means threading ambient De Bruijn levels through the *whole* Kan
+API — every structural reducer and the equivalence machinery, not just the constancy check — in
+*both* checkers: a substantial expansion of trusted surface area and re-checker parity burden, for a
+lemma whose computational content is already established by the closed evidence above. Per this repo's
+TCB discipline (the kernel is the only trusted base; never add a kernel feature that closed
+tower-level evidence already covers; keep the `ua` surface minimal), the
 polymorphic lemma is **not** added. The reduction *primitive* is implemented and tested; only its
 restatement as an open-term theorem is deferred, and revisited only if a concrete proof in the corpus
 needs it.
@@ -390,6 +395,17 @@ Reachability argument for the fail-safe cells:
   Pinned by
   `recheck::recheck_models_ua_glue_line` (Ok) and `recheck::recheck_rejects_bogus_glue_equiv` (the K3
   grade-0 equiv-slot negative).
+- **Two further Kan soundness corrections (2026-07-07).** *(i)* The `φ=⊤` `transp` gate no longer
+  short-circuits via `is_total(cofib)`: a totally-true cofibration used to launder a *non-constant*
+  transport to the identity, bypassing the interior probe above — both checkers now gate the reduction
+  on `family_is_constant` itself. Pinned by `blight-repl/tests/ua_transp_soundness.rs` (the
+  `ctop`/`cbot`/De-Morgan-⊤ exploits are `Rejected`) and
+  `kan::transp_glue_total_cofib_does_not_launder_to_identity`. *(ii)* `comp`'s Kan-adequacy obligation
+  is now checked as `tube@i0 ≡ base` *in `A(i0)`* — it was a cross-type comparison against
+  `transp(A,⊥,base)`, which both mis-typed the obligation and triggered a `quote` underflow on open
+  families (a crash, not a soundness hole). Pinned by `blight-repl/tests/kan_open_family.rs` and
+  `recheck::recheck_handles_comp_over_open_family` (a real `cconcat` path composition type-checks; a
+  false `comp` is still `Rejected`).
 - **A non-constant indexed `Data`/`Int`/`Eff` type line** is never built by the corpus: every such
   line is constant in its dimension and is caught by the `family_is_constant` fast path before
   dispatch. (The general heterogeneous transport over a *graded* type line — obligation 2 in §1.3 —
@@ -425,8 +441,8 @@ Blight resolves the totality threat by **locus separation**, exactly the spec §
   the trusted core. Effects appear at the surface (`effect`/`handle`/`!`) and are *elaborated* into
   ordinary Blight code over the pure kernel (free-monad / CPS), behind the same proof door. The
   independent re-checker checks effect rows at the *type level* and declines only the genuinely
-  out-of-fragment forms (cubical `Glue`/`ua`/partial, `foreign` postulates, universe-level
-  variables) — it does not need a handler
+  out-of-fragment forms (cubical partial elements, `foreign` postulates); cubical `Glue`/`ua` (F1)
+  and universe-level variables (T2) are modeled, not declined — and it does not need a handler
   primitive either.
 - The **runtime** implements effects as **full CPS deep handlers with multi-shot delimited
   continuations** (`crates/blight-codegen/runtime/effects.c`). This is strictly more expressive than
