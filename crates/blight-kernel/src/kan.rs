@@ -47,9 +47,15 @@ fn family_is_constant(family: &Closure) -> bool {
     // `transp (ua e) a` to `a` instead of `equiv-fun e a`, proving model-false lemmas for any
     // non-identity self-equivalence (e.g. Bool negation). With the interior probe the loop is seen as
     // non-constant and dispatches to `transp_glue`, the genuine univalence map.
-    let a0 = family.apply_dim(Interval::Dim(0));
-    let a1 = family.apply_dim(Interval::Dim(1));
-    conv_dim(0, 2, &a0, &a1)
+    // Levels come from the family's *captured* environment so this also works on an OPEN family (one
+    // holding ambient term/dim vars from an enclosing binder). Hardcoding term-level 0 underflowed
+    // `quote` on those ambient neutrals — crashing the checker on ordinary `comp` path composition
+    // (`comp` over an open `A`, e.g. `cconcat`). A closed family has `lvl = dl = 0`, identical to before.
+    let lvl = family.env.len();
+    let dl = family.env.dim_len();
+    let a0 = family.apply_dim(Interval::Dim(dl));
+    let a1 = family.apply_dim(Interval::Dim(dl + 1));
+    conv_dim(lvl, dl + 2, &a0, &a1)
 }
 
 /// `Transp (i. A) φ a0` — transport `a0 : A[I0/i]` to `A[I1/i]` (spec §2.6). The family is the

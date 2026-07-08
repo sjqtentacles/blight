@@ -949,14 +949,17 @@ impl Checker {
                 // arbitrary values and `comp` would mint a path between them regardless (the same
                 // unsoundness `HComp` guards against).
                 self.check_kan_adequacy(ctx, cofib, |env| {
-                    let family_closure = Closure {
-                        env: env.clone(),
-                        body: family.as_ref().clone(),
-                    };
-                    let base_val = eval(env, base);
-                    let transported = crate::kan::transp(&family_closure, &Cofib::Bot, &base_val);
+                    // CCHM adequacy: the tube must agree with the base at `i = i0` on `φ`, in the
+                    // *source* type `A(i0)` — `u(i0) ≡ a0` — exactly as `HComp` checks above (there `A`
+                    // is constant). The former `transp(A, ⊥, base)` was wrong twice over: it compared
+                    // `tube@i0` (a value of `A(i0)`) against `base` transported into `A(i1)` — a
+                    // cross-type comparison — and it eagerly forced `kan::transp` on the
+                    // ambient-capturing family, underflow-crashing the checker on ordinary path
+                    // composition (`comp` over an open `A`, e.g. `cconcat`). The grade-skeleton guard
+                    // below still handles the genuinely-heterogeneous (grade-varying) line.
                     let tube_floor = eval(&env.extend_dim(crate::term::Interval::I0), tube);
-                    (tube_floor, transported)
+                    let base_val = eval(env, base);
+                    (tube_floor, base_val)
                 })?;
                 let a1 = self.family_at(ctx, family, crate::term::Interval::I1);
                 if !conv(ctx.len(), &a0, &a1) && !kan_line_grade_skeleton_eq(ctx.len(), &a0, &a1) {

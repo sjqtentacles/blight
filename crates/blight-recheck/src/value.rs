@@ -253,6 +253,16 @@ impl Env {
             None
         }
     }
+
+    /// Number of bound term variables (the ambient de Bruijn *level*).
+    pub fn len(&self) -> usize {
+        self.terms.len()
+    }
+
+    /// Number of bound dimension variables.
+    pub fn dim_len(&self) -> usize {
+        self.dims.len()
+    }
 }
 
 /// Take ownership of the `RValue` inside an `Rc`, cloning only when shared (N6, this engine's

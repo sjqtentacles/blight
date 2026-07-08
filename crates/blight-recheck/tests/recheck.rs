@@ -405,6 +405,20 @@ fn recheck_agrees_with_kernel_on_prelude() {
     assert_agreement(&env, &proofs, "regions");
 }
 
+/// Regression: `comp` path composition over an OPEN family (the family `k. A` captures the enclosing
+/// `A`). The reducer's `family_is_constant` used to quote at a hardcoded term-level 0, underflowing on
+/// the ambient neutrals and crashing the re-checker; it now derives its level from the family's
+/// captured env. Recheck must re-check `cconcat` without crashing (parity with the kernel fix).
+#[test]
+fn recheck_handles_comp_over_open_family() {
+    let (env, proofs) = load(
+        "(define cconcat \
+             (Pi ((A (Type 0)) (x A) (y A) (z A) (p (Path A x y)) (q (Path A y z))) (Path A x z)) \
+             (lam (A x y z p q) (plam (i) (comp (plam (k) A) (ieq1 i) (plam (j) (q @ j)) (p @ i)))))",
+    );
+    assert_agreement(&env, &proofs, "cconcat (comp over open family)");
+}
+
 /// RED: cubical Kan operations are now **Checked** by the re-checker, not declined. We build a
 /// constant-family transport `transp (i. Nat) ⊥ Zero : Nat` (which the kernel accepts and the
 /// re-checker must now independently re-derive, returning `Ok` rather than `Declined`). This is the
