@@ -36,9 +36,15 @@ pub fn is_empty_face(c: &RCofib) -> bool {
 
 /// Whether a dimension line is constant (its endpoints are convertible).
 fn family_is_constant(sig: &Signature, family: &DimClosure) -> bool {
-    let a0 = family.apply_dim(sig, RInterval::I0);
-    let a1 = family.apply_dim(sig, RInterval::I1);
-    crate::conv::conv(sig, 0, 0, &a0, &a1)
+    // Two distinct fresh dimensions (mirrors the kernel twin `blight_kernel::kan::family_is_constant`):
+    // a constant line agrees at both, a genuinely varying one differs. Replaces a former endpoint-conv
+    // check, which was unsound for the univalence loop `i. Glue B (i=0) A e` with `A ≡ B` (equal
+    // endpoints, varying interior): it reported the loop constant and short-circuited `transp` to the
+    // identity instead of dispatching to `transp_glue`, so the re-checker mirrored the kernel's
+    // model-false ua reduction rather than catching it.
+    let a0 = family.apply_dim(sig, RInterval::Dim(0));
+    let a1 = family.apply_dim(sig, RInterval::Dim(1));
+    crate::conv::conv(sig, 0, 2, &a0, &a1)
 }
 
 /// Build a dimension line `i. project(A i)` from a family, quoting the projection under one dim.
@@ -67,18 +73,72 @@ pub fn transp(sig: &Signature, family: &DimClosure, cofib: &RCofib, base: &RValu
         RValue::Pi(..) => transp_pi(sig, family, base),
         RValue::Sigma(..) => transp_sigma(sig, family, base),
         RValue::PathP { .. } => transp_path(sig, family, base),
-        // No `transp`-over-`Glue` arm **yet**: F1 increment 2 models Glue *typing* + boundary
-        // reductions, so a `Glue` line can now reach here (F1 stopped declining Glue at `from_kernel`),
-        // but the ua-transport `transp_glue` (independently re-derived from `kernel/kan.rs:111-183`) is
-        // F1 increment 3. Until then a Glue-varying line **fails safe** here — parity with the kernel's
-        // frontier, never a silent acceptance. The residual heads (non-constant indexed-`Data`/`Int`/
-        // `Eff` lines) are unreachable from the corpus (all constant ⟹ caught by `family_is_constant`).
+        // Univalence: `transp` over the `ua` Glue line, independently re-derived in `transp_glue`.
+        // Now reached because `family_is_constant` uses a sound interior probe, so the ua loop
+        // `i. Glue B (i=0) A e` (equal endpoints, varying interior) dispatches here instead of
+        // short-circuiting to the identity.
+        RValue::Glue { .. } => transp_glue(sig, family, base),
+        // Residual heads (a non-constant indexed-`Data`/`Int`/`Eff` line) are unreachable from the
+        // corpus — every such line is constant in `i` and caught by `family_is_constant`. Fail safe
+        // rather than risk a silent mis-reduction, mirroring `blight_kernel::kan::transp`.
         _ => unimplemented!(
-            "recheck transp: Glue transport is F1 increment 3 (typing + boundary reductions land in \
-             increment 2); the other heterogeneous formers (Pi/Sigma/PathP/Data/Univ) are implemented \
-             and a non-constant indexed/Int/Eff line is unreachable from the corpus — fail-safe, never \
-             an acceptance)"
+            "recheck transp: heterogeneous transport for this former is out of the implemented \
+             fragment (Pi/Sigma/PathP/Data/Univ/Glue implemented; a non-constant indexed/Int/Eff \
+             line is unreachable from the corpus — fail-safe, never an acceptance)"
         ),
+    }
+}
+
+/// `transp` over a univalence-shaped `Glue` line (spec §2.6), **independently re-derived** from the
+/// kernel's `transp_glue`. For the `ua` line `i. Glue B φ(i) A e` with a base `B` constant in `i` and
+/// a bare `i=0`/`i=1` face (or its De Morgan-negated twin from `sym`), transport is the equivalence's
+/// forward map (`i=0` face, `A → B`: `fst e a₀`) or its inverse (`i=1` face, `B → A`: the fibre-centre
+/// preimage `fst (fst (snd e a₀))`). The differential harness catches any divergence from the kernel;
+/// a face that is not this shape, or a non-constant base, is left `unimplemented!` — fail-safe, never
+/// a silent mis-reduction. Not copy-pasted from the kernel: re-deriving it independently is what lets
+/// the two checkers *disagree* if either implements the ua computation rule wrongly.
+fn transp_glue(sig: &Signature, family: &DimClosure, base: &RValue) -> RValue {
+    let open = family.apply_dim(sig, RInterval::Dim(0));
+    let (cofib, equiv) = match &open {
+        RValue::Glue { cofib, equiv, .. } => (cofib.clone(), (**equiv).clone()),
+        other => unreachable!("transp_glue: open line is a Glue by dispatch, got {other:?}"),
+    };
+    // Face-shape guard: a bare `i=0`/`i=1` face for the fresh transport dim, or its negated twin
+    // (`sym (ua e)` evaluates the ua body at `¬i`, giving `Glue B (¬i=0) A e`). Anything else — a
+    // connection, a disjunction, a genuine partial face — is out of scope.
+    let forward_direction = match &cofib {
+        RCofib::Eq0(RInterval::Dim(_)) => true,
+        RCofib::Eq1(RInterval::Dim(_)) => false,
+        RCofib::Eq1(RInterval::Neg(inner)) if matches!(**inner, RInterval::Dim(_)) => true,
+        RCofib::Eq0(RInterval::Neg(inner)) if matches!(**inner, RInterval::Dim(_)) => false,
+        _ => unimplemented!(
+            "recheck transp over a Glue line whose face is not the univalence `i=0`/`i=1` direction \
+             (nor its De Morgan-negated twin) is out of scope; got cofib {cofib:?}"
+        ),
+    };
+    // The glued base line `i. B` must be constant (the ua line glues a *fixed* codomain `B`); a
+    // non-constant base is genuine heterogeneous Glue transport, which we do not implement.
+    let base_line = line_closure(sig, family, |g| match g {
+        RValue::Glue { base, .. } => (*base).clone(),
+        other => other,
+    });
+    if !family_is_constant(sig, &base_line) {
+        unimplemented!(
+            "recheck transp over a Glue line with a non-constant base (genuine heterogeneous Glue \
+             transport) is out of scope; only the univalence line (constant base) is implemented"
+        );
+    }
+    if forward_direction {
+        // `i=0` face: `(line@i0) ≡ A`, `(line@i1) ≡ B` — apply the forward map `fst e`.
+        apply(sig, vfst(equiv), base.clone())
+    } else {
+        // `i=1` face: apply the inverse, extracted from `e`'s contractible-fibres witness
+        // `snd e : Π y. is-contr (fiber (fst e) y)` — the centre of the fibre over `a₀` is
+        // `Σ x. Path B (fst e x) a₀`, so its first projection is the preimage `invEq e a₀`.
+        let is_equiv_proof = vsnd(sig, equiv);
+        let fiber = apply(sig, is_equiv_proof, base.clone());
+        let centre = vfst(fiber);
+        vfst(centre)
     }
 }
 
@@ -169,8 +229,8 @@ fn transp_sigma(sig: &Signature, family: &DimClosure, pair: &RValue) -> RValue {
     // first-component line the fill is constant `= a0`, recovering `i. B i a0`; with a genuinely
     // varying one, instantiating `B` at the source `a0` (the previous behavior) diverged from the
     // kernel. (Reachability: a varying first-component *type* line requires a path between distinct
-    // types, i.e. a `ua`/`Glue` line; transporting along one is not yet independently re-derived in
-    // recheck — F1 increment 3, fail-safe — so in the current fragment this branch stays defensive.)
+    // types, i.e. a `ua`/`Glue` line — no such Σ with a varying-type first component appears in the
+    // corpus, so in the current fragment this branch stays defensive parity with the kernel.)
     let snd_line = if family_is_constant(sig, &fst_line) {
         let a0c = a0.clone();
         line_closure(sig, family, move |a| match a {
@@ -279,11 +339,12 @@ pub fn hcomp(
         }
         // Mirrors `blight_kernel::kan::hcomp`: Π/Σ/PathP compose structurally above; a varying face
         // in a closed inductive/universe/Glue needs the system machinery the value domain does not
-        // represent. `hcomp` over a `Glue` line is part of the same univalence Kan frontier as
-        // `transp_glue` (F1 increment 3); until then it **fails safe** here, never a silent acceptance.
+        // represent. Unlike `transp` over `Glue` (re-derived in `transp_glue`), `hcomp` over a `Glue`
+        // line is not reachable from the corpus, so it stays **fail-safe** here — never a silent
+        // acceptance, mirroring the kernel's own `hcomp` frontier.
         _ => unimplemented!(
-            "recheck hcomp: varying face in a closed inductive/universe/Glue (Glue hcomp is F1 \
-             increment 3; fail-safe, never an acceptance)"
+            "recheck hcomp: varying face in a closed inductive/universe/Glue is out of the \
+             implemented fragment (unreachable from the corpus — fail-safe, never an acceptance)"
         ),
     }
 }
@@ -426,8 +487,9 @@ pub fn eval_comp(
 // quoting `lvl`*. Applying it via `PApp` at the line's own bound dimension (`dim_dep`) then gives a
 // value that is *genuinely* non-constant across `i` — `PApp(Var(MAX), I0)` vs `PApp(Var(MAX), I1)`
 // are different neutrals by `conv`'s structural-quote comparison — without needing any indexed
-// `Data`-index or `Glue` type variance (which the Kan engine does not yet *reduce*: indexed-`Data`
-// and Glue transport are both out-of-fragment, F1 increment 3). This is what lets these tests force
+// `Data`-index type variance (which the Kan engine does not reduce — indexed-`Data` transport is
+// out-of-fragment; `Glue` transport is handled by `transp_glue`, with its own tests). This lets these
+// force
 // the real Π/Σ/PathP structural dispatch rather than
 // only ever hitting `family_is_constant`'s early-return fast path.
 // =================================================================================================
@@ -476,6 +538,96 @@ mod tests {
     /// genuinely different at `i=0` vs `i=1` (see module doc).
     fn dim_dep() -> RTerm {
         RTerm::PApp(Box::new(RTerm::Var(FREE)), RInterval::Dim(0))
+    }
+
+    // ---- univalence: transp over the `ua` Glue line, independently re-derived (F1 increment 3),
+    // mirroring `blight_kernel::kan`'s own `transp_ua_glue_line_*` suite. A *non-identity* map is
+    // essential: the corpus only transports along `id-equiv` (forward map = identity), which cannot
+    // tell a correct `transp_glue` from the old identity short-circuit. ----
+
+    /// `transp^i (Glue Int (i=0) Int e) ⊥ a₀ = (fst e) a₀` — the univalence forward map. With
+    /// `fst e = λ_. 999` the result is observably distinct from the input `0`, so this fails if
+    /// transport silently reduced to the identity. The proof component of `e` is not inspected by the
+    /// forward rule, so a placeholder suffices.
+    #[test]
+    fn transp_glue_forward_face_applies_forward_map() {
+        let s = sig();
+        let equiv = RTerm::Pair(
+            Box::new(RTerm::Lam(Box::new(RTerm::IntLit(999)))), // fst e = λ_. 999
+            Box::new(RTerm::IntLit(0)),                         // placeholder proof
+        );
+        let line = const_line(RTerm::Glue {
+            base: Box::new(RTerm::IntTy),
+            cofib: RCofib::Eq0(RInterval::Dim(0)),
+            ty: Box::new(RTerm::IntTy),
+            equiv: Box::new(equiv),
+        });
+        assert!(
+            !family_is_constant(&s, &line),
+            "the ua line must be non-constant under the interior probe, else it never reaches transp_glue"
+        );
+        let out = transp(&s, &line, &RCofib::Bot, &RValue::IntLit(0));
+        assert!(
+            veq(&s, &out, &RValue::IntLit(999)),
+            "transp over the ua Glue line must apply the forward map `fst e` (expected 999), got {out:?}"
+        );
+    }
+
+    /// `transp^i (Glue Int (i=1) Int e) ⊥ b₀ = invEq e b₀ = fst (fst (snd e b₀))`, the reverse map
+    /// (what `sym (ua e)` reduces to). `snd e` is a constant returning a fibre whose centre's first
+    /// component is `777`, so reusing the forward map (`999`) or the input (`0`) is caught.
+    #[test]
+    fn transp_glue_reverse_face_applies_inverse_map() {
+        let s = sig();
+        let equiv = RTerm::Pair(
+            Box::new(RTerm::Lam(Box::new(RTerm::IntLit(999)))), // forward (unused here)
+            Box::new(RTerm::Lam(Box::new(RTerm::Pair(
+                Box::new(RTerm::Pair(
+                    Box::new(RTerm::IntLit(777)), // fibre centre first component = invEq result
+                    Box::new(RTerm::IntLit(0)),
+                )),
+                Box::new(RTerm::IntLit(0)),
+            )))),
+        );
+        let line = const_line(RTerm::Glue {
+            base: Box::new(RTerm::IntTy),
+            cofib: RCofib::Eq1(RInterval::Dim(0)),
+            ty: Box::new(RTerm::IntTy),
+            equiv: Box::new(equiv),
+        });
+        let out = transp(&s, &line, &RCofib::Bot, &RValue::IntLit(0));
+        assert!(
+            veq(&s, &out, &RValue::IntLit(777)),
+            "reverse-face transp must apply the inverse map `invEq e` (expected 777), got {out:?}"
+        );
+    }
+
+    /// The corpus-reachable reverse shape: `sym (ua e)` produces `Cofib::Eq0(Neg(Dim))` (`¬i = 0`),
+    /// not the syntactically-simpler `Eq1(Dim)`; it must be recognized as the inverse, not fail safe.
+    #[test]
+    fn transp_glue_negated_face_applies_inverse_map() {
+        let s = sig();
+        let equiv = RTerm::Pair(
+            Box::new(RTerm::Lam(Box::new(RTerm::IntLit(999)))),
+            Box::new(RTerm::Lam(Box::new(RTerm::Pair(
+                Box::new(RTerm::Pair(
+                    Box::new(RTerm::IntLit(777)),
+                    Box::new(RTerm::IntLit(0)),
+                )),
+                Box::new(RTerm::IntLit(0)),
+            )))),
+        );
+        let line = const_line(RTerm::Glue {
+            base: Box::new(RTerm::IntTy),
+            cofib: RCofib::Eq0(RInterval::Neg(Box::new(RInterval::Dim(0)))), // ¬i = 0  ⟺  i = 1
+            ty: Box::new(RTerm::IntTy),
+            equiv: Box::new(equiv),
+        });
+        let out = transp(&s, &line, &RCofib::Bot, &RValue::IntLit(0));
+        assert!(
+            veq(&s, &out, &RValue::IntLit(777)),
+            "the De Morgan-negated i=0 face must reduce as the inverse (expected 777), got {out:?}"
+        );
     }
 
     // ---- boundary goldens (mirrors blight_kernel::kan's own suite) ----
@@ -694,9 +846,8 @@ mod tests {
     /// second-component line at the *fill* of the first component, mirroring the kernel) is the
     /// identity on a constant type line — `base` at both endpoints. This is the only reachable
     /// input: a genuinely *varying* first-component type line needs a path between distinct types
-    /// (a `ua`/`Glue` line); transporting along one is not yet re-derived in recheck (F1 increment 3,
-    /// fail-safe), so the divergent branch is unreachable in the current fragment and the fix is
-    /// defensive parity with the mechanized kernel.
+    /// (a `ua`/`Glue` line) — no such Σ appears in the corpus, so the divergent branch stays
+    /// unreachable in the current fragment and the fix is defensive parity with the mechanized kernel.
     #[test]
     fn transp_fill_line_is_identity_on_a_constant_family() {
         let s = sig();

@@ -29,12 +29,16 @@
 //! the `equiv` slot against `Equiv T A` at grade 0 (the kernel-audit K3 soundness point — an
 //! arbitrary term there is *Rejected*, not laundered) — and the CCHM **boundary reductions**
 //! (`Glue A ⊤ T e ≡ T`, `Glue A ⊥ T e ≡ A`). So `std/path.bl`'s `ua : Equiv A B -> Path (Type 0) A B`,
-//! a single-face `Glue` line, is now **Checked** by both checkers, not declined. What remains at the
-//! univalence frontier is *transporting along* a Glue line (`transp`/`hcomp` over `Glue` — the
-//! `ua`-computation rule): that reduction is still owned solely by the seed kernel's `transp_glue`
-//! (exercised by a kernel white-box test and the closed `examples/ua_compute.bl`); until the
-//! independent re-derivation lands (F1 increment 3) the re-checker **fails safe** on a Glue-varying
-//! Kan line — a parity panic at the frontier, never a silent acceptance.
+//! a single-face `Glue` line, is now **Checked** by both checkers, not declined. Transporting *along*
+//! a Glue line — the univalence `transp`-over-`Glue` (`ua`) computation rule — is likewise
+//! **independently re-derived** (`transp_glue`, F1), so the re-checker genuinely re-computes the ua
+//! transport (forward `fst e` / inverse `invEq e`) instead of trusting the kernel. (`hcomp` over a
+//! Glue line is not corpus-reachable and stays fail-safe.) Re-deriving it *independently* is what
+//! closed a shared **soundness bug**: both checkers' `family_is_constant` compared a Kan line only at
+//! its endpoints, so the univalence loop `i. Glue B (i=0) A e` with `A ≡ B` (equal endpoints, varying
+//! interior) was judged constant and `transp` short-circuited to the identity — the kernel proved
+//! `∀ e. transp (ua e) a ≡ a`, false for any non-identity self-equivalence. Fixed by probing the
+//! interior (see `kan::family_is_constant`).
 //!
 //! Declined (never silently accepted): cubical partial elements/systems (`Partial`/`System`), a
 //! higher-inductive path constructor (`PCon`), and the `foreign` FFI hatch. The re-checker's own

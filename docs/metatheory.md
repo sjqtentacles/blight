@@ -150,12 +150,12 @@ is the accept twin (same `Glue`-line shape, both faces at `ω`) confirming the r
 pre-existing Kan-op grade probe (M0–M3) uses a *constant* family (`conv(a0,a1)` trivially holds), so
 none is affected by the new restriction — confirmed by the full `blight-kernel` (150 tests) and
 `blight-recheck` (property/differential included) suites passing unchanged.
-The independent re-checker's copy of this restriction is currently **unreachable in practice**: F1
-now has the re-checker *model* `Glue` (formation + boundary reductions — it does evaluate
-`Glue`-headed lines), but transporting *along* a `Glue` line, where this grade-skeleton restriction
-would bite, is deferred to F1 increment 3 (the re-checker fail-safe-panics on such a line until
-then). It is kept as defense-in-depth matching every other kernel invariant this repo
-double-implements, and activates once increment 3 re-derives `transp_glue`.
+The independent re-checker's copy of this restriction is now **reachable**: F1 has the re-checker
+both *model* `Glue` (formation + boundary reductions) and *transport* along the `ua` line
+(`transp_glue`, independently re-derived), so a `Glue`-headed Kan line runs through it. For the
+corpus (the `id-equiv` ua examples) the line's grades are uniform, so the restriction passes; it is
+kept as defense-in-depth matching the kernel invariant this repo double-implements, and would fire on
+a genuinely grade-heterogeneous Glue line exactly as its kernel twin does.
 
 **Obligation 1.3.2 is now machine-checked, not just test-pinned (Wave 8 / M10).**
 [`mechanization/BlightMeta/GradeSkeleton.lean`](../mechanization/BlightMeta/GradeSkeleton.lean)
@@ -381,11 +381,13 @@ Reachability argument for the fail-safe cells:
   (`#[should_panic]`); the companion `hcomp_sigma_varying_face_is_componentwise` shows the same
   varying-face shape *does* reduce structurally when the recursion bottoms out at `PathP` (which
   stays deferred) rather than a closed type.
-- **The independent re-checker models `Glue` formation but not yet transport (F1)**: it re-derives
-  `Glue`/`GlueTerm`/`Unglue` *typing* (its own `equiv_type`, equiv slot checked at grade 0) and the
-  CCHM boundary reductions, so `ua` re-checks `Ok`; transporting *along* a `Glue` line (the univalence
-  Kan rule, both directions) stays solely the trusted kernel's until F1 increment 3 re-derives
-  `transp_glue` (the re-checker fail-safe-panics on such a line until then). Pinned by
+- **The independent re-checker models `Glue` formation *and* transport (F1)**: it re-derives
+  `Glue`/`GlueTerm`/`Unglue` *typing* (its own `equiv_type`, equiv slot checked at grade 0), the CCHM
+  boundary reductions, *and* the `transp`-over-`Glue` univalence Kan rule in both directions
+  (`transp_glue`: forward `fst e`, inverse `invEq e`). Both checkers reach it because
+  `family_is_constant` now probes the line's interior rather than only its endpoints — the former
+  endpoint check wrongly short-circuited the `A ≡ B` ua loop to the identity (a soundness bug, fixed).
+  Pinned by
   `recheck::recheck_models_ua_glue_line` (Ok) and `recheck::recheck_rejects_bogus_glue_equiv` (the K3
   grade-0 equiv-slot negative).
 - **A non-constant indexed `Data`/`Int`/`Eff` type line** is never built by the corpus: every such

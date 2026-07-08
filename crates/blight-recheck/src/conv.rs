@@ -123,9 +123,10 @@ pub fn conv(sig: &Signature, lvl: usize, dlvl: usize, a: &RValue, b: &RValue) ->
         // folded cofib syntactically and the three type components up to conversion. (Plan F1 step 3
         // specifies this structural arm. The trusted kernel's `conv_at` has no `Value::Glue` case, so
         // two Glue values fall through to `false` there; this arm is thus strictly *more* complete
-        // than the kernel. It is unreachable on kernel-accepted terms in the current fragment — Glue
-        // values are boundary-collapsed or eliminated before conv — hence no differential divergence;
-        // it is the behaviour F1 increment 3's Glue transport will actually exercise.)
+        // than the kernel. It is now *exercised* by `kan::family_is_constant`, which conv-compares a
+        // Glue line at two fresh dims (always distinct cofibs ⟹ `false`, correctly non-constant); a
+        // genuine structural Glue≡Glue never arises on kernel-accepted terms, so no differential
+        // divergence.)
         (
             RValue::Glue {
                 base: b1,
