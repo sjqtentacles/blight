@@ -45,8 +45,34 @@ fn transp_ua_does_not_launder_to_identity() {
          (lam (e) (plam (i) true)))";
     assert!(
         checks(false_lemma).is_err(),
-        "SOUNDNESS REGRESSION: the kernel accepted `∀ e. transp (ua e) true = true`, which is false \
-         in the univalent model. The transp fast path is laundering the ua transport to the identity \
-         again — see family_is_constant in crates/blight-kernel/src/kan.rs.",
+        "SOUNDNESS REGRESSION: the kernel accepted `∀ e. transp (ua e) true = true` (φ=⊥). The transp \
+         fast path is laundering the ua transport to the identity again — see family_is_constant in \
+         crates/blight-kernel/src/kan.rs.",
+    );
+
+    // Sibling via `φ = ⊤` (the fast-path bypass): the reducer's `is_total(cofib)` short-circuit and
+    // the checker's `φ=⊤` gate both used the endpoint proxy. Both now verify the interior.
+    let false_lemma_ctop =
+        "(define l (Pi ((e (Equiv Bool Bool))) \
+              (Path Bool (transp (plam (i) ((ua Bool Bool e) @ i)) ctop true) true)) \
+          (lam (e) (plam (i) true)))";
+    assert!(
+        checks(false_lemma_ctop).is_err(),
+        "SOUNDNESS REGRESSION (φ=⊤): the kernel accepted the ua-transport-is-identity lemma via the \
+         `is_total`/`φ=⊤` endpoint-proxy bypass.",
+    );
+
+    // Sibling via a De Morgan-synthesized ⊤: the DNF folds `j ∧ ¬j = 0` to ⊤, feeding the same φ=⊤
+    // path. Rejected by the interior-constancy gate even though the (separate) DNF fold is unchanged.
+    let false_lemma_demorgan =
+        "(define l (Pi ((e (Equiv Bool Bool))) \
+              (Path (Path Bool true true) \
+                    (plam (j) (transp (plam (i) ((ua Bool Bool e) @ i)) (ieq0 (imin j (~ j))) true)) \
+                    (plam (j) true))) \
+          (lam (e) (plam (j) (plam (i) true))))";
+    assert!(
+        checks(false_lemma_demorgan).is_err(),
+        "SOUNDNESS REGRESSION (De Morgan ⊤): the kernel accepted the ua-transport lemma via a \
+         `j ∧ ¬j`-folds-to-⊤ face feeding the φ=⊤ bypass.",
     );
 }

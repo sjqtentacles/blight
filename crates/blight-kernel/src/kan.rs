@@ -59,8 +59,13 @@ fn family_is_constant(family: &Closure) -> bool {
 /// Reductions are dispatched on the head former of `A`, evaluated at a fresh dimension level so
 /// that a former that genuinely depends on `i` is still detected (rather than collapsed at an
 /// endpoint). The fully-constant case is the identity for *every* former and is handled up front.
-pub fn transp(family: &Closure, cofib: &Cofib, base: &Value) -> Value {
-    if is_total(cofib) || family_is_constant(family) {
+pub fn transp(family: &Closure, _cofib: &Cofib, base: &Value) -> Value {
+    // The identity reduction is sound iff the line is *genuinely* constant (the interior probe),
+    // not because `φ = ⊤` *claims* so. `φ` is a checker obligation (enforced in `check.rs`); the
+    // reducer does not trust it — a lying `φ = ⊤` over a non-constant line (the univalence loop)
+    // must fall through to the real transport, not launder to the identity. The former
+    // `is_total(cofib) ||` disjunct was the soundness hole (sibling of the endpoint bug).
+    if family_is_constant(family) {
         return base.clone();
     }
     // Inspect the head former on the *open* line (a fresh dimension in scope).

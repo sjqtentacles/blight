@@ -62,8 +62,11 @@ fn line_closure(
 }
 
 /// `transp (i. A) φ a0`. Mirrors `blight_kernel::kan::transp`.
-pub fn transp(sig: &Signature, family: &DimClosure, cofib: &RCofib, base: &RValue) -> RValue {
-    if is_total(cofib) || family_is_constant(sig, family) {
+pub fn transp(sig: &Signature, family: &DimClosure, _cofib: &RCofib, base: &RValue) -> RValue {
+    // The identity reduction is sound iff the line is *genuinely* constant (interior probe), not
+    // because `φ = ⊤` claims so — mirrors the kernel fix. A lying `φ = ⊤` over the univalence loop
+    // must reach the real transport (`transp_glue`), not launder to the identity.
+    if family_is_constant(sig, family) {
         return base.clone();
     }
     let a_open = family.apply_dim(sig, RInterval::Dim(0));
@@ -570,6 +573,32 @@ mod tests {
         assert!(
             veq(&s, &out, &RValue::IntLit(999)),
             "transp over the ua Glue line must apply the forward map `fst e` (expected 999), got {out:?}"
+        );
+    }
+
+    /// Soundness (φ=⊤ bypass): `φ = ⊤` must NOT launder a non-constant line to the identity. A `Glue`
+    /// line is non-constant, so `transp` over it with `φ = ⊤` must still apply the forward map (999),
+    /// not return the input (0) — the reducer gates the identity on genuine `family_is_constant`, not
+    /// on the `is_total(cofib)` annotation (sibling of the endpoint bug; mirrors the kernel fix).
+    #[test]
+    fn transp_glue_total_cofib_does_not_launder_to_identity() {
+        let s = sig();
+        let equiv = RTerm::Pair(
+            Box::new(RTerm::Lam(Box::new(RTerm::IntLit(999)))),
+            Box::new(RTerm::IntLit(0)),
+        );
+        let line = const_line(RTerm::Glue {
+            base: Box::new(RTerm::IntTy),
+            cofib: RCofib::Eq0(RInterval::Dim(0)),
+            ty: Box::new(RTerm::IntTy),
+            equiv: Box::new(equiv),
+        });
+        // φ = ⊤ (a lying constancy claim over this non-constant line): must reach the real transport.
+        let out = transp(&s, &line, &RCofib::Top, &RValue::IntLit(0));
+        assert!(
+            veq(&s, &out, &RValue::IntLit(999)),
+            "φ=⊤ transp over a non-constant Glue line must apply the forward map (999), not launder \
+             to the identity (0); got {out:?}"
         );
     }
 

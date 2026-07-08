@@ -446,7 +446,11 @@ impl<'a> Recheck<'a> {
             // The base inhabits the *source* type (`A i0` for transp/comp, `A` for hcomp), so we
             // **check** it there (it may be a bare constructor needing the expected type) and read
             // the conclusion off the *target* (`A i1` / `A`). The base's row passes through.
-            RTerm::Transp { family, base, .. } => {
+            RTerm::Transp {
+                family,
+                cofib,
+                base,
+            } => {
                 let ctx_dim = ctx.extend_dim();
                 self.infer_universe(&ctx_dim, family)?;
                 let ty_at_0 = {
@@ -458,6 +462,19 @@ impl<'a> Recheck<'a> {
                     let e = ctx.env.extend_dim(RInterval::I1);
                     eval(self.sig, &e, family)
                 };
+                // φ = ⊤ requires the type line CONSTANT — verify the interior (mirrors the kernel
+                // fix), not just the endpoints: the univalence loop (equal endpoints, varying
+                // interior) must be Rejected, else `transp` launders to the identity.
+                if crate::kan::is_total(&crate::kan::resolve_cofib(&ctx.env, cofib)) {
+                    let dl = ctx.dlvl;
+                    let a_gen = {
+                        let e = ctx.env.extend_dim(RInterval::Dim(dl));
+                        eval(self.sig, &e, family)
+                    };
+                    if !conv(self.sig, ctx.lvl, dl + 1, &ty_at_0, &a_gen) {
+                        return Err(reject("Transp with φ = ⊤ requires a constant type line"));
+                    }
+                }
                 self.reject_heterogeneous_grade_line(ctx, &ty_at_0, &ty_at_1)?;
                 Ok((ty_at_1, b_row, b_usage))
             }
