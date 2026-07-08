@@ -42,9 +42,15 @@ fn family_is_constant(sig: &Signature, family: &DimClosure) -> bool {
     // endpoints, varying interior): it reported the loop constant and short-circuited `transp` to the
     // identity instead of dispatching to `transp_glue`, so the re-checker mirrored the kernel's
     // model-false ua reduction rather than catching it.
-    let a0 = family.apply_dim(sig, RInterval::Dim(0));
-    let a1 = family.apply_dim(sig, RInterval::Dim(1));
-    crate::conv::conv(sig, 0, 2, &a0, &a1)
+    // Levels come from the family's *captured* environment so this works on an OPEN family (ambient
+    // term/dim vars from an enclosing binder) — hardcoding term-level 0 underflowed `quote` on the
+    // ambient neutrals, crashing on ordinary `comp` path composition (mirrors the kernel fix). A
+    // closed family has `lvl = dl = 0`, identical to before.
+    let lvl = family.env.len();
+    let dl = family.env.dim_len();
+    let a0 = family.apply_dim(sig, RInterval::Dim(dl));
+    let a1 = family.apply_dim(sig, RInterval::Dim(dl + 1));
+    crate::conv::conv(sig, lvl, dl + 2, &a0, &a1)
 }
 
 /// Build a dimension line `i. project(A i)` from a family, quoting the projection under one dim.
