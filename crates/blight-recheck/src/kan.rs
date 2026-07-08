@@ -115,14 +115,21 @@ fn transp_glue(sig: &Signature, family: &DimClosure, base: &RValue) -> RValue {
     // Face-shape guard: a bare `i=0`/`i=1` face for the fresh transport dim, or its negated twin
     // (`sym (ua e)` evaluates the ua body at `¬i`, giving `Glue B (¬i=0) A e`). Anything else — a
     // connection, a disjunction, a genuine partial face — is out of scope.
+    // The face must be on the transport dimension itself (`Dim(0)` in this open-line view). An
+    // ambient-dimension face (`Dim(k≠0)`) is a line constant along the transport dim → identity,
+    // caught by `family_is_constant` (recheck `conv.rs` compares `Glue` structurally) before dispatch;
+    // if one reaches here the line is non-constant elsewhere (heterogeneous, out of scope) so we fail
+    // safe rather than mis-apply the equivalence to an ambient face (soundness fix, 2026-07-08).
     let forward_direction = match &cofib {
-        RCofib::Eq0(RInterval::Dim(_)) => true,
-        RCofib::Eq1(RInterval::Dim(_)) => false,
-        RCofib::Eq1(RInterval::Neg(inner)) if matches!(**inner, RInterval::Dim(_)) => true,
-        RCofib::Eq0(RInterval::Neg(inner)) if matches!(**inner, RInterval::Dim(_)) => false,
+        RCofib::Eq0(RInterval::Dim(0)) => true,
+        RCofib::Eq1(RInterval::Dim(0)) => false,
+        RCofib::Eq1(RInterval::Neg(inner)) if matches!(**inner, RInterval::Dim(0)) => true,
+        RCofib::Eq0(RInterval::Neg(inner)) if matches!(**inner, RInterval::Dim(0)) => false,
         _ => unimplemented!(
             "recheck transp over a Glue line whose face is not the univalence `i=0`/`i=1` direction \
-             (nor its De Morgan-negated twin) is out of scope; got cofib {cofib:?}"
+             on the *transport* dimension (nor its De Morgan-negated twin) is out of scope (an \
+             ambient-dimension face is a constant line handled by `family_is_constant`); got cofib \
+             {cofib:?}"
         ),
     };
     // The glued base line `i. B` must be constant (the ua line glues a *fixed* codomain `B`); a

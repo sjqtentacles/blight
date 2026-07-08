@@ -406,6 +406,16 @@ Reachability argument for the fail-safe cells:
   families (a crash, not a soundness hole). Pinned by `blight-repl/tests/kan_open_family.rs` and
   `recheck::recheck_handles_comp_over_open_family` (a real `cconcat` path composition type-checks; a
   false `comp` is still `Rejected`).
+- **A further Kan soundness correction (2026-07-08, found by the PR #2 review).** A `Glue` line whose
+  face sits on an *ambient* dimension rather than the transport dim is constant along the transport
+  dim, so its transport is the identity — but `transp_glue` matched the face with a *wildcard*
+  dimension and mis-applied the equivalence map (laundering `base` to `e.fun base`). Fixed by giving
+  the kernel's `conv_at` a `Glue` arm (parity with the re-checker's existing `conv.rs` arm) so
+  `family_is_constant` classifies the constant line correctly and `transp` returns the identity before
+  dispatch, *and* by tightening `transp_glue`'s face match to the transport dim `Dim(0)` in both
+  checkers (an off-transport face now fails safe). Latent — a closed exploit needs F3's HITs; pinned by
+  `kan::transp_glue_ambient_face_is_identity`, verdict golden byte-identical. See
+  [docs/soundness-2026-07-08.md](soundness-2026-07-08.md).
 - **A non-constant indexed `Data`/`Int`/`Eff` type line** is never built by the corpus: every such
   line is constant in its dimension and is caught by the `family_is_constant` fast path before
   dispatch. (The general heterogeneous transport over a *graded* type line — obligation 2 in §1.3 —
