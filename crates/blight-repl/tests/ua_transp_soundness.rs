@@ -52,8 +52,7 @@ fn transp_ua_does_not_launder_to_identity() {
 
     // Sibling via `φ = ⊤` (the fast-path bypass): the reducer's `is_total(cofib)` short-circuit and
     // the checker's `φ=⊤` gate both used the endpoint proxy. Both now verify the interior.
-    let false_lemma_ctop =
-        "(define l (Pi ((e (Equiv Bool Bool))) \
+    let false_lemma_ctop = "(define l (Pi ((e (Equiv Bool Bool))) \
               (Path Bool (transp (plam (i) ((ua Bool Bool e) @ i)) ctop true) true)) \
           (lam (e) (plam (i) true)))";
     assert!(

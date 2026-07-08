@@ -213,8 +213,9 @@ eager IH), so a mis-ordered effectful loop fails safe rather than silently misco
   wins are
   measured by a new alloc-churn `treesum` benchmark and the `BL_GC_STATS=1` collection counter.
   blanket decline. The re-checker declines only the constructs genuinely outside its core fragment:
-  cubical `Glue`/`ua`/partial-elements, `foreign` postulates (trusted FFI), and universe-*level*
-  variables. Higher-order eliminator motives (e.g. the nested-`match` `zip-vec` lowering) are **no
+  cubical partial-elements and `foreign` postulates (trusted FFI). Cubical `Glue`/`ua` (F1) and
+  universe-*level* variables (T2) are now modeled, not declined. Higher-order eliminator motives
+  (e.g. the nested-`match` `zip-vec` lowering) are **no
   longer declined** — both the trusted kernel (M12 refinement) and the independent re-checker now
   fully certify them.
 

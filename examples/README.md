@@ -74,8 +74,8 @@ resolve, or run the example through the test harness.
 Buildable examples define a `main` (a `Nat`, a native `Int`, or a `String` printed as text) that `blight build`
 compiles, runs, and prints; load-only examples typecheck through the REPL / test corpus (tactic
 proofs, traits, functors, and effects — the latter now re-checked at the type level by the
-independent re-checker, which declines only cubical `Glue`/`ua`/partial, `foreign`, and
-universe-level-variable forms). Strings are
+independent re-checker, which declines only cubical partial elements and `foreign` forms — cubical
+`Glue`/`ua` and universe-level variables are now modeled). Strings are
 **untrusted tower code** — a `String` is a cons-list of `Nat` codepoints (`std/string.bl`), the
 reader desugars quoted literals into that chain, and the runtime renders a `String`-typed result as
 text. The kernel gains no primitive string type. For Blight's cost model and benchmarks, see

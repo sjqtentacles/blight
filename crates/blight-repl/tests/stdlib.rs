@@ -641,10 +641,11 @@ fn std_equiv_loads_in_isolation() {
 
 /// `std/path.bl` defines `funext` (function extensionality, pure Path/plam) and `ua : Equiv A B ->
 /// Path (Type 0) A B` (built from a single-face `Glue`). The host kernel type-checks both; the
-/// independent re-checker is expected to *decline* `ua` (Glue is outside its fragment) but must
-/// never *reject* it, while `funext` should re-check cleanly (no Glue). The univalence *computation*
-/// rule is verified separately (kernel white-box test + `examples/ua_compute.bl`), not as a
-/// polymorphic Blight lemma — see `std/path.bl`/docs/metatheory.md.
+/// independent re-checker now *models* the `Glue` layer (F1), so both members re-check cleanly (`ua`
+/// is `Ok` in the differential golden). This test defensively tolerates `Declined` too, but pins the
+/// real invariant: the re-checker must never *reject* a member the kernel accepted. The univalence
+/// *computation* rule is verified separately (kernel white-box test + `examples/ua_compute.bl`), not
+/// as a polymorphic Blight lemma — see `std/path.bl`/docs/metatheory.md.
 #[test]
 fn std_path_loads_in_isolation() {
     with_module("std/path.bl", |env| {
@@ -685,8 +686,8 @@ fn std_tree_loads_in_isolation() {
 
 /// `std/int.bl` wraps the primitive machine-`Int` operations as named, first-class total functions.
 /// Each wrapper is a non-recursive `deftotal` forwarding to a kernel primitive, so the independent
-/// re-checker must *accept* them (`Int`/`IntPrim` are inside its fragment — not declined like Glue),
-/// confirming the wrappers add no out-of-fragment surface.
+/// re-checker must *accept* them — `Int`/`IntPrim` are inside its fragment — confirming the wrappers
+/// add no out-of-fragment surface.
 #[test]
 fn std_int_loads_in_isolation() {
     with_module("std/int.bl", |env| {
@@ -736,7 +737,7 @@ fn std_int_loads_in_isolation() {
 /// `std/float.bl` (M23) defines `Float` as an UNTRUSTED fixed-point rational over the trusted `Int`
 /// base — no kernel `FloatTy`. It must load in isolation, and because every wrapper bottoms out in
 /// `Int` primitives over a plain one-field `Data`, the independent re-checker must *accept* the
-/// wrappers (not decline like the cubical machinery), confirming `Float` adds no trusted surface.
+/// wrappers (they are wholly inside its fragment), confirming `Float` adds no trusted surface.
 #[test]
 fn std_float_loads_in_isolation() {
     with_module("std/float.bl", |env| {

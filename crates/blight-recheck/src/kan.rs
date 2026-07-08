@@ -440,9 +440,9 @@ pub fn eval_transp(
         env: env.clone(),
         body: Rc::new(family.clone()),
     };
-    let cof = resolve_cofib(env, cofib);
     let b = eval(sig, env, base);
-    transp(sig, &fam, &cof, &b)
+    // `transp` no longer consults φ (a checker obligation); pass the raw cofib (resolving it was dead).
+    transp(sig, &fam, cofib, &b)
 }
 
 pub fn eval_hcomp(
@@ -498,9 +498,8 @@ pub fn eval_comp(
 // are different neutrals by `conv`'s structural-quote comparison — without needing any indexed
 // `Data`-index type variance (which the Kan engine does not reduce — indexed-`Data` transport is
 // out-of-fragment; `Glue` transport is handled by `transp_glue`, with its own tests). This lets these
-// force
-// the real Π/Σ/PathP structural dispatch rather than
-// only ever hitting `family_is_constant`'s early-return fast path.
+// tests force the real Π/Σ/PathP structural dispatch rather than only ever hitting
+// `family_is_constant`'s early-return fast path.
 // =================================================================================================
 #[cfg(test)]
 mod tests {

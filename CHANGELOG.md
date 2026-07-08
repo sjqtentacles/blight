@@ -6,6 +6,30 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **F1 (full-parity re-checker): the independent re-checker now *models* the cubical `Glue`/
+  univalence layer** instead of declining it. It re-derives `Glue`/`GlueTerm`/`Unglue` typing (its
+  own `equiv_type`, equivalence slot checked at grade `0`), the CCHM boundary reductions, and the
+  `transp`-over-`ua` univalence computation in both directions (`transp_glue`: forward `fst e`,
+  inverse `invEq e`). `ua` now re-checks `Ok` in *both* checkers (was `Declined`). Kernel unchanged.
+
+### Fixed
+
+- **Kan soundness — `family_is_constant` endpoint proxy.** The kernel (and its mirror in the
+  re-checker) decided whether a Kan line was constant by comparing only its two *endpoints*, which
+  wrongly short-circuited the `A ≡ B` univalence transport to the identity. Both checkers now probe
+  the line's *interior* under two fresh dimensions. Trusted-kernel change, reviewed.
+- **Kan soundness — the `φ=⊤` / `is_total` transp bypass.** A totally-true cofibration could launder
+  a *non-constant* `transp` to the identity, bypassing the interior probe. All four gates (both
+  checkers' `transp` reducers *and* their `Transp` typing rules) now gate on `family_is_constant`
+  itself. Pinned by `ua_transp_soundness.rs`.
+- **Kan crash (not soundness) — `comp`/`transp` over an open family.** `family_is_constant` hardcoded
+  term-level `0`, underflowing `quote` on a family holding free variables (e.g. `cconcat` path
+  composition); it now derives ambient term/dim levels from the family's captured environment.
+  `comp`'s Kan-adequacy obligation was also corrected to `tube@i0 ≡ base` in `A(i0)` (was a mis-typed
+  cross-type comparison). Pinned by `kan_open_family.rs` + `recheck_handles_comp_over_open_family`.
+
 ## [0.1.0] — 2026-07-05
 
 The first tagged release: the v0.1 roadmap arcs (E, S, N, R) landed on top of the M0–M6 kernel,
