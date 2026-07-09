@@ -125,8 +125,30 @@ impl DimClosure {
     }
 }
 
+/// A CI/test-only wall-clock watchdog, twin of the kernel's `maybe_start_test_watchdog`: if
+/// `BLIGHT_TEST_WATCHDOG_SECS` is set, the first entry into normalization spawns a thread that aborts
+/// the process after that many seconds, so a non-terminating re-check (e.g. a mutation-injected
+/// broken recursion) becomes a bounded hard failure a mutation run classifies as *caught* rather
+/// than a hang. Unset in production → no thread, zero behaviour change.
+fn maybe_start_test_watchdog() {
+    static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    STARTED.get_or_init(|| {
+        if let Ok(Ok(secs)) = std::env::var("BLIGHT_TEST_WATCHDOG_SECS").map(|v| v.parse::<u64>()) {
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(secs));
+                eprintln!(
+                    "blight test watchdog: process exceeded {secs}s — aborting a non-terminating \
+                     re-check (BLIGHT_TEST_WATCHDOG_SECS)"
+                );
+                std::process::exit(101);
+            });
+        }
+    });
+}
+
 /// Evaluate a term in an environment to a value.
 pub fn eval(sig: &Signature, env: &Env, t: &RTerm) -> RValue {
+    maybe_start_test_watchdog();
     match t {
         RTerm::Var(i) => env
             .lookup(*i)
