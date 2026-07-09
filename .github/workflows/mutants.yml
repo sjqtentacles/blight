@@ -17,6 +17,14 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Mutation-testing a normalizer for a *non-total* language inevitably yields mutants that make the
+  # checker diverge (an infinite reduction). cargo-mutants has no "timeout = caught" policy, so those
+  # fail the gate as timeouts even though nothing actually *survives*. This wall-clock watchdog makes
+  # the first normalization in a test process abort it after N seconds, turning a hang into a bounded
+  # hard failure the gate correctly scores as *caught*. Unset in production → no watchdog, zero change
+  # (see `crates/blight-kernel/src/normalize.rs::maybe_start_test_watchdog`). 30s sits comfortably
+  # above the whole kernel+recheck suite's runtime and below cargo-mutants' per-mutant timeout.
+  BLIGHT_TEST_WATCHDOG_SECS: "30"
 
 jobs:
   incremental:

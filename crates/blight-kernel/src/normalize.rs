@@ -235,8 +235,34 @@ pub fn do_handle(handler: &std::rc::Rc<crate::value::HandlerVal>, comp: Value) -
     }
 }
 
+/// A CI/test-only wall-clock watchdog. If `BLIGHT_TEST_WATCHDOG_SECS` is set, the first entry into
+/// normalization spawns a thread that aborts the process after that many seconds — turning a
+/// *non-terminating* checker input (a mutation-injected broken recursion, or a genuinely divergent
+/// term this Turing-complete NbE cannot decide) into a bounded, hard **failure** instead of an
+/// unbounded hang. A mutation-testing run then classifies such a mutant as *caught*, not *timeout*
+/// (`cargo-mutants` has no timeout-tolerance policy, so a hang would otherwise fail the gate even
+/// though nothing survived). **Unset in production (the default) → no thread is ever spawned, zero
+/// behaviour change** (one relaxed `OnceLock` load, like `dead_ih_disabled`). Aborting mid-work can
+/// only ever *drop* an in-flight judgement, never manufacture one, so it is soundness-neutral.
+fn maybe_start_test_watchdog() {
+    static STARTED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    STARTED.get_or_init(|| {
+        if let Ok(Ok(secs)) = std::env::var("BLIGHT_TEST_WATCHDOG_SECS").map(|v| v.parse::<u64>()) {
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(secs));
+                eprintln!(
+                    "blight test watchdog: process exceeded {secs}s — aborting a non-terminating \
+                     normalization (BLIGHT_TEST_WATCHDOG_SECS)"
+                );
+                std::process::exit(101);
+            });
+        }
+    });
+}
+
 /// Evaluate a term in an environment to a semantic value (the "eval" half of NbE).
 pub fn eval(env: &Env, term: &Term) -> Value {
+    maybe_start_test_watchdog();
     tick();
     match term {
         Term::Var(i) => env

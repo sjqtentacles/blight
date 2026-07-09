@@ -76,6 +76,20 @@ The workflow runs in two modes so a strict whole-base gate never blocks on histo
 - **nightly (informational)** — a full trusted-base run, uploaded as an artifact, tracking the
   surviving-mutant backlog. Non-blocking.
 
+**Divergent mutants — the wall-clock watchdog.** Mutating a normalizer for a *non-total* language
+inevitably yields mutants that make the checker **diverge**: corrupt the level/dimension arithmetic in
+the NbE engine and a terminating reduction becomes non-terminating. `cargo-mutants` has no
+"timeout = caught" policy, so a diverging mutant that hangs the test process is scored as a *timeout*
+that fails the gate even though **nothing survived** — and divergence is intrinsic here (the kernel is
+Turing-complete; see `run_metered`'s doc-comment). The fix is an env-gated wall-clock watchdog
+(`crates/blight-kernel/src/normalize.rs::maybe_start_test_watchdog`, twinned in the re-checker): when
+`BLIGHT_TEST_WATCHDOG_SECS` is set (the mutation workflow sets it), the first normalization in a test
+process spawns a thread that aborts the process after that many seconds, converting a hang into a
+bounded hard failure the gate correctly scores as **caught** (it fires well before `cargo-mutants`'
+per-mutant timeout, so it reads as a command failure, not a timeout). It is strictly test/CI-only:
+**unset in production → no thread is spawned, zero behaviour change**, and aborting mid-work can only
+ever drop an in-flight judgement, never manufacture one (soundness-neutral).
+
 ### Baseline
 
 Measured on `crates/blight-recheck/src/conv.rs` (definitional equality — the heart of the
